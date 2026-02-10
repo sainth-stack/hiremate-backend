@@ -35,3 +35,4 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+    message: Optional[str] = None  # e.g. "User registered successfully" or "Login successful"

@@ -36,7 +36,20 @@ class AuthService:
             db.commit()
             db.refresh(new_user)
             
-            return {"success": True, "user": new_user, "message": "User registered successfully"}
+            # Create access token (same as login - user is logged in after register)
+            access_token_expires = timedelta(minutes=30)
+            access_token = create_access_token(
+                data={"sub": str(new_user.id), "email": new_user.email},
+                expires_delta=access_token_expires
+            )
+            
+            return {
+                "success": True,
+                "user": new_user,
+                "message": "User registered successfully",
+                "access_token": access_token,
+                "token_type": "bearer"
+            }
         except IntegrityError:
             db.rollback()
             return {"success": False, "message": "Error registering user"}

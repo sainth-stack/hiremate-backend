@@ -10,10 +10,10 @@ from backend.app.services.auth_service import AuthService
 router = APIRouter()
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
     """
-    Register a new user account
+    Register a new user account. Returns success and access token (user is logged in after register).
     
     - **first_name**: User's first name
     - **last_name**: User's last name
@@ -30,11 +30,16 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             )
         
         user = result["user"]
-        return UserResponse(
-            id=user.id,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            email=user.email
+        return TokenResponse(
+            access_token=result["access_token"],
+            token_type=result["token_type"],
+            user=UserResponse(
+                id=user.id,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                email=user.email
+            ),
+            message=result["message"]
         )
     except Exception as e:
         import traceback
