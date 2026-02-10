@@ -49,19 +49,53 @@ def extract_phone(text: str) -> str:
 
 
 def extract_urls(text: str) -> dict:
-    """Extract LinkedIn, GitHub, portfolio URLs."""
-    url_pattern = r"https?://[^\s<>\"']+"
+    """Extract LinkedIn, GitHub, portfolio URLs from text."""
+    url_pattern = r"https?://[^\s<>\"'\]]+"
     urls = re.findall(url_pattern, text)
-    result = {"linkedInUrl": "", "githubUrl": "", "portfolioUrl": ""}
+    result = {"linkedInUrl": "", "githubUrl": "", "portfolioUrl": "", "otherLinks": []}
     for url in urls:
-        url_lower = url.lower()
+        url_clean = url.rstrip(".,;:)")
+        url_lower = url_clean.lower()
         if "linkedin.com" in url_lower and not result["linkedInUrl"]:
-            result["linkedInUrl"] = url
+            result["linkedInUrl"] = url_clean
         elif "github.com" in url_lower and not result["githubUrl"]:
-            result["githubUrl"] = url
+            result["githubUrl"] = url_clean
         elif any(x in url_lower for x in ["portfolio", "personal", "website", ".me"]) and not result["portfolioUrl"]:
-            result["portfolioUrl"] = url
+            result["portfolioUrl"] = url_clean
     return result
+
+
+def extract_urls_from_pdf(file_path: str | Path) -> dict:
+    """Extract LinkedIn, GitHub, portfolio URLs from PDF hyperlink annotations (clickable links)."""
+    result = {"linkedInUrl": "", "githubUrl": "", "portfolioUrl": "", "otherLinks": []}
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                for link in getattr(page, "hyperlinks", []) or []:
+                    uri = link.get("uri") or ""
+                    if not uri or not uri.startswith("http"):
+                        continue
+                    uri_clean = uri.strip()
+                    url_lower = uri_clean.lower()
+                    if "linkedin.com" in url_lower and not result["linkedInUrl"]:
+                        result["linkedInUrl"] = uri_clean
+                    elif "github.com" in url_lower and not result["githubUrl"]:
+                        result["githubUrl"] = uri_clean
+                    elif any(x in url_lower for x in ["portfolio", "personal", "website", ".me"]) and not result["portfolioUrl"]:
+                        result["portfolioUrl"] = uri_clean
+    except Exception:
+        pass
+    return result
+
+
+def _merge_urls(from_text: dict, from_pdf: dict) -> dict:
+    """Merge URL dicts: use non-empty from either source for LinkedIn, GitHub, portfolio."""
+    return {
+        "linkedInUrl": from_text.get("linkedInUrl") or from_pdf.get("linkedInUrl") or "",
+        "githubUrl": from_text.get("githubUrl") or from_pdf.get("githubUrl") or "",
+        "portfolioUrl": from_text.get("portfolioUrl") or from_pdf.get("portfolioUrl") or "",
+        "otherLinks": list(from_text.get("otherLinks") or []),
+    }
 
 
 def extract_section(text: str, section_names: list[str]) -> str:
@@ -275,17 +309,86 @@ def extract_name(text: str) -> Tuple[str, str]:
     return "", ""
 
 
+# Words that must NOT be treated as city or country (tech/skills/languages)
+_LOCATION_BLOCKLIST = frozenset({
+    "javascript", "python", "typescript", "java", "react", "node", "sql", "html", "css",
+    "mongodb", "postgresql", "aws", "docker", "git", "angular", "vue", "linux", "rest",
+    "api", "agile", "scrum", "figma", "azure", "gcp", "express", "next", "redux",
+    "languages", "skills", "technologies", "frontend", "backend", "full", "stack",
+    "interests", "summary", "experience", "education", "projects", "certifications",
+})
+# Sentence/description words – if these appear, treat as wrong and return empty
+_LOCATION_SENTENCE_WORDS = frozenset({
+    "developed", "increasing", "engagement", "applications", "scalable", "user",
+    "building", "dynamic", "experience", "integrated", "implemented", "optimization",
+    "fixed", "built", "used", "handling", "improve", "enhance", "delivering",
+})
+
+
+def _looks_like_place(part: str) -> bool:
+    """True if this string could be a city/country name (not tech/skill or sentence fragment)."""
+    if not part or len(part) > 40:
+        return False
+    # Reject sentence fragments: " by ", " by 30%", ". ", leading period
+    part_clean = part.strip()
+    if part_clean.startswith(".") or " by " in part_clean.lower() or "%" in part_clean:
+        return False
+    if ". " in part_clean and part_clean.index(". ") < len(part_clean) - 2:
+        return False
+    clean = part_clean.split(":")[-1].strip()
+    clean = re.sub(r"\s*\d+\s*", "", clean)
+    if not clean:
+        return False
+    token = clean.split(",")[0].strip().lower()
+    if token in _LOCATION_BLOCKLIST:
+        return False
+    if any(block in token for block in _LOCATION_BLOCKLIST):
+        return False
+    if any(w in token for w in _LOCATION_SENTENCE_WORDS):
+        return False
+    return True
+
+
 def extract_location(text: str) -> Tuple[str, str]:
-    """Extract city and country from text."""
-    # Simple heuristic: look for common patterns
-    lines = text.split("\n")[:15]
+    """Extract city and country from text. Returns empty when not clearly a location (never wrong)."""
+    # 1) Only use explicit Location / Address / Contact section
+    location_section = extract_section(text, [
+        "location", "address", "city", "contact", "contact information", "based in",
+    ])
+    if location_section:
+        lines = [l.strip() for l in location_section.split("\n") if l.strip()]
+        for line in lines[:5]:
+            if ":" in line:
+                line = line.split(":", 1)[-1].strip()
+            if "," in line:
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 2:
+                    city_cand, country_cand = parts[0], parts[-1]
+                    if _looks_like_place(city_cand) and _looks_like_place(country_cand):
+                        return city_cand, country_cand
+            if line and _looks_like_place(line) and not re.search(r"[\w.+-]+@[\w.-]+\.\w{2,}", line):
+                return line, ""
+
+    # 2) Only scan top 10 lines and require SHORT place-like parts (avoid bullet/description text)
+    lines = text.split("\n")[:10]
     for line in lines:
-        if "," in line and any(c.isdigit() for c in line):
-            continue  # Skip addresses
-        if re.search(r"[A-Z][a-z]+,\s*[A-Z][a-z]+", line):
-            parts = [p.strip() for p in line.split(",")]
+        line_stripped = line.strip()
+        line_lower = line_stripped.lower()
+        if not line_stripped or len(line_stripped) > 60:
+            continue
+        if "languages" in line_lower or "skills" in line_lower or "technologies" in line_lower:
+            continue
+        if any(kw in line_lower for kw in ("javascript", "python", "typescript", "react", "node")):
+            continue
+        if any(w in line_lower for w in _LOCATION_SENTENCE_WORDS):
+            continue
+        if "," in line_stripped and re.search(r"[A-Za-z][a-z]+,\s*[A-Za-z][a-z]+", line_stripped):
+            parts = [p.strip() for p in line_stripped.split(",")]
             if len(parts) >= 2:
-                return parts[0], parts[-1]
+                city_cand = parts[0].strip()
+                country_cand = parts[-1].strip()
+                if len(city_cand) <= 35 and len(country_cand) <= 35 and _looks_like_place(city_cand) and _looks_like_place(country_cand):
+                    return city_cand, country_cand
     return "", ""
 
 
@@ -310,7 +413,9 @@ def extract_resume_to_payload(
     email = extract_email(text)
     phone = extract_phone(text)
     city, country = extract_location(text)
-    urls = extract_urls(text)
+    urls_from_text = extract_urls(text)
+    urls_from_pdf = extract_urls_from_pdf(file_path)
+    urls = _merge_urls(urls_from_text, urls_from_pdf)
     summary = extract_summary(text)
     experiences = extract_experiences(text)
     educations = extract_educations(text)
