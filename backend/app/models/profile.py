@@ -1,8 +1,7 @@
 """
 Profile database model - stores resume/profile data in schema format
 """
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 

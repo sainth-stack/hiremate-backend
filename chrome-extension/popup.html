@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Job Autofill</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <div id="login-section" class="popup-section">
+    <header>
+      <h1>Job Auto-Fill</h1>
+      <p class="subtitle">Sign in to access your profile</p>
+    </header>
+    <form id="login-form">
+      <button type="button" id="login-via-website" class="process-btn login-via-website">Log in to apply (via website)</button>
+      <p class="hint">Or sign in below:</p>
+      <label>Email <input type="email" id="login-email" required placeholder="you@example.com"></label>
+      <label>Password <input type="password" id="login-password" required placeholder="******"></label>
+      <button type="submit" id="login-btn" class="process-btn">Log In</button>
+      <p id="login-error" class="status error"></p>
+      <p class="hint">Don't have an account? <a href="#" id="go-signup">Sign up</a></p>
+    </form>
+    <form id="signup-form" class="hidden">
+      <label>Full Name <input type="text" id="signup-name" required placeholder="John Doe"></label>
+      <label>Email <input type="email" id="signup-email" required placeholder="you@example.com"></label>
+      <label>Password <input type="password" id="signup-password" required placeholder="******"></label>
+      <button type="submit" id="signup-btn" class="process-btn">Sign Up</button>
+      <p id="signup-error" class="status error"></p>
+      <p class="hint">Already have an account? <a href="#" id="go-login">Log in</a></p>
+    </form>
+  </div>
+
+  <div id="app-section" class="popup hidden">
+    <header>
+      <h1>Job Auto-Fill</h1>
+      <button id="logout-btn" class="logout-btn">Logout</button>
+    </header>
+
+    <div class="process-section">
+      <button type="button" id="process-and-fill" class="process-btn">Scan &amp; Auto-Fill</button>
+      <p class="hint">Scrape → LLM maps &amp; generates answers → Auto-fill</p>
+      <div id="progress-card" class="progress-card hidden">
+        <div id="progress-stage" class="progress-stage">Ready</div>
+        <div id="progress-detail" class="progress-detail"></div>
+      </div>
+      <p id="process-status" class="status"></p>
+      <div id="mapping-progress" class="mapping-progress hidden"></div>
+    </div>
+
+    <footer>
+      <p class="safety">We never auto-submit. You review and submit.</p>
+    </footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+
+</html>
