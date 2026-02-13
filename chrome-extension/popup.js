@@ -1,5 +1,5 @@
 let ACCESS_TOKEN = null;
-const DEFAULT_API_BASE = "http://localhost:8001/api";
+const DEFAULT_API_BASE = "http://localhost:8000/api";
 const DEFAULT_LOGIN_PAGE_URL = "http://localhost:5173/login";
 const LOG_PREFIX = "[JobAutofill][popup]";
 const MAPPING_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -18,6 +18,116 @@ function logWarn(message, meta) {
 async function getApiBase() {
   const data = await chrome.storage.local.get(["apiBase"]);
   return data.apiBase || DEFAULT_API_BASE;
+}
+
+function getRefreshUrl(apiBase) {
+  const base = String(apiBase || "").replace(/\/+$/, "");
+  if (base.endsWith("/api")) return `${base}/auth/refresh`;
+  return `${base}${base ? "/" : ""}api/auth/refresh`;
+}
+
+let _refreshInFlight = null;
+
+async function refreshTokenViaApi() {
+  if (_refreshInFlight) return _refreshInFlight;
+  _refreshInFlight = (async () => {
+    try {
+      const data = await chrome.storage.local.get(["accessToken", "apiBase"]);
+      const oldToken = data.accessToken;
+      if (!oldToken) {
+        logWarn("refreshTokenViaApi: No token in storage, cannot refresh");
+        return null;
+      }
+      const apiBase = data.apiBase || DEFAULT_API_BASE;
+      const baseNoApi = apiBase.replace(/\/api\/?$/, "");
+      const urlsToTry = [
+        getRefreshUrl(apiBase),
+        `${apiBase}/auth/refresh`,
+        `${baseNoApi}/api/auth/refresh`,
+        baseNoApi.replace(/:\d+/, ":8001") + "/api/auth/refresh",
+        baseNoApi.replace(/:\d+/, ":8000") + "/api/auth/refresh",
+      ];
+      for (const refreshUrl of [...new Set(urlsToTry)]) {
+        try {
+          logInfo("Attempting token refresh", { url: refreshUrl });
+          const res = await fetch(refreshUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${oldToken}` },
+          });
+          if (res.ok) {
+            const json = await res.json();
+            const newToken = json.access_token || json.accessToken;
+            if (newToken) {
+              ACCESS_TOKEN = newToken;
+              await chrome.storage.local.set({ accessToken: newToken });
+              try {
+                await chrome.runtime.sendMessage({ type: "SYNC_TOKEN_TO_HIREMATE_TAB", token: newToken });
+              } catch (_) {}
+              logInfo("Token refreshed via API and synced");
+              return newToken;
+            }
+            logWarn("Refresh returned 200 but no access_token in response", { keys: Object.keys(json || {}) });
+          } else {
+            const errBody = await res.text().catch(() => "");
+            logWarn("Refresh failed", { url: refreshUrl, status: res.status, body: errBody?.slice(0, 200) });
+          }
+        } catch (err) {
+          logWarn("Refresh request error", { url: refreshUrl, error: String(err) });
+          continue;
+        }
+      }
+      logWarn("All refresh attempts failed");
+      return null;
+    } finally {
+      _refreshInFlight = null;
+    }
+  })();
+  return _refreshInFlight;
+}
+
+/** Get auth headers. Sync from tab only. Refresh happens only on 401 (in fetchWithAuthRetry). */
+async function getAuthHeaders() {
+  try {
+    const syncRes = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
+    if (syncRes?.ok && syncRes?.token) {
+      ACCESS_TOKEN = syncRes.token;
+      await chrome.storage.local.set({ accessToken: syncRes.token });
+    }
+  } catch (_) {}
+  let token = ACCESS_TOKEN || (await chrome.storage.local.get(["accessToken"])).accessToken;
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
+function toPlainHeaders(headers) {
+  if (!headers) return {};
+  if (headers instanceof Headers) return Object.fromEntries(headers.entries());
+  return typeof headers === "object" ? { ...headers } : {};
+}
+
+/** Fetch interceptor: on 401 → refresh token, persist to chrome.storage + HireMate localStorage, retry once with new token. */
+async function fetchWithAuthRetry(url, options = {}) {
+  let res = await fetch(url, options);
+  if (res.status === 401) {
+    logInfo("401 received, attempting token refresh", { url });
+    let newToken = await refreshTokenViaApi();
+    if (!newToken) {
+      try {
+        const syncRes = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
+        if (syncRes?.ok && syncRes?.token) {
+          newToken = syncRes.token;
+          ACCESS_TOKEN = newToken;
+          await chrome.storage.local.set({ accessToken: newToken });
+        }
+      } catch (_) {}
+    }
+    if (newToken) {
+      const base = toPlainHeaders(options.headers);
+      res = await fetch(url, { ...options, headers: { ...base, Authorization: `Bearer ${newToken}` } });
+    }
+  }
+  return res;
 }
 
 // -- Auth Logic --
@@ -163,10 +273,8 @@ async function loadAndCacheAutofillData() {
 
   try {
     const apiBase = await getApiBase();
-    const token = ACCESS_TOKEN || (await chrome.storage.local.get(["accessToken"])).accessToken;
-    const headers = { "Content-Type": "application/json" };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    const res = await fetch(`${apiBase}/chrome-extension/autofill/data`, { headers });
+    const headers = await getAuthHeaders();
+    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/data`, { headers });
     
     if (!res.ok) {
       logWarn("Failed to fetch autofill data from API", { status: res.status });
@@ -183,15 +291,14 @@ async function loadAndCacheAutofillData() {
     // Cache data in storage
     await chrome.storage.local.set({ profile, customAnswers, resumeText });
     
-    // Load and upload resume file if specified
+    // Load and upload resume file via backend (backend proxies S3 to avoid CORS)
     if (resumeFileName || resumeUrl) {
       try {
-        const isExternalUrl = resumeUrl && (resumeUrl.startsWith("http://") || resumeUrl.startsWith("https://"));
-        const resumeFetchUrl = isExternalUrl ? resumeUrl : `${apiBase}/chrome-extension/autofill/resume${resumeFileName ? `/${resumeFileName.split("/").pop()}` : ""}`;
-        const resumeRes = await fetch(resumeFetchUrl, isExternalUrl ? {} : { headers });
+        const path = resumeFileName ? `/chrome-extension/autofill/resume/${resumeFileName.split("/").pop()}` : "/chrome-extension/autofill/resume";
+        const resumeRes = await fetchWithAuthRetry(`${apiBase}${path}`, { headers });
         if (resumeRes.ok) {
           const resumeBuffer = await resumeRes.arrayBuffer();
-          const fileName = resumeFileName?.split("/").pop() || resumeUrl?.split("/").pop() || "resume.pdf";
+          const fileName = resumeFileName?.split("/").pop()?.split("?")[0] || resumeUrl?.split("/").pop()?.split("?")[0] || "resume.pdf";
           await chrome.runtime.sendMessage({
             type: "SAVE_RESUME",
             payload: {
@@ -431,7 +538,7 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
   btn.disabled = true;
   hideMappingProgress();
   showProgress("Preparing scan", "Connecting to active tab...", true);
-  showStatus("Scraping page...");
+  showStatus("Scraping page...", "loading");
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -476,7 +583,7 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
     CURRENT_FIELDS = fields;
     
     // 2. Load context from API
-    showStatus("Loading profile data from API...");
+    showStatus("Loading profile data from API...", "loading");
     showProgress("Loading profile", "Fetching candidate profile and saved answers...", true);
     const context = await contextPromise;
     
@@ -488,7 +595,7 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
       return;
     }
     
-    showStatus("Analyzing with AI...");
+    showStatus("Analyzing with AI...", "loading");
     showProgress("AI mapping", `Analyzing ${fields.length} fields with optimized routing...`, true);
     logInfo("Sending mapping request", {
       fieldCount: fields.length,
@@ -503,13 +610,10 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
       showStatus("Using recent mapping result...");
     } else {
       const apiBase = await getApiBase();
-      const token = ACCESS_TOKEN || (await chrome.storage.local.get(["accessToken"])).accessToken;
-      const mapRes = await fetch(`${apiBase}/chrome-extension/form-fields/map`, {
+      const headers = await getAuthHeaders();
+      const mapRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/form-fields/map`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers,
         body: JSON.stringify({
           fields: fields.map((field) => ({
             ...field,
@@ -547,7 +651,7 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
 
     // 3. Auto-fill directly (LLM-only flow)
     showProgress("Filling form", "Applying mapped values to detected inputs...", true);
-    showStatus("Filling form...");
+    showStatus("Filling form...", "loading");
     const fillResult = await fillMappedValuesForTab(tab.id, CURRENT_FIELDS, mappings);
     showProgress("Completed", `Filled ${fillResult.totalFilled} fields successfully.`, false);
     showStatus(`✓ Filled ${fillResult.totalFilled} fields${fillResult.totalResumes > 0 ? " + uploaded resume" : ""}!`, "success");

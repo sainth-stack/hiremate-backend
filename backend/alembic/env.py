@@ -25,7 +25,8 @@ import backend.app.models  # noqa: F401
 config = context.config
 
 # Override sqlalchemy.url with DATABASE_URL from settings
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Escape % for ConfigParser (e.g. %23 in passwords)
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

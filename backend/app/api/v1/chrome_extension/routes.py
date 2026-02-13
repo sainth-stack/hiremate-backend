@@ -7,9 +7,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,9 +18,12 @@ from backend.app.core.config import settings
 from backend.app.core.dependencies import get_current_user, get_db
 from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
+from backend.app.models.user_resume import UserResume
+from backend.app.models.user_job import UserJob
 from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
 from backend.app.services.form_field_mapper import map_form_fields
-from backend.app.services.profile_service import ProfileService
+from backend.app.services.keyword_analyzer import analyze_keywords
+from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
 
 logger = get_logger("api.chrome_extension")
 router = APIRouter(prefix="/chrome-extension", tags=["chrome-extension"])
@@ -43,6 +47,49 @@ class FormFieldMapIn(BaseModel):
 
 class FormFieldMapOut(BaseModel):
     mappings: dict[str, dict[str, Any]]
+
+
+class KeywordsAnalyzeIn(BaseModel):
+    job_description: str
+    resume_text: str | None = None
+    resume_id: int | None = None
+
+
+class ResumeItem(BaseModel):
+    id: int
+    resume_name: str
+    resume_url: str
+    is_default: bool
+    resume_text: str | None = None
+
+
+class JobSaveIn(BaseModel):
+    company: str = ""
+    position_title: str = ""
+    location: str = ""
+    min_salary: str | None = None
+    max_salary: str | None = None
+    currency: str = "USD"
+    period: str = "Yearly"
+    job_type: str = "Full-Time"
+    job_description: str | None = None
+    notes: str | None = None
+    application_status: str = "I have not yet applied"
+    job_posting_url: str | None = None
+
+
+class KeywordItem(BaseModel):
+    keyword: str
+    matched: bool
+
+
+class KeywordsAnalyzeOut(BaseModel):
+    total_keywords: int
+    matched_count: int
+    percent: int
+    high_priority: list[KeywordItem]
+    low_priority: list[KeywordItem]
+    message: str | None = None
 
 
 def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
@@ -93,19 +140,7 @@ def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
 
 def _build_resume_text(payload: ProfilePayload) -> str:
     """Build resume text from profile for LLM context."""
-    parts = [
-        payload.professionalSummary or "",
-        f"Headline: {payload.professionalHeadline or ''}",
-    ]
-    for e in payload.experiences or []:
-        parts.append(
-            f"{e.jobTitle} at {e.companyName} ({e.startDate}-{e.endDate}): {e.description}"
-        )
-    for e in payload.educations or []:
-        parts.append(f"{e.degree}, {e.institution} ({e.startYear}-{e.endYear})")
-    for s in payload.techSkills or []:
-        parts.append(f"Skill: {s.name} ({s.level})")
-    return "\n\n".join(filter(None, parts))
+    return build_resume_text_from_payload(payload)
 
 
 @router.get("/autofill/data", response_model=AutofillDataOut)
@@ -150,21 +185,43 @@ def get_autofill_data(
     )
 
 
+def _guess_media_type(filename: str) -> str:
+    """Guess media type from filename extension."""
+    ext = Path(filename).suffix.lower()
+    mime = {
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".txt": "text/plain",
+        ".rtf": "application/rtf",
+    }
+    return mime.get(ext, "application/pdf")
+
+
 @router.get("/autofill/resume")
 def get_resume_file(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Serve the current user's resume file from DB (S3 or local uploads)."""
+    """Serve the current user's resume file from DB (S3 or local uploads). Proxies S3 URLs to avoid CORS."""
     try:
         profile = ProfileService.get_or_create_profile(db, current_user)
         resume_url = profile.resume_url
         if not resume_url:
             raise HTTPException(status_code=404, detail="No resume uploaded")
 
-        # S3 / HTTP URL: redirect or proxy
+        # S3 / HTTP URL: proxy through backend to avoid CORS when extension fetches from job sites
         if resume_url.startswith("http://") or resume_url.startswith("https://"):
-            return RedirectResponse(url=resume_url, status_code=302)
+            try:
+                with urlopen(resume_url, timeout=30) as resp:
+                    data = resp.read()
+                filename = resume_url.split("/")[-1].split("?")[0] or "resume.pdf"
+                media_type = _guess_media_type(filename)
+                logger.info("Proxied resume from S3 user_id=%s bytes=%d", current_user.id, len(data))
+                return Response(content=data, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{filename}"'})
+            except Exception as exc:
+                logger.exception("Failed to proxy resume from %s", resume_url)
+                raise HTTPException(status_code=502, detail=f"Failed to fetch resume: {exc}") from exc
 
         # Local path: /uploads/resumes/filename.pdf
         safe_name = Path(resume_url).name
@@ -202,7 +259,14 @@ def get_resume_file_by_name(
             raise HTTPException(status_code=404, detail="Resume file not found")
 
         if resume_url.startswith("http"):
-            return RedirectResponse(url=resume_url, status_code=302)
+            try:
+                with urlopen(resume_url, timeout=30) as resp:
+                    data = resp.read()
+                media_type = _guess_media_type(safe_name)
+                return Response(content=data, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{safe_name}"'})
+            except Exception as exc:
+                logger.exception("Failed to proxy resume from %s", resume_url)
+                raise HTTPException(status_code=502, detail=f"Failed to fetch resume: {exc}") from exc
 
         upload_base = Path(settings.upload_dir)
         if not upload_base.is_absolute():
@@ -262,3 +326,95 @@ def map_fields(
 
     logger.info("Form map response mappings=%d", len(mappings))
     return FormFieldMapOut(mappings=mappings)
+
+
+@router.get("/resumes", response_model=list[ResumeItem])
+def list_user_resumes(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ResumeItem]:
+    """List user's resumes for keyword analyser dropdown. Includes profile resume as fallback."""
+    resumes: list[ResumeItem] = []
+    db_resumes = db.query(UserResume).filter(UserResume.user_id == current_user.id).order_by(UserResume.is_default.desc(), UserResume.created_at.desc()).all()
+    for r in db_resumes:
+        resumes.append(
+            ResumeItem(
+                id=r.id,
+                resume_name=r.resume_name,
+                resume_url=r.resume_url,
+                is_default=bool(r.is_default),
+                resume_text=r.resume_text,
+            )
+        )
+    if not resumes:
+        profile = ProfileService.get_or_create_profile(db, current_user)
+        pl = profile_model_to_payload(profile)
+        resume_text = _build_resume_text(pl)
+        resume_url = pl.resumeUrl or ""
+        if resume_url or resume_text:
+            name = "Default resume"
+            if resume_url:
+                name = Path(resume_url).name.split("?")[0] or name
+            resumes.append(
+                ResumeItem(
+                    id=0,
+                    resume_name=name + (" (default)" if resume_url else ""),
+                    resume_url=resume_url or "",
+                    is_default=True,
+                    resume_text=resume_text,
+                )
+            )
+    return resumes
+
+
+@router.post("/jobs")
+def save_job(
+    payload: JobSaveIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Save job to user's tracker (Edit Job Description form)."""
+    job = UserJob(
+        user_id=current_user.id,
+        company=payload.company,
+        position_title=payload.position_title,
+        location=payload.location,
+        min_salary=payload.min_salary,
+        max_salary=payload.max_salary,
+        currency=payload.currency,
+        period=payload.period,
+        job_type=payload.job_type,
+        job_description=payload.job_description,
+        notes=payload.notes,
+        application_status=payload.application_status,
+        job_posting_url=payload.job_posting_url,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    logger.info("Job saved user_id=%s job_id=%s company=%s", current_user.id, job.id, job.company)
+    return {"id": job.id, "message": "Job saved successfully"}
+
+
+@router.post("/keywords/analyze", response_model=KeywordsAnalyzeOut)
+def analyze_job_keywords(
+    payload: KeywordsAnalyzeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> KeywordsAnalyzeOut:
+    """Extract keywords from job description, match against resume, return analysis."""
+    resume_text = payload.resume_text
+    if payload.resume_id is not None and payload.resume_id > 0:
+        ur = db.query(UserResume).filter(UserResume.id == payload.resume_id, UserResume.user_id == current_user.id).first()
+        if ur and ur.resume_text:
+            resume_text = ur.resume_text
+    if not resume_text:
+        profile = ProfileService.get_or_create_profile(db, current_user)
+        pl = profile_model_to_payload(profile)
+        resume_text = _build_resume_text(pl)
+
+    result = analyze_keywords(
+        job_description=payload.job_description,
+        resume_text=resume_text or "",
+    )
+    return KeywordsAnalyzeOut(**result)

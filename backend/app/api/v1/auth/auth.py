@@ -1,14 +1,19 @@
 """
-Authentication endpoints - Login, Register, and Get Current User
+Authentication endpoints - Login, Register, Get Current User, and Token Refresh
 """
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from backend.app.core.dependencies import get_current_user, get_db
+from backend.app.core.config import settings
+from backend.app.core.dependencies import get_current_user, get_db, security
 from backend.app.core.logging_config import get_logger
+from backend.app.core.security import create_access_token
 from backend.app.models.user import User
 from backend.app.schemas.user import UserRegister, UserLogin, TokenResponse, UserResponse
 from backend.app.services.auth_service import AuthService
+from fastapi.security import HTTPAuthorizationCredentials
 
 logger = get_logger("api.auth")
 router = APIRouter()
@@ -138,3 +143,55 @@ def get_current_user_profile(
         last_name=current_user.last_name or "",
         email=current_user.email or "",
     )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh_access_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    db: Session = Depends(get_db),
+):
+    """
+    Refresh access token. Accepts current token (even if expired) and returns a new token.
+    Use when token is about to expire or expired recently.
+    """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=[settings.algorithm],
+            options={"verify_exp": False},
+        )
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "email": user.email},
+            expires_delta=access_token_expires,
+        )
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            user=UserResponse(
+                id=user.id,
+                first_name=user.first_name or "",
+                last_name=user.last_name or "",
+                email=user.email or "",
+            ),
+        )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

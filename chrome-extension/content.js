@@ -43,7 +43,17 @@ const FIELD_SELECTOR = [
 
 const LOG_PREFIX = "[JobAutofill][content]";
 const INPAGE_ROOT_ID = "job-autofill-inpage-root";
-const LOGIN_PAGE_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"];
+const LOGIN_PAGE_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5174",
+  "https://hiremate.ai",
+  "https://www.hiremate.ai",
+  "https://app.hiremate.ai",
+  "https://hiremate.com",
+  "https://www.hiremate.com",
+];
 const DEFAULT_LOGIN_PAGE_URL = "http://localhost:5173/login";
 
 function logInfo(message, meta) {
@@ -67,6 +77,13 @@ function normalizeKey(text) {
 function getText(el) {
   if (!el) return "";
   return (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function escapeHtml(s) {
+  if (!s) return "";
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
 }
 
 function isVisible(el) {
@@ -480,15 +497,34 @@ function formatDateForInput(value) {
   return value;
 }
 
+function getMimeTypeForResume(fileName) {
+  const ext = (fileName || "").toLowerCase().split(".").pop();
+  const mimeMap = {
+    pdf: "application/pdf",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    txt: "text/plain",
+    rtf: "application/rtf",
+  };
+  return mimeMap[ext] || "application/pdf";
+}
+
 async function fillFileInput(field, resumeData) {
   if (!resumeData?.buffer) return false;
-  const blob = new Blob([new Uint8Array(resumeData.buffer)], { type: "application/pdf" });
-  const file = new File([blob], resumeData.name || "resume.pdf", { type: "application/pdf" });
+  const fileName = resumeData.name || "resume.pdf";
+  const mimeType = getMimeTypeForResume(fileName);
+  const blob = new Blob([new Uint8Array(resumeData.buffer)], { type: mimeType });
+  const file = new File([blob], fileName, { type: mimeType });
   const dt = new DataTransfer();
   dt.items.add(file);
-  field.files = dt.files;
-  dispatchFrameworkEvents(field);
-  return true;
+  try {
+    field.files = dt.files;
+    dispatchFrameworkEvents(field);
+    return field.files?.length > 0;
+  } catch (e) {
+    logWarn("fillFileInput failed (some sites block programmatic file assignment)", { error: String(e) });
+    return false;
+  }
 }
 
 function findContinueButton(doc = document) {
@@ -634,6 +670,7 @@ async function fillWithValues(payload) {
   let filledCount = 0;
   let resumeUploadCount = 0;
   let failedCount = 0;
+  const failedFields = [];
 
   const indexed = fillable.map((el, i) => ({ element: el, originalIndex: i }));
 
@@ -648,6 +685,7 @@ async function fillWithValues(payload) {
     await scrollFieldIntoView(field);
 
     const meta = getFieldMeta(field);
+    const fieldLabel = meta.label || meta.name || meta.placeholder || getClosestQuestionText(field) || `Field ${i + 1}`;
     const isResumeField =
       (field.type || "").toLowerCase() === "file" &&
       (getFieldKeys(meta).join(" ").includes("resume") || getFieldKeys(meta).join(" ").includes("cv"));
@@ -660,7 +698,7 @@ async function fillWithValues(payload) {
         current: idx + 1,
         total: totalToFill,
         message: progressMessage,
-        label: meta.label || meta.name || `Field ${i + 1}`,
+        label: fieldLabel,
       });
     }
 
@@ -682,10 +720,12 @@ async function fillWithValues(payload) {
         } else {
           failedCount += 1;
           highlightFailedField(field);
+          failedFields.push({ element: field, label: fieldLabel });
         }
       } else if (shouldUploadResume) {
         failedCount += 1;
         highlightFailedField(field);
+        failedFields.push({ element: field, label: fieldLabel });
         logWarn("Resume field found but no resume data available", {
           index: i,
           id: id || null,
@@ -700,6 +740,7 @@ async function fillWithValues(payload) {
       if (meta.required) {
         failedCount += 1;
         highlightFailedField(field);
+        failedFields.push({ element: field, label: fieldLabel });
       }
       await delay(fillDelay);
       continue;
@@ -712,6 +753,7 @@ async function fillWithValues(payload) {
     } else {
       failedCount += 1;
       highlightFailedField(field);
+      failedFields.push({ element: field, label: fieldLabel });
     }
     await delay(fillDelay);
   }
@@ -721,7 +763,7 @@ async function fillWithValues(payload) {
     resumeUploads: resumeUploadCount,
     failedCount,
   });
-  return { filledCount, resumeUploadCount, failedCount };
+  return { filledCount, resumeUploadCount, failedCount, failedFields };
 }
 
 async function fillFormRuleBased(payload = {}) {
@@ -789,8 +831,27 @@ function isCareerPage(urlStr = window.location.href) {
     url.includes("icims.com") ||
     url.includes("ashbyhq.com") ||
     url.includes("bamboohr.com") ||
-    url.includes("jobvite.com")
+    url.includes("jobvite.com") ||
+    url.includes("recruit") ||
+    url.includes("talent")
   );
+}
+
+async function isJobPageViaLLM(url, title, snippet) {
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/job-page-detect`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: url || "", title: title || "", snippet: (snippet || "").slice(0, 800) }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.is_job_page === true;
+  } catch (_) {
+    return null;
+  }
 }
 
 const KEYWORD_MATCH_ROOT_ID = "ja-keyword-match-root";
@@ -798,31 +859,102 @@ const STOP_WORDS = new Set(
   "a,an,the,and,or,but,in,on,at,to,for,of,with,by,from,as,is,was,are,were,been,be,have,has,had,do,does,did,will,would,could,should,may,might,must,shall,can,need,dare,ought,used".split(",")
 );
 
+const JOB_DESC_SELECTORS = [
+  "[data-automation-id='jobDescription']",
+  "[data-automation-id='job-description']",
+  "[data-testid*='job-description']",
+  "[data-testid*='jobDescription']",
+  ".job-description",
+  ".job-description-content",
+  ".job-details",
+  ".job-body",
+  ".job-content",
+  ".jd-content",
+  "[class*='job-description']",
+  "[class*='jobDescription']",
+  "[class*='job-detail']",
+  "[class*='job-content']",
+  "#job-description",
+  "#jobDescription",
+  "[id*='job-description']",
+  "[id*='jobDescription']",
+  "section[class*='job']",
+  "[class*='description']",
+  ".description",
+  "article",
+  "[role='main']",
+  "main",
+];
+
 function extractJobDescription() {
-  const selectors = [
-    "[data-automation-id='jobDescription']",
-    "[data-automation-id='job-description']",
-    ".job-description",
-    ".job-description-content",
-    ".job-details",
-    ".job-body",
-    "[class*='job-description']",
-    "[class*='description']",
-    ".description",
-    "article",
-    "[role='main']",
-  ];
-  for (const sel of selectors) {
+  for (const sel of JOB_DESC_SELECTORS) {
     try {
       const el = document.querySelector(sel);
       if (el) {
         const text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-        if (text.length > 100) return text;
+        if (text.length > 100 && looksLikeJobDescription(text)) return text.slice(0, 8000);
       }
     } catch (_) {}
   }
+  const text = extractMainContentHeuristic();
+  if (text && text.length > 100 && looksLikeJobDescription(text)) return text.slice(0, 8000);
   const body = document.body?.innerText || document.body?.textContent || "";
   return body.length > 200 ? body.slice(0, 8000) : "";
+}
+
+function looksLikeJobDescription(text) {
+  const lower = text.toLowerCase();
+  const jobSignals = [
+    "experience", "years", "responsibilities", "qualifications", "requirements",
+    "role", "skills", "golang", "python", "java", "javascript", "engineer", "developer",
+  ];
+  let matches = 0;
+  for (const s of jobSignals) {
+    if (lower.includes(s)) matches++;
+  }
+  return matches >= 2 || lower.includes("apply") || lower.includes("responsibilities");
+}
+
+function extractMainContentHeuristic() {
+  const mainSelectors = ["main", "[role='main']", "article", ".content", ".main-content", "#content", "#main"];
+  for (const sel of mainSelectors) {
+    try {
+      const el = document.querySelector(sel);
+      if (el && isVisible(el)) {
+        const txt = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        if (txt.length >= 200) return txt;
+      }
+    } catch (_) {}
+  }
+  const divs = document.querySelectorAll("div");
+  let best = null;
+  let bestLen = 0;
+  for (const el of divs) {
+    if (!isVisible(el) || el.children.length > 5) continue;
+    const txt = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+    if (txt.length >= 300 && txt.length <= 12000 && looksLikeJobDescription(txt) && txt.length > bestLen) {
+      bestLen = txt.length;
+      best = txt;
+    }
+  }
+  return best;
+}
+
+const JOB_CONTENT_WAIT_MS = 8000;
+const JOB_CONTENT_POLL_INTERVAL_MS = 3000;
+
+/** Wait for async job content (SPAs). Polls every 1s for up to 8s, extracts when content appears. */
+async function extractJobDescriptionWithRetry() {
+  let text = extractJobDescription();
+  if (text && text.length >= 50) return text;
+
+  const start = Date.now();
+  while (Date.now() - start < JOB_CONTENT_WAIT_MS) {
+    await new Promise((r) => setTimeout(r, JOB_CONTENT_POLL_INTERVAL_MS));
+    text = extractJobDescription();
+    if (text && text.length >= 50) return text;
+  }
+  return extractJobDescription();
 }
 
 function extractKeywords(text) {
@@ -853,7 +985,41 @@ function computeKeywordMatch(jobDesc, resumeText) {
   return { matched, total, percent, allKeywords: jobKeywords };
 }
 
-function mountKeywordMatchWidget() {
+async function runKeywordAnalysisAndMaybeShowWidget() {
+  if (document.getElementById(KEYWORD_MATCH_ROOT_ID)) return;
+
+  const url = window.location.href;
+  const urlSuggestsJob = isCareerPage(url);
+  if (!urlSuggestsJob) {
+    const snippet = (document.body?.innerText || document.body?.textContent || "").replace(/\s+/g, " ").slice(0, 800);
+    const llmSaysJob = await isJobPageViaLLM(url, document.title, snippet);
+    if (llmSaysJob !== true) return;
+  }
+
+  try {
+    const jobDesc = await extractJobDescriptionWithRetry();
+    if (!jobDesc || jobDesc.length < 50) return;
+
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ job_description: jobDesc }),
+    });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    const matched = data.matched_count || 0;
+    const total = data.total_keywords || 0;
+    if (total === 0) return;
+
+    const percent = data.percent || 0;
+    mountKeywordMatchWidgetWithData({ matched, total, percent });
+  } catch (_) {}
+}
+
+function mountKeywordMatchWidgetWithData({ matched, total, percent }) {
   if (document.getElementById(KEYWORD_MATCH_ROOT_ID)) return;
 
   const root = document.createElement("div");
@@ -893,7 +1059,7 @@ function mountKeywordMatchWidget() {
         height: 64px;
         margin: 0 auto 12px;
         border-radius: 50%;
-        background: conic-gradient(#0ea5e9 0deg, #e5e7eb 0deg);
+        background: conic-gradient(#0ea5e9 ${percent * 3.6}deg, #e5e7eb ${percent * 3.6}deg);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -912,47 +1078,21 @@ function mountKeywordMatchWidget() {
       }
       #${KEYWORD_MATCH_ROOT_ID} .ja-kw-title { font-size: 13px; font-weight: 600; color: #111; margin-bottom: 4px; }
       #${KEYWORD_MATCH_ROOT_ID} .ja-kw-desc { font-size: 11px; color: #6b7280; }
-      #${KEYWORD_MATCH_ROOT_ID} .ja-kw-tag { display: inline-block; margin-top: 8px; font-size: 10px; color: #0ea5e9; font-weight: 600; text-decoration: underline; }
+      #${KEYWORD_MATCH_ROOT_ID} .ja-kw-tag { display: inline-block; margin-top: 8px; font-size: 10px; color: #0ea5e9; font-weight: 600; text-decoration: underline; cursor: pointer; }
     </style>
     <div class="ja-kw-card">
-      <div class="ja-kw-circle" id="ja-kw-circle"><div class="ja-kw-circle-inner" id="ja-kw-percent">0%</div></div>
+      <div class="ja-kw-circle" id="ja-kw-circle"><div class="ja-kw-circle-inner" id="ja-kw-percent">${percent}%</div></div>
       <div class="ja-kw-title">Resume Match</div>
-      <div class="ja-kw-desc" id="ja-kw-desc">Loading...</div>
+      <div class="ja-kw-desc" id="ja-kw-desc">${matched} of ${total} keywords are present in your resume.</div>
       <span class="ja-kw-tag">HireMate</span>
     </div>
   `;
   document.documentElement.appendChild(root);
 
-  (async () => {
-    try {
-      const jobDesc = extractJobDescription();
-      const context = await getAutofillContextFromApi();
-      const resumeText = context.resumeText || "";
-
-      const circleEl = root.querySelector("#ja-kw-circle");
-      const percentEl = root.querySelector("#ja-kw-percent");
-      const descEl = root.querySelector("#ja-kw-desc");
-
-      if (!jobDesc || jobDesc.length < 50) {
-        descEl.textContent = "No job description found";
-        return;
-      }
-      if (!resumeText) {
-        descEl.textContent = "Add resume in profile";
-        return;
-      }
-
-      const { matched, total, percent } = computeKeywordMatch(jobDesc, resumeText);
-      percentEl.textContent = `${percent}%`;
-      descEl.textContent = `${matched.length} of ${total} keywords are present in your resume.`;
-      circleEl.style.background = `conic-gradient(#0ea5e9 ${percent * 3.6}deg, #e5e7eb ${percent * 3.6}deg)`;
-    } catch (_) {
-      root.querySelector("#ja-kw-desc").textContent = "Unable to analyze";
-    }
-  })();
-
   const card = root.querySelector(".ja-kw-card");
-  card?.addEventListener("click", () => {
+  const hiremateLink = root.querySelector(".ja-kw-tag");
+  card?.addEventListener("click", (e) => {
+    if (e.target === hiremateLink || hiremateLink?.contains(e.target)) return;
     mountInPageUI();
     const widget = document.getElementById(INPAGE_ROOT_ID);
     if (widget) {
@@ -962,15 +1102,150 @@ function mountKeywordMatchWidget() {
       if (keywordsTab) keywordsTab.click();
     }
   });
+  hiremateLink?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openResumeGeneratorUrl();
+  });
 }
 
 async function getApiBase() {
   try {
     const data = await chrome.storage.local.get(["apiBase"]);
-    return data.apiBase || "http://localhost:8001/api";
+    return data.apiBase || "http://localhost:8000/api";
   } catch (_) {
-    return "http://localhost:8001/api";
+    return "http://localhost:8000/api";
   }
+}
+
+async function openResumeGeneratorUrl() {
+  const data = await chrome.storage.local.get(["loginPageUrl"]);
+  const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
+  const url = `${base}/resume-generator`;
+  chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url });
+}
+
+/** Build auth refresh URL - handles apiBase with or without /api suffix. */
+function getRefreshUrl(apiBase) {
+  const base = String(apiBase || "").replace(/\/+$/, "");
+  if (base.endsWith("/api")) return `${base}/auth/refresh`;
+  return `${base}${base ? "/" : ""}api/auth/refresh`;
+}
+
+/** Mutex: only one refresh in flight; others wait and reuse the result. */
+let _refreshInFlight = null;
+
+/** Refresh token via API (only on 401). Returns new token or null. Tries multiple URL patterns (404 can mean wrong path/port). */
+async function refreshTokenViaApi() {
+  if (_refreshInFlight) return _refreshInFlight;
+  _refreshInFlight = (async () => {
+    try {
+      const data = await chrome.storage.local.get(["accessToken", "apiBase"]);
+      const oldToken = data.accessToken;
+      if (!oldToken) {
+        logWarn("refreshTokenViaApi: No token in storage, cannot refresh");
+        return null;
+      }
+      const apiBase = data.apiBase || "http://localhost:8000/api";
+      const baseNoApi = apiBase.replace(/\/api\/?$/, "");
+      const urlsToTry = [
+        getRefreshUrl(apiBase),
+        `${apiBase}/auth/refresh`,
+        `${baseNoApi}/api/auth/refresh`,
+        baseNoApi.replace(/:\d+/, ":8001") + "/api/auth/refresh",
+        baseNoApi.replace(/:\d+/, ":8000") + "/api/auth/refresh",
+      ];
+      for (const refreshUrl of [...new Set(urlsToTry)]) {
+        try {
+          logInfo("Attempting token refresh", { url: refreshUrl });
+          const res = await fetch(refreshUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${oldToken}` },
+          });
+          if (res.ok) {
+            const json = await res.json();
+            const newToken = json.access_token || json.accessToken;
+            if (newToken) {
+              await chrome.storage.local.set({ accessToken: newToken });
+              try {
+                await chrome.runtime.sendMessage({ type: "SYNC_TOKEN_TO_HIREMATE_TAB", token: newToken });
+              } catch (_) {}
+              if (LOGIN_PAGE_ORIGINS.some((o) => window.location.origin === o)) {
+                try {
+                  localStorage.setItem("token", newToken);
+                  localStorage.setItem("access_token", newToken);
+                } catch (_) {}
+              }
+              logInfo("Token refreshed via API and synced to chrome.storage + localStorage");
+              return newToken;
+            }
+            logWarn("Refresh returned 200 but no access_token in response", { keys: Object.keys(json || {}) });
+          } else {
+            const errBody = await res.text().catch(() => "");
+            logWarn("Refresh failed", { url: refreshUrl, status: res.status, body: errBody?.slice(0, 200) });
+          }
+        } catch (err) {
+          logWarn("Refresh request error", { url: refreshUrl, error: String(err) });
+          continue;
+        }
+      }
+      logWarn("All refresh attempts failed");
+      return null;
+    } finally {
+      _refreshInFlight = null;
+    }
+  })();
+  return _refreshInFlight;
+}
+
+/** Get auth headers. Sync token from open HireMate tab only. Refresh happens only on 401 (in fetchWithAuthRetry). */
+async function getAuthHeaders() {
+  try {
+    const syncRes = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
+    if (syncRes?.ok && syncRes?.token) {
+      await chrome.storage.local.set({ accessToken: syncRes.token });
+    }
+  } catch (_) {}
+  const data = await chrome.storage.local.get(["accessToken"]);
+  const token = data.accessToken || null;
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
+/** Normalize headers to plain object (handles Headers instance). */
+function toPlainHeaders(headers) {
+  if (!headers) return {};
+  if (headers instanceof Headers) return Object.fromEntries(headers.entries());
+  return typeof headers === "object" ? { ...headers } : {};
+}
+
+/** Fetch interceptor: on 401 → refresh token, persist to chrome.storage + HireMate localStorage, retry once with new token. */
+async function fetchWithAuthRetry(url, options = {}) {
+  let res = await fetch(url, options);
+  if (res.status === 401) {
+    logInfo("401 received, attempting token refresh", { url });
+    let newToken = null;
+    newToken = await refreshTokenViaApi();
+    if (!newToken) {
+      try {
+        const syncRes = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
+        if (syncRes?.ok && syncRes?.token) {
+          newToken = syncRes.token;
+          await chrome.storage.local.set({ accessToken: newToken });
+        }
+      } catch (_) {}
+    }
+    if (newToken) {
+      const base = toPlainHeaders(options.headers);
+      const retryOptions = { ...options, headers: { ...base, Authorization: `Bearer ${newToken}` } };
+      res = await fetch(url, retryOptions);
+      if (res.status === 401) {
+        logWarn("Retry still returned 401 after refresh");
+      }
+    }
+  }
+  return res;
 }
 
 async function loadProfileIntoPanel(root) {
@@ -996,13 +1271,191 @@ async function loadProfileIntoPanel(root) {
   }
 }
 
+function extractCompanyAndPosition() {
+  const title = document.title || "";
+  const url = window.location.href || "";
+  let company = "";
+  let position = "";
+  const ogTitle = document.querySelector('meta[property="og:title"]')?.content;
+  const h1 = document.querySelector("h1");
+  if (ogTitle) {
+    const parts = ogTitle.split(/[|\-–—]/);
+    if (parts.length >= 2) {
+      company = (parts[0] || "").trim();
+      position = (parts[1] || "").trim();
+    } else {
+      position = ogTitle.trim();
+    }
+  } else if (h1) {
+    position = getText(h1);
+  }
+  if (!position && title) position = title;
+  return { company, position };
+}
+
+function prefillJobForm(root) {
+  const jobDesc = extractJobDescription();
+  const { company, position } = extractCompanyAndPosition();
+  const urlInput = root?.querySelector("#ja-job-url");
+  const descInput = root?.querySelector("#ja-job-description");
+  const companyInput = root?.querySelector("#ja-job-company");
+  const positionInput = root?.querySelector("#ja-job-position");
+  if (urlInput) urlInput.value = window.location.href || "";
+  if (descInput) descInput.value = jobDesc || "";
+  if (companyInput) companyInput.value = company || "";
+  if (positionInput) positionInput.value = position || "";
+}
+
+async function saveJobFromForm(root) {
+  const btn = root?.querySelector("#ja-job-save");
+  if (btn) btn.disabled = true;
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const payload = {
+      company: root.querySelector("#ja-job-company")?.value || "",
+      position_title: root.querySelector("#ja-job-position")?.value || "",
+      location: root.querySelector("#ja-job-location")?.value || "",
+      min_salary: root.querySelector("#ja-job-min-salary")?.value || null,
+      max_salary: root.querySelector("#ja-job-max-salary")?.value || null,
+      currency: root.querySelector("#ja-job-currency")?.value || "USD",
+      period: root.querySelector("#ja-job-period")?.value || "Yearly",
+      job_type: root.querySelector("#ja-job-type")?.value || "Full-Time",
+      job_description: root.querySelector("#ja-job-description")?.value || null,
+      notes: root.querySelector("#ja-job-notes")?.value || null,
+      application_status: root.querySelector("#ja-job-status")?.value || "I have not yet applied",
+      job_posting_url: root.querySelector("#ja-job-url")?.value || null,
+    };
+    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/jobs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const view = root.querySelector("#ja-keywords-view");
+      const formPanel = root.querySelector("#ja-job-form-panel");
+      if (view && formPanel) {
+        formPanel.style.display = "none";
+        view.style.display = "block";
+      }
+    }
+  } catch (err) {
+    logWarn("Save job failed", { error: String(err) });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function fetchResumesFromApi() {
+  const apiBase = await getApiBase();
+  const headers = await getAuthHeaders();
+  const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/resumes`, { headers });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+async function loadKeywordsIntoPanel(root) {
+  const container = root?.querySelector("#ja-keyword-analysis");
+  const card = root?.querySelector("#ja-keyword-card");
+  const selectEl = root?.querySelector("#ja-resume-select");
+  if (!container) return;
+
+  container.innerHTML = "<p class=\"ja-score-text\">Loading profile...</p>";
+  if (card) card.classList.add("ja-loading");
+
+  try {
+    const resumes = await fetchResumesFromApi();
+    if (selectEl) {
+      selectEl.innerHTML = "";
+      if (resumes.length === 0) {
+        selectEl.innerHTML = "<option value=\"\">No resumes – add one in profile</option>";
+      } else {
+        let defaultId = null;
+        resumes.forEach((r, idx) => {
+          const opt = document.createElement("option");
+          opt.value = r.id;
+          opt.textContent = r.resume_name || `Resume ${idx + 1}`;
+          if (r.is_default) {
+            opt.textContent += " (default)";
+            defaultId = r.id;
+          }
+          selectEl.appendChild(opt);
+        });
+        if (defaultId !== null) selectEl.value = String(defaultId);
+        else if (resumes.length) selectEl.value = String(resumes[0].id);
+      }
+    }
+
+    const jobDesc = await extractJobDescriptionWithRetry();
+    if (!jobDesc || jobDesc.length < 50) {
+      container.innerHTML = "<p class=\"ja-score-text\">No job description found on this page.</p>";
+      if (card) card.classList.remove("ja-loading");
+      return;
+    }
+
+    const selectedId = selectEl?.value ? parseInt(selectEl.value, 10) : null;
+    const resumeId = selectedId && selectedId > 0 ? selectedId : null;
+
+    container.innerHTML = "<p class=\"ja-score-text\">Analyzing keywords...</p>";
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const body = { job_description: jobDesc };
+    if (resumeId) body.resume_id = resumeId;
+
+    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      container.innerHTML = "<p class=\"ja-score-text\">Add resume in your HireMate profile to see keyword match.</p>";
+      if (card) card.classList.remove("ja-loading");
+      return;
+    }
+    const data = await res.json();
+    const high = data.high_priority || [];
+    const low = data.low_priority || [];
+    const total = data.total_keywords || 0;
+    const matched = data.matched_count || 0;
+    const percent = data.percent || 0;
+    const highMatched = high.filter((i) => i.matched).length;
+    const lowMatched = low.filter((i) => i.matched).length;
+    const statusLabel = percent >= 70 ? "Great match" : "Needs Work";
+    const renderItem = (item) =>
+      `<div class="ja-kw-item"><span class="ja-kw-check ${item.matched ? "ja-matched" : "ja-unmatched"}">✓</span><span class="${item.matched ? "ja-kw-matched" : "ja-kw-unmatched"}">${escapeHtml(item.keyword)}</span></div>`;
+    const highHtml = high.map(renderItem).join("");
+    const lowHtml = low.map(renderItem).join("");
+    container.innerHTML = `
+      <h4>Keyword Match – ${statusLabel}</h4>
+      <p class="ja-score-text">Your resume has <strong>${matched} out of ${total} (${percent}%)</strong> keywords that appear in the job description.</p>
+      <p style="font-size:11px;background:#fef9c3;padding:6px 8px;border-radius:6px;margin:0 0 12px 0;">Try to get your score above <strong>70%</strong> to increase your chances!</p>
+      ${high.length ? `<div class="ja-kw-priority-section">
+        <div class="ja-kw-priority-header">
+          <span class="ja-kw-priority-title">High Priority Keywords</span>
+          <span class="ja-kw-priority-count">${highMatched}/${high.length}</span>
+        </div>
+        <div class="ja-kw-grid">${highHtml}</div>
+      </div>` : ""}
+      ${low.length ? `<div class="ja-kw-priority-section">
+        <div class="ja-kw-priority-header">
+          <span class="ja-kw-priority-title">Low Priority Keywords</span>
+          <span class="ja-kw-priority-count">${lowMatched}/${low.length}</span>
+        </div>
+        <div class="ja-kw-grid">${lowHtml}</div>
+      </div>` : ""}
+    `;
+  } catch (err) {
+    logWarn("Keyword analysis failed", { error: String(err) });
+    container.innerHTML = "<p class=\"ja-score-text\">Unable to analyze. Please try again.</p>";
+  } finally {
+    if (card) card.classList.remove("ja-loading");
+  }
+}
+
 async function getAutofillContextFromApi() {
   const apiBase = await getApiBase();
-  const data = await chrome.storage.local.get(["accessToken"]);
-  const token = data.accessToken || null;
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`${apiBase}/chrome-extension/autofill/data`, { headers });
+  const headers = await getAuthHeaders();
+  const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/data`, { headers });
   if (!res.ok) {
     throw new Error(`Profile load failed (${res.status})`);
   }
@@ -1012,7 +1465,40 @@ async function getAutofillContextFromApi() {
     customAnswers: json.custom_answers || {},
     resumeText: json.resume_text || "",
     resumeFileName: json.resume_file_name || null,
+    resumeUrl: json.resume_url || null,
   };
+}
+
+/** Fetch resume from API (backend proxies S3/local file). Always use API to avoid CORS when fetching from S3. */
+async function fetchResumeFromContext(context) {
+  const resumeUrl = context?.resumeUrl || context?.resume_url;
+  const resumeFileName = context?.resumeFileName || context?.resume_file_name;
+  if (!resumeUrl && !resumeFileName) return null;
+
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const path = resumeFileName
+      ? `/chrome-extension/autofill/resume/${(resumeFileName || "").split("/").pop()}`
+      : "/chrome-extension/autofill/resume";
+    const fetchUrl = `${apiBase}${path}`;
+    const resumeRes = await fetchWithAuthRetry(fetchUrl, { headers });
+    if (!resumeRes.ok) return null;
+
+    const resumeBuffer = await resumeRes.arrayBuffer();
+    const fileName = (resumeFileName || resumeUrl || "").split("/").pop()?.split("?")[0] || "resume.pdf";
+    const buffer = Array.from(new Uint8Array(resumeBuffer));
+
+    await chrome.runtime.sendMessage({
+      type: "SAVE_RESUME",
+      payload: { buffer, name: fileName },
+    });
+    logInfo("Resume fetched and saved from context", { fileName, bytes: buffer.length });
+    return { buffer, name: fileName };
+  } catch (e) {
+    logWarn("Failed to fetch resume from context", e);
+    return null;
+  }
 }
 
 async function getStaticResume() {
@@ -1021,11 +1507,8 @@ async function getStaticResume() {
 
 async function fetchMappingsFromApi(fields, context) {
   const apiBase = await getApiBase();
-  const data = await chrome.storage.local.get(["accessToken"]);
-  const token = data.accessToken || null;
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  const mapRes = await fetch(`${apiBase}/chrome-extension/form-fields/map`, {
+  const headers = await getAuthHeaders();
+  const mapRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/form-fields/map`, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -1043,8 +1526,36 @@ async function fetchMappingsFromApi(fields, context) {
 }
 
 async function updateWidgetAuthUI(root) {
-  const data = await chrome.storage.local.get(["accessToken", "loginPageUrl"]);
-  const hasToken = !!data.accessToken;
+  let data = await chrome.storage.local.get(["accessToken", "loginPageUrl"]);
+  let hasToken = !!data.accessToken;
+
+  let isHireMateOrigin = LOGIN_PAGE_ORIGINS.some((o) => window.location.origin === o);
+  if (!isHireMateOrigin && data.loginPageUrl) {
+    try {
+      isHireMateOrigin = new URL(data.loginPageUrl).origin === window.location.origin;
+    } catch {}
+  }
+
+  // 1) If no token in chrome.storage, try localStorage (when on HireMate frontend - same origin)
+  if (!hasToken && isHireMateOrigin) {
+    try {
+      const localToken = localStorage.getItem("token") || localStorage.getItem("access_token");
+      if (localToken) {
+        hasToken = true;
+        await chrome.storage.local.set({ accessToken: localToken });
+        logInfo("Token synced from localStorage to extension storage");
+      }
+    } catch (e) {}
+  }
+
+  // 2) If still no token, try fetching from any open HireMate tab (works when on job sites)
+  if (!hasToken) {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
+      if (res?.ok && res?.token) hasToken = true;
+    } catch (e) {}
+  }
+
   const loginUrl = data.loginPageUrl || DEFAULT_LOGIN_PAGE_URL;
 
   const signinCta = root?.querySelector("#ja-signin-cta");
@@ -1235,6 +1746,10 @@ function mountInPageUI() {
       #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status.loading { color: #fef08a; }
       #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status.success { color: #86efac; font-weight: 600; }
       #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status.error { color: #fca5a5; font-weight: 600; }
+      #${INPAGE_ROOT_ID} .ja-failed-field-link { background: none; border: none; padding: 0; margin: 2px 0; color: #fef08a; cursor: pointer; font-size: inherit; font-weight: 500; text-align: left; text-decoration: underline; }
+      #${INPAGE_ROOT_ID} .ja-failed-field-link:hover { color: #fff; }
+      #${INPAGE_ROOT_ID} .ja-failed-fields-list { margin: 4px 0 0 12px; padding-left: 0; list-style: none; }
+      #${INPAGE_ROOT_ID} .ja-fields-need-attention { display: block; margin-bottom: 4px; }
       #${INPAGE_ROOT_ID} .ja-progress {
         width: 100%;
         height: 4px;
@@ -1325,6 +1840,43 @@ function mountInPageUI() {
         cursor: pointer;
         padding: 4px;
       }
+      #${INPAGE_ROOT_ID} .ja-resume-select {
+        width: 100%;
+        padding: 8px 10px;
+        font-size: 13px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        background: #fff;
+        margin-bottom: 10px;
+      }
+      #${INPAGE_ROOT_ID} .ja-update-jd-btn {
+        width: 100%;
+        padding: 10px;
+        background: #e0f2fe;
+        color: #0369a1;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-update-jd-btn:hover { background: #bae6fd; }
+      #${INPAGE_ROOT_ID} .ja-job-form input, #${INPAGE_ROOT_ID} .ja-job-form select, #${INPAGE_ROOT_ID} .ja-job-form textarea {
+        width: 100%;
+        padding: 8px 10px;
+        font-size: 13px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        margin-bottom: 10px;
+      }
+      #${INPAGE_ROOT_ID} .ja-job-form label { display: block; font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 4px; }
+      #${INPAGE_ROOT_ID} .ja-job-form .ja-form-row { display: flex; gap: 10px; }
+      #${INPAGE_ROOT_ID} .ja-job-form .ja-form-row > div { flex: 1; }
+      #${INPAGE_ROOT_ID} .ja-job-form-actions { display: flex; gap: 8px; margin-top: 14px; }
+      #${INPAGE_ROOT_ID} .ja-job-form-actions button { flex: 1; padding: 10px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+      #${INPAGE_ROOT_ID} .ja-go-back-btn { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
+      #${INPAGE_ROOT_ID} .ja-save-job-btn { background: #2563eb; color: #fff; border: none; }
       #${INPAGE_ROOT_ID} .ja-tailor-btn {
         width: 100%;
         padding: 10px;
@@ -1344,6 +1896,12 @@ function mountInPageUI() {
         border-radius: 10px;
         padding: 12px 14px;
         margin-bottom: 12px;
+      }
+      #${INPAGE_ROOT_ID} .ja-keyword-card.ja-loading { position: relative; }
+      #${INPAGE_ROOT_ID} .ja-keyword-card.ja-loading::after {
+        content: ""; position: absolute; top: 50%; left: 50%; margin: -12px 0 0 -12px;
+        width: 24px; height: 24px; border: 2px solid #e5e7eb; border-top-color: #2563eb;
+        border-radius: 50%; animation: ja-spin 0.8s linear infinite;
       }
       #${INPAGE_ROOT_ID} .ja-keyword-card h4 {
         margin: 0 0 8px 0;
@@ -1549,60 +2107,77 @@ function mountInPageUI() {
             <button type="button" class="ja-action ja-signin-to-autofill">Log in to apply</button>
           </div>
           <div class="ja-keywords-authenticated" id="ja-keywords-authenticated">
+          <div class="ja-keywords-view" id="ja-keywords-view">
           <div class="ja-keywords-section">
             <label>Resume</label>
-            <div class="ja-resume-row">
-              <span>Default resume</span>
-              <button type="button" title="Change">›</button>
-              <button type="button" title="Preview">Preview</button>
-            </div>
+            <select class="ja-resume-select" id="ja-resume-select">
+              <option value="">Loading resumes...</option>
+            </select>
+            <button type="button" class="ja-tailor-btn" id="ja-tailor-resume-btn">Tailor Resume</button>
             <p style="font-size:11px;color:#9ca3af;margin:0 0 8px 0;">Bold % indicates keyword coverage.</p>
-            <button type="button" class="ja-tailor-btn">Tailor Resume</button>
           </div>
-          <div class="ja-keyword-card">
-            <h4>Keyword Match – Needs Work</h4>
-            <p class="ja-score-text">Your resume has <strong>9 out of 24 (38%)</strong> keywords that appear in the job description.</p>
-            <p style="font-size:11px;background:#fef9c3;padding:6px 8px;border-radius:6px;margin:0 0 12px 0;">Try to get your score above <strong>70%</strong> to increase your chances!</p>
-            <div class="ja-kw-priority-section">
-              <div class="ja-kw-priority-header">
-                <span class="ja-kw-priority-title">High Priority Keywords ?</span>
-                <span class="ja-kw-priority-count">8/20</span>
-              </div>
-              <div class="ja-kw-grid">
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">Angular</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">MongoDB</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">JSON</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">JavaScript</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">Bootstrap</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">ReactJS</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">Python</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">XML</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">Apigee</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">Cassandra</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">HBase</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">NoSQL</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">C#</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">HTML</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">Spring</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">DOM</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">jQuery</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">ZeroMQ</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">Java</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">Ruby</span></div>
-              </div>
+          <div class="ja-keyword-card" id="ja-keyword-card">
+            <div id="ja-keyword-analysis">
+              <p class="ja-score-text">Loading keyword analysis...</p>
             </div>
-            <div class="ja-kw-priority-section">
-              <div class="ja-kw-priority-header">
-                <span class="ja-kw-priority-title">Low Priority Keywords ?</span>
-                <span class="ja-kw-priority-count">1/4</span>
+          </div>
+          <button type="button" class="ja-update-jd-btn" id="ja-update-jd-btn">Update Job Description</button>
+          </div>
+          <div class="ja-job-form-panel" id="ja-job-form-panel" style="display:none">
+            <h4 style="margin:0 0 10px 0;font-size:14px;">Edit Job Description</h4>
+            <p style="font-size:12px;color:#6b7280;margin:0 0 12px 0;">With a job description you can view matching keywords and/or save this job to your tracker!</p>
+            <form class="ja-job-form" id="ja-job-form">
+              <label>Company</label>
+              <input type="text" id="ja-job-company" placeholder="Company name">
+              <label>Position Title</label>
+              <input type="text" id="ja-job-position" placeholder="Lead Software Development Engineer">
+              <label>Location</label>
+              <input type="text" id="ja-job-location" placeholder="Bangalore">
+              <label>Min. Salary ($)</label>
+              <input type="text" id="ja-job-min-salary" placeholder="180">
+              <label>Max. Salary ($)</label>
+              <input type="text" id="ja-job-max-salary" placeholder="740000000">
+              <label>Currency</label>
+              <select id="ja-job-currency">
+                <option value="USD">US Dollar (USD)</option>
+                <option value="EUR">Euro (EUR)</option>
+                <option value="GBP">British Pound (GBP)</option>
+                <option value="INR">Indian Rupee (INR)</option>
+              </select>
+              <label>Period</label>
+              <select id="ja-job-period">
+                <option value="Yearly">Yearly</option>
+                <option value="Monthly">Monthly</option>
+                <option value="Hourly">Hourly</option>
+              </select>
+              <label>Job Type</label>
+              <select id="ja-job-type">
+                <option value="Full-Time">Full-Time</option>
+                <option value="Part-Time">Part-Time</option>
+                <option value="Contract">Contract</option>
+                <option value="Internship">Internship</option>
+              </select>
+              <label>Application Status</label>
+              <select id="ja-job-status">
+                <option value="I have not yet applied">I have not yet applied</option>
+                <option value="Applied">Applied</option>
+                <option value="Interviewing">Interviewing</option>
+                <option value="Offer">Offer</option>
+                <option value="Rejected">Rejected</option>
+                <option value="Withdrawn">Withdrawn</option>
+              </select>
+              <label>Job Description — Click to edit</label>
+              <textarea id="ja-job-description" rows="6" placeholder="Auto-detected description available."></textarea>
+              <label>Notes — Click to add</label>
+              <textarea id="ja-job-notes" rows="2" placeholder="Add notes..."></textarea>
+              <label>Job Posting URL</label>
+              <input type="text" id="ja-job-url" placeholder="https://...">
+              <div class="ja-job-form-actions">
+                <button type="button" class="ja-go-back-btn" id="ja-job-go-back">Go Back</button>
+                <button type="submit" class="ja-save-job-btn" id="ja-job-save">Save Job</button>
               </div>
-              <div class="ja-kw-grid">
-                <div class="ja-kw-item"><span class="ja-kw-check ja-matched">✓</span><span class="ja-kw-matched">API</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">user interface</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">machine learning</span></div>
-                <div class="ja-kw-item"><span class="ja-kw-check ja-unmatched">✓</span><span class="ja-kw-unmatched">customer engagement</span></div>
-              </div>
-            </div>
+            </form>
+          </div>
           </div>
           </div>
         </div>
@@ -1650,6 +2225,13 @@ function mountInPageUI() {
     }
   });
 
+  // Re-check auth when user switches back to this tab (e.g. after logging in on HireMate)
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      updateWidgetAuthUI(root);
+    }
+  });
+
   const autoAdvanceWrap = root.querySelector("#ja-auto-advance-wrap");
   if (autoAdvanceWrap) {
     const isWorkday = /workday\.com|myworkdayjobs\.com/i.test(window.location.href);
@@ -1677,7 +2259,43 @@ function mountInPageUI() {
       const panel = root.querySelector("#ja-panel-" + tab.dataset.tab);
       if (panel) panel.classList.add("active");
       if (tab.dataset.tab === "profile") loadProfileIntoPanel(root);
+      if (tab.dataset.tab === "keywords") loadKeywordsIntoPanel(root);
     });
+  });
+
+  // Resume select change -> re-run keyword analysis
+  root.addEventListener("change", (e) => {
+    if (e.target.id === "ja-resume-select") loadKeywordsIntoPanel(root);
+  });
+
+  // Tailor Resume -> open /resume-generator
+  root.querySelector("#ja-tailor-resume-btn")?.addEventListener("click", () => openResumeGeneratorUrl());
+
+  // Update Job Description -> show form panel
+  root.querySelector("#ja-update-jd-btn")?.addEventListener("click", () => {
+    const view = root.querySelector("#ja-keywords-view");
+    const formPanel = root.querySelector("#ja-job-form-panel");
+    if (view && formPanel) {
+      view.style.display = "none";
+      formPanel.style.display = "block";
+      prefillJobForm(root);
+    }
+  });
+
+  // Go Back from job form
+  root.querySelector("#ja-job-go-back")?.addEventListener("click", () => {
+    const view = root.querySelector("#ja-keywords-view");
+    const formPanel = root.querySelector("#ja-job-form-panel");
+    if (view && formPanel) {
+      formPanel.style.display = "none";
+      view.style.display = "block";
+    }
+  });
+
+  // Save Job form submit
+  root.querySelector("#ja-job-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await saveJobFromForm(root);
   });
 
   const setStatus = (text, type = "", asHtml = false) => {
@@ -1749,10 +2367,12 @@ function mountInPageUI() {
 
     setStatus(`Found ${fields.length} fields — loading profile & resume...`, "loading");
     setProgress(15);
-    const [context, resumeData] = await Promise.all([
-      getAutofillContextFromApi(),
-      getResumeFromBackground().then((r) => r || getStaticResume()),
-    ]);
+    const context = await getAutofillContextFromApi();
+    let resumeData = await getResumeFromBackground();
+    if (!resumeData && (context.resumeUrl || context.resumeFileName)) {
+      resumeData = await fetchResumeFromContext(context);
+    }
+    if (!resumeData) resumeData = await getStaticResume();
 
     setStatus("Mapping fields with AI...", "loading");
     setProgress(35);
@@ -1805,6 +2425,14 @@ function mountInPageUI() {
     return false;
   };
 
+  const scrollToField = (field) => {
+    if (!field?.isConnected) return;
+    scrollFieldIntoView(field);
+    try {
+      field.focus();
+    } catch (_) {}
+  };
+
   const runFlow = async (isContinueFromErrors = false) => {
     if (!runBtn) return;
     runBtn.disabled = true;
@@ -1820,6 +2448,7 @@ function mountInPageUI() {
     let totalFilled = 0;
     let totalResumes = 0;
     let totalFailed = 0;
+    let lastFailedFields = [];
 
     try {
       for (let step = 1; step <= maxSteps; step++) {
@@ -1831,14 +2460,34 @@ function mountInPageUI() {
         totalFilled += result.filledCount;
         totalResumes += result.resumeUploadCount;
         totalFailed += result.failedCount;
+        lastFailedFields = result.failedFields || [];
 
         setProgress(100);
         const bullets = [];
         if (totalFilled > 0) bullets.push(`✓ Filled ${totalFilled} field${totalFilled === 1 ? "" : "s"}`);
         if (totalResumes > 0) bullets.push(`✓ Uploaded resume`);
-        if (totalFailed > 0) bullets.push(`⚠ ${totalFailed} field${totalFailed === 1 ? "" : "s"} need attention`);
-        const statusHtml = bullets.length > 0 ? `<ul>${bullets.map((b) => `<li>${b}</li>`).join("")}</ul>` : "Done";
+        if (totalFailed > 0) {
+          if (lastFailedFields.length > 0) {
+            const fieldItems = lastFailedFields.map((ff, idx) => {
+              const label = String(ff.label || `Field ${idx + 1}`).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+              return `<li class="ja-failed-field-item"><button type="button" class="ja-failed-field-link" data-failed-index="${idx}">⚠ ${label}</button></li>`;
+            }).join("");
+            bullets.push(`<span class="ja-fields-need-attention">Fields need attention:</span><ul class="ja-failed-fields-list">${fieldItems}</ul>`);
+          } else {
+            bullets.push(`⚠ ${totalFailed} field${totalFailed === 1 ? "" : "s"} need attention`);
+          }
+        }
+        const statusHtml = bullets.length > 0 ? `<ul class="ja-status-bullets">${bullets.map((b) => `<li>${b}</li>`).join("")}</ul>` : "Done";
         setStatus(statusHtml, "success", true);
+
+        if (lastFailedFields.length > 0) {
+          root.querySelectorAll(".ja-failed-field-link").forEach((btn, idx) => {
+            btn.onclick = () => {
+              const ff = lastFailedFields[idx];
+              if (ff?.element?.isConnected) scrollToField(ff.element);
+            };
+          });
+        }
 
         if (!autoAdvance || !isWorkday || step >= maxSteps) break;
 
@@ -1846,7 +2495,15 @@ function mountInPageUI() {
 
         if (hasUnfilledFields) {
           bullets.push('<span class="ja-note">Fix the highlighted fields, then click Continue filling</span>');
-          setStatus(`<ul>${bullets.map((b) => `<li>${b}</li>`).join("")}</ul>`, "success", true);
+          setStatus(`<ul class="ja-status-bullets">${bullets.map((b) => `<li>${b}</li>`).join("")}</ul>`, "success", true);
+          if (lastFailedFields.length > 0) {
+            root.querySelectorAll(".ja-failed-field-link").forEach((btn, idx) => {
+              btn.onclick = () => {
+                const ff = lastFailedFields[idx];
+                if (ff?.element?.isConnected) scrollToField(ff.element);
+              };
+            });
+          }
           continueBtn?.style.setProperty("display", "block");
           break;
         }
@@ -1896,7 +2553,7 @@ function syncTokenFromWebsite() {
   script.textContent = `
     (function() {
       try {
-        const token = localStorage.getItem('token');
+        const token = localStorage.getItem('token') || localStorage.getItem('access_token');
         if (token) {
           window.postMessage({ type: 'HIREMATE_TOKEN_SYNC', token: token }, '*');
         }
@@ -1922,7 +2579,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   
   if (msg.type === "SHOW_WIDGET") {
     mountInPageUI();
-    if (isCareerPage()) mountKeywordMatchWidget();
+    if (isCareerPage()) runKeywordAnalysisAndMaybeShowWidget();
     const widget = document.getElementById(INPAGE_ROOT_ID);
     if (widget) {
       const card = widget.querySelector(".ja-card");
@@ -1976,11 +2633,11 @@ function looksLikeJobApplicationForm() {
 }
 
 function isJobFormPage() {
-  if (!isCareerPage()) return false;
   const hasApplicationForm = looksLikeJobApplicationForm();
   const jobDesc = extractJobDescription();
   const hasJobDesc = !!(jobDesc && jobDesc.length >= 100);
-  return hasApplicationForm || hasJobDesc;
+  const urlSuggestsJob = isCareerPage();
+  return (urlSuggestsJob && (hasApplicationForm || hasJobDesc)) || (hasApplicationForm && hasJobDesc);
 }
 
 function tryAutoOpenPopup() {
@@ -1991,7 +2648,7 @@ function tryAutoOpenPopup() {
     const card = widget.querySelector(".ja-card");
     if (card) card.classList.remove("collapsed");
   }
-  mountKeywordMatchWidget();
+  runKeywordAnalysisAndMaybeShowWidget();
 }
 
 const initAutoOpen = () => {

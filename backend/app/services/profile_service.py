@@ -4,8 +4,26 @@ Profile service - create/update profile and resume data
 from sqlalchemy.orm import Session
 
 from backend.app.models.profile import Profile
+from backend.app.schemas.profile import ProfilePayload
 from backend.app.models.user import User
 from backend.app.schemas.profile import ProfilePayload, payload_to_profile_dict
+
+
+def build_resume_text_from_payload(payload: ProfilePayload) -> str:
+    """Build resume text string from profile payload for keyword matching."""
+    parts = [
+        payload.professionalSummary or "",
+        f"Headline: {payload.professionalHeadline or ''}",
+    ]
+    for e in payload.experiences or []:
+        parts.append(
+            f"{e.jobTitle} at {e.companyName} ({e.startDate}-{e.endDate}): {e.description}"
+        )
+    for e in payload.educations or []:
+        parts.append(f"{e.degree}, {e.institution} ({e.startYear}-{e.endYear})")
+    for s in payload.techSkills or []:
+        parts.append(f"Skill: {s.name} ({s.level})")
+    return "\n\n".join(filter(None, parts))
 
 
 class ProfileService:

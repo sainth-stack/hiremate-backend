@@ -13,8 +13,9 @@ from backend.app.core.config import settings
 from backend.app.core.dependencies import get_current_user, get_db
 from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
+from backend.app.models.user_resume import UserResume
 from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
-from backend.app.services.profile_service import ProfileService
+from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
 from backend.app.services.resume_extractor import extract_resume_to_payload
 from backend.app.services.s3_service import upload_file_to_s3
 
@@ -135,6 +136,27 @@ async def upload_resume(
             str(e),
         )
         raise HTTPException(status_code=500, detail=f"Profile save error: {str(e)}")
+
+    # Add to user_resumes for keyword analyser dropdown
+    try:
+        resume_name = Path(file.filename or unique_name).stem
+        if not resume_name:
+            resume_name = "Resume"
+        resume_text = build_resume_text_from_payload(payload)
+        for r in db.query(UserResume).filter(UserResume.user_id == current_user.id).all():
+            r.is_default = 0
+        ur = UserResume(
+            user_id=current_user.id,
+            resume_url=resume_url,
+            resume_name=f"{resume_name} (default)",
+            resume_text=resume_text,
+            is_default=1,
+        )
+        db.add(ur)
+        db.commit()
+    except Exception as e:
+        logger.warning("Failed to add resume to user_resumes: %s", e)
+        db.rollback()
 
     logger.info(
         "Resume uploaded and profile created/updated successfully user_id=%s filename=%s",
