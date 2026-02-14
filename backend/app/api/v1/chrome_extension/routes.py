@@ -22,6 +22,7 @@ from backend.app.models.user_resume import UserResume
 from backend.app.models.user_job import UserJob
 from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
 from backend.app.services.form_field_mapper import map_form_fields
+from backend.app.services.job_description_scraper import scrape_job_description_async
 from backend.app.services.keyword_analyzer import analyze_keywords
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
 
@@ -50,9 +51,18 @@ class FormFieldMapOut(BaseModel):
 
 
 class KeywordsAnalyzeIn(BaseModel):
-    job_description: str
+    job_description: str | None = None
+    url: str | None = None
     resume_text: str | None = None
     resume_id: int | None = None
+
+
+class JobDescriptionScrapeIn(BaseModel):
+    url: str
+
+
+class JobDescriptionScrapeOut(BaseModel):
+    job_description: str | None = None
 
 
 class ResumeItem(BaseModel):
@@ -396,13 +406,33 @@ def save_job(
     return {"id": job.id, "message": "Job saved successfully"}
 
 
+@router.post("/job-description/scrape", response_model=JobDescriptionScrapeOut)
+async def scrape_job_description_endpoint(
+    payload: JobDescriptionScrapeIn,
+    current_user: User = Depends(get_current_user),
+) -> JobDescriptionScrapeOut:
+    """Scrape job description from URL using Playwright (handles JS-heavy sites)."""
+    if not payload.url or not payload.url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Valid url is required")
+    job_description = await scrape_job_description_async(payload.url)
+    return JobDescriptionScrapeOut(job_description=job_description)
+
+
 @router.post("/keywords/analyze", response_model=KeywordsAnalyzeOut)
-def analyze_job_keywords(
+async def analyze_job_keywords(
     payload: KeywordsAnalyzeIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> KeywordsAnalyzeOut:
-    """Extract keywords from job description, match against resume, return analysis."""
+    """Extract keywords from job description, match against resume, return analysis.
+    If url is provided, scrapes job description via Playwright first (for JS-heavy sites)."""
+    job_description = payload.job_description
+    if (not job_description or len(job_description) < 50) and payload.url:
+        job_description = (await scrape_job_description_async(payload.url)) or ""
+
+    if not job_description or len(job_description) < 50:
+        raise HTTPException(status_code=400, detail="job_description or url with scrapable content is required")
+
     resume_text = payload.resume_text
     if payload.resume_id is not None and payload.resume_id > 0:
         ur = db.query(UserResume).filter(UserResume.id == payload.resume_id, UserResume.user_id == current_user.id).first()
@@ -414,7 +444,7 @@ def analyze_job_keywords(
         resume_text = _build_resume_text(pl)
 
     result = analyze_keywords(
-        job_description=payload.job_description,
+        job_description=job_description,
         resume_text=resume_text or "",
     )
     return KeywordsAnalyzeOut(**result)

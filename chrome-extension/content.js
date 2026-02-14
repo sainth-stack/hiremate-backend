@@ -855,134 +855,25 @@ async function isJobPageViaLLM(url, title, snippet) {
 }
 
 const KEYWORD_MATCH_ROOT_ID = "ja-keyword-match-root";
-const STOP_WORDS = new Set(
-  "a,an,the,and,or,but,in,on,at,to,for,of,with,by,from,as,is,was,are,were,been,be,have,has,had,do,does,did,will,would,could,should,may,might,must,shall,can,need,dare,ought,used".split(",")
-);
 
-const JOB_DESC_SELECTORS = [
-  "[data-automation-id='jobDescription']",
-  "[data-automation-id='job-description']",
-  "[data-testid*='job-description']",
-  "[data-testid*='jobDescription']",
-  ".job-description",
-  ".job-description-content",
-  ".job-details",
-  ".job-body",
-  ".job-content",
-  ".jd-content",
-  "[class*='job-description']",
-  "[class*='jobDescription']",
-  "[class*='job-detail']",
-  "[class*='job-content']",
-  "#job-description",
-  "#jobDescription",
-  "[id*='job-description']",
-  "[id*='jobDescription']",
-  "section[class*='job']",
-  "[class*='description']",
-  ".description",
-  "article",
-  "[role='main']",
-  "main",
-];
-
-function extractJobDescription() {
-  for (const sel of JOB_DESC_SELECTORS) {
-    try {
-      const el = document.querySelector(sel);
-      if (el) {
-        const text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-        if (text.length > 100 && looksLikeJobDescription(text)) return text.slice(0, 8000);
-      }
-    } catch (_) {}
+/** Fetch job description via backend Playwright scraper (handles JS-heavy sites: Greenhouse, Lever, React, etc.). */
+async function fetchJobDescriptionFromApi(url) {
+  if (!url || !url.startsWith("http")) return null;
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/job-description/scrape`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.job_description && data.job_description.length >= 50 ? data.job_description : null;
+  } catch (e) {
+    logWarn("fetchJobDescriptionFromApi failed", { url: url?.slice(0, 80), error: String(e) });
+    return null;
   }
-  const text = extractMainContentHeuristic();
-  if (text && text.length > 100 && looksLikeJobDescription(text)) return text.slice(0, 8000);
-  const body = document.body?.innerText || document.body?.textContent || "";
-  return body.length > 200 ? body.slice(0, 8000) : "";
-}
-
-function looksLikeJobDescription(text) {
-  const lower = text.toLowerCase();
-  const jobSignals = [
-    "experience", "years", "responsibilities", "qualifications", "requirements",
-    "role", "skills", "golang", "python", "java", "javascript", "engineer", "developer",
-  ];
-  let matches = 0;
-  for (const s of jobSignals) {
-    if (lower.includes(s)) matches++;
-  }
-  return matches >= 2 || lower.includes("apply") || lower.includes("responsibilities");
-}
-
-function extractMainContentHeuristic() {
-  const mainSelectors = ["main", "[role='main']", "article", ".content", ".main-content", "#content", "#main"];
-  for (const sel of mainSelectors) {
-    try {
-      const el = document.querySelector(sel);
-      if (el && isVisible(el)) {
-        const txt = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-        if (txt.length >= 200) return txt;
-      }
-    } catch (_) {}
-  }
-  const divs = document.querySelectorAll("div");
-  let best = null;
-  let bestLen = 0;
-  for (const el of divs) {
-    if (!isVisible(el) || el.children.length > 5) continue;
-    const txt = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-    if (txt.length >= 300 && txt.length <= 12000 && looksLikeJobDescription(txt) && txt.length > bestLen) {
-      bestLen = txt.length;
-      best = txt;
-    }
-  }
-  return best;
-}
-
-const JOB_CONTENT_WAIT_MS = 8000;
-const JOB_CONTENT_POLL_INTERVAL_MS = 3000;
-
-/** Wait for async job content (SPAs). Polls every 1s for up to 8s, extracts when content appears. */
-async function extractJobDescriptionWithRetry() {
-  let text = extractJobDescription();
-  if (text && text.length >= 50) return text;
-
-  const start = Date.now();
-  while (Date.now() - start < JOB_CONTENT_WAIT_MS) {
-    await new Promise((r) => setTimeout(r, JOB_CONTENT_POLL_INTERVAL_MS));
-    text = extractJobDescription();
-    if (text && text.length >= 50) return text;
-  }
-  return extractJobDescription();
-}
-
-function extractKeywords(text) {
-  const normalized = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s\-+#./]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const words = normalized.split(/\s+/).filter((w) => w.length >= 2);
-  const seen = new Set();
-  const keywords = [];
-  for (const w of words) {
-    const clean = w.replace(/^[.#\-]+|[.#\-]+$/g, "");
-    if (clean.length >= 2 && !STOP_WORDS.has(clean) && !/^\d+$/.test(clean) && !seen.has(clean)) {
-      seen.add(clean);
-      keywords.push(clean);
-    }
-  }
-  return keywords.slice(0, 50);
-}
-
-function computeKeywordMatch(jobDesc, resumeText) {
-  const jobKeywords = extractKeywords(jobDesc);
-  const resumeLower = (resumeText || "").toLowerCase();
-  const matched = jobKeywords.filter((kw) => resumeLower.includes(kw));
-  const total = jobKeywords.length;
-  const percent = total > 0 ? Math.round((matched.length / total) * 100) : 0;
-  return { matched, total, percent, allKeywords: jobKeywords };
 }
 
 async function runKeywordAnalysisAndMaybeShowWidget() {
@@ -997,15 +888,12 @@ async function runKeywordAnalysisAndMaybeShowWidget() {
   }
 
   try {
-    const jobDesc = await extractJobDescriptionWithRetry();
-    if (!jobDesc || jobDesc.length < 50) return;
-
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
     const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ job_description: jobDesc }),
+      body: JSON.stringify({ url }),
     });
     if (!res.ok) return;
 
@@ -1293,17 +1181,23 @@ function extractCompanyAndPosition() {
   return { company, position };
 }
 
-function prefillJobForm(root) {
-  const jobDesc = extractJobDescription();
+async function prefillJobForm(root) {
   const { company, position } = extractCompanyAndPosition();
   const urlInput = root?.querySelector("#ja-job-url");
   const descInput = root?.querySelector("#ja-job-description");
   const companyInput = root?.querySelector("#ja-job-company");
   const positionInput = root?.querySelector("#ja-job-position");
   if (urlInput) urlInput.value = window.location.href || "";
-  if (descInput) descInput.value = jobDesc || "";
   if (companyInput) companyInput.value = company || "";
   if (positionInput) positionInput.value = position || "";
+
+  if (descInput) {
+    descInput.placeholder = "Scraping job description...";
+    descInput.value = "";
+    const jobDesc = await fetchJobDescriptionFromApi(window.location.href);
+    descInput.value = jobDesc || "";
+    descInput.placeholder = "Auto-detected description available.";
+  }
 }
 
 async function saveJobFromForm(root) {
@@ -1386,20 +1280,13 @@ async function loadKeywordsIntoPanel(root) {
       }
     }
 
-    const jobDesc = await extractJobDescriptionWithRetry();
-    if (!jobDesc || jobDesc.length < 50) {
-      container.innerHTML = "<p class=\"ja-score-text\">No job description found on this page.</p>";
-      if (card) card.classList.remove("ja-loading");
-      return;
-    }
-
     const selectedId = selectEl?.value ? parseInt(selectEl.value, 10) : null;
     const resumeId = selectedId && selectedId > 0 ? selectedId : null;
 
-    container.innerHTML = "<p class=\"ja-score-text\">Analyzing keywords...</p>";
+    container.innerHTML = "<p class=\"ja-score-text\">Scraping job description...</p>";
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
-    const body = { job_description: jobDesc };
+    const body = { url: window.location.href };
     if (resumeId) body.resume_id = resumeId;
 
     const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
@@ -2272,13 +2159,13 @@ function mountInPageUI() {
   root.querySelector("#ja-tailor-resume-btn")?.addEventListener("click", () => openResumeGeneratorUrl());
 
   // Update Job Description -> show form panel
-  root.querySelector("#ja-update-jd-btn")?.addEventListener("click", () => {
+  root.querySelector("#ja-update-jd-btn")?.addEventListener("click", async () => {
     const view = root.querySelector("#ja-keywords-view");
     const formPanel = root.querySelector("#ja-job-form-panel");
     if (view && formPanel) {
       view.style.display = "none";
       formPanel.style.display = "block";
-      prefillJobForm(root);
+      await prefillJobForm(root);
     }
   });
 
@@ -2634,10 +2521,10 @@ function looksLikeJobApplicationForm() {
 
 function isJobFormPage() {
   const hasApplicationForm = looksLikeJobApplicationForm();
-  const jobDesc = extractJobDescription();
-  const hasJobDesc = !!(jobDesc && jobDesc.length >= 100);
+  const bodyText = (document.body?.innerText || document.body?.textContent || "").trim();
+  const hasSubstantialContent = bodyText.length >= 400;
   const urlSuggestsJob = isCareerPage();
-  return (urlSuggestsJob && (hasApplicationForm || hasJobDesc)) || (hasApplicationForm && hasJobDesc);
+  return (urlSuggestsJob && (hasApplicationForm || hasSubstantialContent)) || (hasApplicationForm && hasSubstantialContent);
 }
 
 function tryAutoOpenPopup() {
