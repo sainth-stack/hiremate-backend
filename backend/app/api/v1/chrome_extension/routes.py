@@ -57,14 +57,6 @@ class KeywordsAnalyzeIn(BaseModel):
     resume_id: int | None = None
 
 
-class JobDescriptionScrapeIn(BaseModel):
-    url: str
-
-
-class JobDescriptionScrapeOut(BaseModel):
-    job_description: str | None = None
-
-
 class ResumeItem(BaseModel):
     id: int
     resume_name: str
@@ -100,6 +92,7 @@ class KeywordsAnalyzeOut(BaseModel):
     high_priority: list[KeywordItem]
     low_priority: list[KeywordItem]
     message: str | None = None
+    job_description: str | None = None  # included when url was used (for form prefill)
 
 
 def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
@@ -406,18 +399,6 @@ def save_job(
     return {"id": job.id, "message": "Job saved successfully"}
 
 
-@router.post("/job-description/scrape", response_model=JobDescriptionScrapeOut)
-async def scrape_job_description_endpoint(
-    payload: JobDescriptionScrapeIn,
-    current_user: User = Depends(get_current_user),
-) -> JobDescriptionScrapeOut:
-    """Scrape job description from URL using Playwright (handles JS-heavy sites)."""
-    if not payload.url or not payload.url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="Valid url is required")
-    job_description = await scrape_job_description_async(payload.url)
-    return JobDescriptionScrapeOut(job_description=job_description)
-
-
 @router.post("/keywords/analyze", response_model=KeywordsAnalyzeOut)
 async def analyze_job_keywords(
     payload: KeywordsAnalyzeIn,
@@ -447,4 +428,6 @@ async def analyze_job_keywords(
         job_description=job_description,
         resume_text=resume_text or "",
     )
-    return KeywordsAnalyzeOut(**result)
+    out = KeywordsAnalyzeOut(**result)
+    out.job_description = job_description  # include for form prefill
+    return out

@@ -905,13 +905,13 @@ async function isJobPageViaLLM(url, title, snippet) {
 
 const KEYWORD_MATCH_ROOT_ID = "ja-keyword-match-root";
 
-/** Fetch job description via backend Playwright scraper (handles JS-heavy sites: Greenhouse, Lever, React, etc.). */
-async function fetchJobDescriptionFromApi(url) {
+/** Fetch job description via keywords/analyze (scrapes with Playwright, returns job_description in response). */
+async function fetchJobDescriptionFromKeywordsApi(url) {
   if (!url || !url.startsWith("http")) return null;
   try {
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
-    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/job-description/scrape`, {
+    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
@@ -920,7 +920,7 @@ async function fetchJobDescriptionFromApi(url) {
     const data = await res.json();
     return data.job_description && data.job_description.length >= 50 ? data.job_description : null;
   } catch (e) {
-    logWarn("fetchJobDescriptionFromApi failed", { url: url?.slice(0, 80), error: String(e) });
+    logWarn("fetchJobDescriptionFromKeywordsApi failed", { url: url?.slice(0, 80), error: String(e) });
     return null;
   }
 }
@@ -1395,7 +1395,7 @@ async function prefillJobForm(root) {
   if (descInput) {
     descInput.placeholder = "Scraping job description...";
     descInput.value = "";
-    const jobDesc = await fetchJobDescriptionFromApi(window.location.href);
+    const jobDesc = await fetchJobDescriptionFromKeywordsApi(window.location.href);
     descInput.value = jobDesc || "";
     descInput.placeholder = "Auto-detected description available.";
   }
