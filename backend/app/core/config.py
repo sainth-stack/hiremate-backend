@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     port: int = 8001
 
+    # Razorpay payment gateway
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
         env_file_encoding="utf-8",

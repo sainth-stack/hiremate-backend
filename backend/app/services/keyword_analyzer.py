@@ -1,6 +1,6 @@
 """
 Keyword analysis: extract skills from job description, match against resume.
-Uses LLM for accurate extraction, fast Python for matching. Minimal, cached.
+Uses LLM for accurate extraction, fast Python for matching. Cached via analysis_cache.
 """
 from __future__ import annotations
 
@@ -14,12 +14,15 @@ from typing import Any
 from openai import OpenAI
 
 from backend.app.core.config import settings
+from backend.app.services.analysis_cache import get as cache_get, set as cache_set
 
 logger = logging.getLogger(__name__)
 _OPENAI_CLIENT: OpenAI | None = None
-_CACHE_TTL = 600
-_CACHE: dict[str, tuple[float, dict]] = {}
-_MAX_ENTRIES = 128
+
+# Two-tier cache: extraction by JD (skip LLM on same JD), full result by (JD, resume)
+_extraction_cache: dict[str, tuple[float, dict]] = {}
+_EXTRACTION_TTL = 1800
+_EXTRACTION_MAX = 500
 
 # Tech aliases for match accuracy (resume may say "React.js", JD says "React")
 _ALIASES: dict[str, list[str]] = {
@@ -36,6 +39,8 @@ _ALIASES: dict[str, list[str]] = {
     "angular": ["angular", "angularjs", "angular.js"],
     "mongodb": ["mongodb", "mongo"],
     "postgresql": ["postgresql", "postgres", "psql"],
+    "rest": ["rest", "rest api", "restful"],
+    "rest api": ["rest", "rest api", "restful"],
     "kubernetes": ["kubernetes", "k8s"],
     "machine learning": ["machine learning", "ml"],
     "artificial intelligence": ["artificial intelligence", "ai"],
@@ -43,19 +48,30 @@ _ALIASES: dict[str, list[str]] = {
     "c#": ["c#", "csharp"],
 }
 
-EXTRACT_PROMPT = """Extract skills/technologies from this job description.
+EXTRACT_PROMPT = """Extract ONLY the most important technical skills from this job description.
+These are skills recruiters/hiring managers actually screen for.
 
 Return JSON only:
 {"high_priority":["skill1","skill2",...],"low_priority":["skill1",...]}
 
 Rules:
-- high_priority: core required skills (frameworks, languages, key tech). Max 25.
-- low_priority: nice-to-have, secondary skills. Max 15.
-- Single words or 2-word phrases. Normalize: "React.js"→"React", "Node.js"→"Node".
-- No duplicates. Lowercase. Be concise.
+- high_priority: MUST-HAVE skills. Languages (JavaScript, Python), frameworks (React, Node.js), databases (Postgres, MongoDB), tools (Git, CI/CD). Max 12.
+- low_priority: Nice-to-have only. Max 8.
+- Be strict: extract only concrete tech recruiters filter on. Normalize: "React.js"→"React", "REST API"→"REST API".
+- EXCLUDE: vague terms like "documentation", "components", "libraries", "maintainability", "ui", "ux", "performance", "scalability", "deployment", "architecture", "testing", "code review", "debugging", "design", "integration", "mentoring", "collaboration", "troubleshooting", "enterprise", "cms", "toolsets", "business teams", "customer experience", "systems thinking".
+- Single words or 2-word phrases. Lowercase. No duplicates.
 
 Job description:
 """
+
+# Filter out vague terms (not concrete tech recruiters screen for)
+_EXCLUDED_KEYWORDS = frozenset({
+    "documentation", "components", "libraries", "maintainability", "ui", "ux",
+    "performance", "scalability", "deployment", "architecture", "code review",
+    "debugging", "design", "integration", "mentoring", "collaboration",
+    "troubleshooting", "enterprise", "cms", "toolsets", "business teams",
+    "customer experience", "systems thinking",
+})
 
 
 def _get_client() -> OpenAI:
@@ -67,6 +83,10 @@ def _get_client() -> OpenAI:
 
 def _hash_input(jd: str, resume: str) -> str:
     return hashlib.sha256((jd[:4000] + "|||" + resume[:4000]).encode()).hexdigest()[:32]
+
+
+def _hash_jd(jd: str) -> str:
+    return hashlib.sha256(jd[:4000].encode()).hexdigest()[:24]
 
 
 def _get_aliases(kw: str) -> list[str]:
@@ -106,8 +126,31 @@ def _extract_keywords_fallback(jd: str) -> dict[str, list[str]]:
         if w not in stop and w not in seen and not w.isdigit():
             seen.add(w)
             skills.append(w)
-    split = min(20, len(skills) // 2) if skills else 0
-    return {"high_priority": skills[:split] or skills[:15], "low_priority": skills[split:][:10]}
+    split = min(12, len(skills) // 2) if skills else 0
+    return {"high_priority": skills[:split] or skills[:12], "low_priority": skills[split:][:6]}
+
+
+def _extract_keywords(job_description: str) -> dict[str, list[str]]:
+    """Extract keywords from JD. Uses extraction cache to skip LLM when same JD."""
+    jd = (job_description or "").strip()[:3500]
+    if not jd or len(jd) < 80:
+        return {"high_priority": [], "low_priority": []}
+
+    jd_key = _hash_jd(jd)
+    now = time.time()
+    if jd_key in _extraction_cache:
+        ts, val = _extraction_cache[jd_key]
+        if now - ts < _EXTRACTION_TTL:
+            logger.debug("Keyword extraction cache hit (same JD)")
+            return val
+        del _extraction_cache[jd_key]
+
+    result = _extract_keywords_llm(job_description)
+    while len(_extraction_cache) >= _EXTRACTION_MAX and _extraction_cache:
+        oldest = min(_extraction_cache.items(), key=lambda x: x[1][0])[0]
+        del _extraction_cache[oldest]
+    _extraction_cache[jd_key] = (now, result)
+    return result
 
 
 def _extract_keywords_llm(job_description: str) -> dict[str, list[str]]:
@@ -131,12 +174,21 @@ def _extract_keywords_llm(job_description: str) -> dict[str, list[str]]:
         content = (resp.choices[0].message.content or "").strip()
         content = re.sub(r"^```\w*\n?", "", content).replace("```", "").strip()
         data = json.loads(content)
-        high = [str(k).strip().lower() for k in data.get("high_priority", []) if k][:25]
-        low = [str(k).strip().lower() for k in data.get("low_priority", []) if k][:15]
+        high = [str(k).strip().lower() for k in data.get("high_priority", []) if k][:12]
+        low = [str(k).strip().lower() for k in data.get("low_priority", []) if k][:6]
         return {"high_priority": high, "low_priority": low}
     except Exception as e:
         logger.warning("LLM keyword extract failed: %s, using fallback", e)
         return _extract_keywords_fallback(jd)
+
+
+def extract_keywords_for_resume(job_description: str) -> dict[str, list[str]]:
+    """
+    Extract keywords from JD using same logic as analyze_keywords.
+    Use this in resume generation to ensure the resume targets the exact keywords
+    the extension's analyze API will check. Returns {high_priority, low_priority}.
+    """
+    return _extract_keywords(job_description)
 
 
 def analyze_keywords(job_description: str, resume_text: str) -> dict[str, Any]:
@@ -150,10 +202,10 @@ def analyze_keywords(job_description: str, resume_text: str) -> dict[str, Any]:
     resume_lower = resume.lower()
 
     cache_key = _hash_input(jd, resume)
-    cached = _CACHE.get(cache_key)
-    if cached and (time.time() - cached[0]) < _CACHE_TTL:
+    cached = cache_get(cache_key)
+    if cached:
         logger.info("Keyword analysis cache hit")
-        return cached[1]
+        return cached
 
     if not jd or len(jd) < 50:
         return {
@@ -175,9 +227,9 @@ def analyze_keywords(job_description: str, resume_text: str) -> dict[str, Any]:
             "message": "No resume text",
         }
 
-    extracted = _extract_keywords_llm(jd)
-    high = extracted.get("high_priority", [])
-    low = extracted.get("low_priority", [])
+    extracted = _extract_keywords(jd)
+    high = [k for k in extracted.get("high_priority", []) if k and k not in _EXCLUDED_KEYWORDS]
+    low = [k for k in extracted.get("low_priority", []) if k and k not in _EXCLUDED_KEYWORDS]
 
     def match_list(kw_list: list[str]) -> list[dict[str, Any]]:
         out = []
@@ -196,18 +248,20 @@ def analyze_keywords(job_description: str, resume_text: str) -> dict[str, Any]:
     matched = sum(1 for m in high_matched + low_matched if m["matched"])
     percent = round((matched / total) * 100) if total else 0
 
+    message = None
+    if total == 0 and jd and len(jd) > 100:
+        message = "No technical skills found. The content may be salary/benefits only. Scroll for the full job description with requirements."
+
     result = {
         "total_keywords": total,
         "matched_count": matched,
         "percent": percent,
         "high_priority": high_matched,
         "low_priority": low_matched,
+        "message": message,
     }
 
-    if len(_CACHE) >= _MAX_ENTRIES:
-        oldest = min(_CACHE.items(), key=lambda x: x[1][0])[0]
-        _CACHE.pop(oldest, None)
-    _CACHE[cache_key] = (time.time(), result)
+    cache_set(cache_key, result)
 
     logger.info(
         "Keyword analysis done total=%d matched=%d percent=%d ms=%d",

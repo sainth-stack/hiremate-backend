@@ -24,7 +24,7 @@ class UserJob(Base):
     job_type = Column(String(50), default="Full-Time")  # Full-Time, Part-Time, Contract, etc.
     job_description = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
-    application_status = Column(String(100), default="I have not yet applied")
+    application_status = Column(String(100), default="saved")
     job_posting_url = Column(String(1024), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

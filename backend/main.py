@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.chrome_extension.routes import router as chrome_extension_router
+from backend.app.api.v1.dashboard import router as dashboard_router
+from backend.app.api.v1.payment import router as payment_router
 from backend.app.api.v1.user.profile import router as profile_router
 from backend.app.api.v1.user.resume import router as resume_router
 from backend.app.core.logging_config import setup_logging
@@ -39,8 +41,10 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
+app.include_router(payment_router, prefix="/api/payment", tags=["payment"])
 app.include_router(resume_router, prefix="/api/resume", tags=["resume"])
 app.include_router(profile_router, prefix="/api/profile", tags=["profile"])
+app.include_router(dashboard_router, prefix="/api")
 app.include_router(chrome_extension_router, prefix="/api")
 
 # Serve uploaded resumes (create dir if missing)

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+/* ===== PAGE SIZE (Letter 8.5x11) ===== */
+@page {
+    size: Letter;
+    margin: 0.5in;
+}
+
+body {
+    font-family: "Times New Roman", Times, serif;
+    font-size: 11pt;
+    margin: 0;
+    padding: 0;
+    line-height: 1.25;
+    color: #000;
+}
+
+/* ===== HEADER ===== */
+.header {
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.name {
+    font-size: 20pt;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+.contact {
+    font-size: 10pt;
+    margin-top: 3px;
+}
+
+.contact a {
+    text-decoration: underline;
+    color: black;
+}
+
+/* ===== SECTION TITLE ===== */
+.section {
+    margin-top: 12px;
+}
+
+.section-title {
+    font-size: 13pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    border-bottom: 1px solid black;
+    padding-bottom: 2px;
+    margin-bottom: 6px;
+}
+
+/* ===== SKILLS ===== */
+.skills p {
+    margin: 2px 0;
+}
+
+/* ===== EXPERIENCE ===== */
+.job {
+    margin-bottom: 6px;
+}
+
+.job-header {
+    display: flex;
+    justify-content: space-between;
+    font-weight: bold;
+}
+
+.job-role {
+    font-style: italic;
+    margin-top: 2px;
+}
+
+ul {
+    margin: 3px 0 3px 18px;
+    padding: 0;
+}
+
+li {
+    margin-bottom: 2px;
+}
+
+/* ===== EDUCATION ===== */
+.education {
+    display: flex;
+    justify-content: space-between;
+}
+
+/* ===== PROJECTS ===== */
+.project {
+    margin-bottom: 6px;
+}
+
+.project-tech {
+    font-style: italic;
+    font-size: 10pt;
+    margin: 1px 0 2px 0;
+    color: #333;
+}
+
+.project-desc {
+    margin: 0;
+}
+
+/* ===== AWARDS ===== */
+.awards ul {
+    margin-top: 4px;
+}
+</style>
+</head>
+<body>
+
+<!-- ================= HEADER ================= -->
+<div class="header">
+    <div class="name">{{ name }}</div>
+    <div class="contact">
+        {% if email %}<a href="mailto:{{ email }}">{{ email }}</a>{% endif %}
+        {% if phone %}{% if email %} | {% endif %}{{ phone }}{% endif %}
+        {% if github %}{% if email or phone %} | {% endif %}<a href="{{ github }}">Github</a>{% endif %}
+        {% if linkedin %}{% if email or phone or github %} | {% endif %}<a href="{{ linkedin }}">LinkedIn</a>{% endif %}
+        {% if portfolio %}{% if email or phone or github or linkedin %} | {% endif %}<a href="{{ portfolio }}">Portfolio</a>{% endif %}
+    </div>
+</div>
+
+<!-- ================= SKILLS ================= -->
+{% if skills %}
+<div class="section">
+    <div class="section-title">Skills</div>
+    <div class="skills">
+        {% if skills.languages %}<p><strong>Languages:</strong> {{ skills.languages }}</p>{% endif %}
+        {% if skills.frontend %}<p><strong>Frontend Technologies:</strong> {{ skills.frontend }}</p>{% endif %}
+        {% if skills.backend %}<p><strong>Backend Technologies:</strong> {{ skills.backend }}</p>{% endif %}
+        {% if skills.genai %}<p><strong>GenAI & AI Frameworks:</strong> {{ skills.genai }}</p>{% endif %}
+        {% if skills.tools %}<p><strong>Tools:</strong> {{ skills.tools }}</p>{% endif %}
+        {% if skills.devops %}<p><strong>DevOps & Cloud Technologies:</strong> {{ skills.devops }}</p>{% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- ================= WORK EXPERIENCE ================= -->
+{% if experiences %}
+<div class="section">
+    <div class="section-title">Work Experience</div>
+    {% for exp in experiences %}
+    <div class="job">
+        <div class="job-header">
+            <span>{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</span>
+            <span>{{ exp.dates }}</span>
+        </div>
+        <div class="job-role">{{ exp.title }}</div>
+        {% if exp.bullets %}
+        <ul>
+            {% for bullet in exp.bullets %}
+            <li>{{ bullet|safe }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ================= EDUCATION ================= -->
+{% if educations %}
+<div class="section">
+    <div class="section-title">Education</div>
+    {% for edu in educations %}
+    <div class="education">
+        <div>
+            <strong>{{ edu.institution }}</strong><br>
+            {{ edu.degree }}
+        </div>
+        <div>
+            {{ edu.dates }}{% if edu.grade %}<br><em>{{ edu.grade }}</em>{% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ================= PROJECTS ================= -->
+{% if projects %}
+<div class="section">
+    <div class="section-title">Projects</div>
+    {% for proj in projects %}
+    <div class="project">
+        <strong>{{ proj.name }}</strong>
+        {% if proj.techStack %}<div class="project-tech">{{ proj.techStack }}</div>{% endif %}
+        <div class="project-desc">{{ proj.description }}</div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ================= AWARDS ================= -->
+{% if awards %}
+<div class="section awards">
+    <div class="section-title">Awards and Certificates</div>
+    <ul>
+        {% for award in awards %}
+        <li>{{ award }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+</body>
+</html>

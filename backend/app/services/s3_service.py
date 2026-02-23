@@ -84,3 +84,54 @@ def upload_file_to_s3(
             msg,
         )
         raise RuntimeError(f"S3 upload failed - {code}: {msg}") from e
+
+
+def generate_presigned_url(key: str, expiration: int = 3600) -> str:
+    """
+    Generate a presigned URL for temporary access to an S3 object.
+    Default expiration: 1 hour.
+    """
+    if not settings.aws_access_key_id or not settings.aws_secret_access_key:
+        return ""
+    try:
+        s3 = _get_s3_client()
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": settings.aws_bucket_name, "Key": key},
+            ExpiresIn=expiration,
+        )
+        return url or ""
+    except ClientError as e:
+        logger.warning("Presigned URL generation failed key=%s error=%s", key, e)
+        return ""
+
+
+def delete_file_from_s3(key: str) -> bool:
+    """Delete object from S3 by key. Returns True on success, False on missing/error."""
+    if not settings.aws_access_key_id or not settings.aws_secret_access_key:
+        return False
+    try:
+        s3 = _get_s3_client()
+        s3.delete_object(Bucket=settings.aws_bucket_name, Key=key)
+        logger.info("S3 delete success bucket=%s key=%s", settings.aws_bucket_name, key)
+        return True
+    except ClientError as e:
+        logger.warning("S3 delete failed key=%s error=%s", key, e)
+        return False
+
+
+def parse_s3_key_from_url(url: str) -> str | None:
+    """Extract S3 object key from S3 URL. Returns None if not a valid S3 URL."""
+    if not url or not url.startswith("http"):
+        return None
+    # https://bucket.s3.region.amazonaws.com/user-profiles/1/file.pdf
+    try:
+        parts = url.replace("https://", "").replace("http://", "").split("/", 1)
+        if len(parts) != 2:
+            return None
+        host, path = parts
+        if settings.aws_bucket_name in host and path.startswith("user-profiles/"):
+            return path
+        return None
+    except Exception:
+        return None

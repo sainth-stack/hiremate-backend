@@ -20,17 +20,18 @@ _CACHE_MAX_ENTRIES = 64
 _MAP_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 ALIAS_MAP: dict[str, list[str]] = {
-    "name": ["name", "full name", "candidate name"],
-    "firstName": ["first name", "given name", "fname"],
-    "lastName": ["last name", "family name", "surname", "lname"],
+    "firstName": ["first name", "given name", "fname", "first"],
+    "lastName": ["last name", "family name", "surname", "lname", "last"],
+    "name": ["full name", "candidate name", "legal name"],
     "email": ["email", "e-mail"],
     "phone": ["phone", "mobile", "cell", "telephone", "contact number"],
     "linkedin": ["linkedin", "linkedin url", "linkedin profile"],
     "github": ["github", "github url", "github profile"],
     "portfolio": ["portfolio", "portfolio url", "website", "personal site"],
     "location": ["location", "current location", "city"],
-    "company": ["current company", "company"],
-    "title": ["title", "job title", "position"],
+    "company": ["company name", "current company", "company", "employer"],
+    "title": ["job title", "title", "position", "current title"],
+    "totalExperience": ["total experience", "years of experience", "experience years", "years experience"],
     "skills": ["skills", "technical skills", "technologies"],
     "experience": ["experience", "work experience", "employment", "summary"],
     "education": ["education", "degree", "university", "college", "school"],
@@ -77,11 +78,22 @@ Task:
    - "Are you related to anyone at [company]?": Answer "No" or "None"
    - "Do you know anyone at [company]?": If no referral info, say "No" or leave blank
 
-5. **SIMPLE FIELDS (name, email, phone, dates):**
-   - Use exact profile values
-   - For date fields (DOB): Format as YYYY-MM-DD or as requested by field type
+5. **FIRST NAME / LAST NAME (CRITICAL):**
+   - "First Name" → Use profile.firstName ONLY, or first word(s) of profile.name. NEVER use full name.
+   - "Last Name" → Use profile.lastName ONLY, or last word of profile.name. NEVER use full name.
+   - Example: name="Sainath Reddy Guraka" → First="Sainath Reddy", Last="Guraka"
 
-6. **GENERAL:**
+6. **FIELD-SPECIFIC (never cross-map):**
+   - "Phone" / "mobile" / "cell" → Use profile.phone ONLY. Never put phone in Company/Title.
+   - "Company name" / "employer" → Use profile.company ONLY. Never put phone number here.
+   - "Title" / "job title" → Use profile.title ONLY. Never use RESUME_FILE or file tokens.
+   - RESUME_FILE token → ONLY for resume/CV file upload fields, never for text fields.
+
+7. **SIMPLE FIELDS (email, dates):**
+   - Use exact profile values
+   - For date fields: Format as YYYY-MM-DD or match dropdown (e.g. "Jan", "2025")
+
+8. **GENERAL:**
    - Never hallucinate hard facts (company names, degree names, years) that are absent from data
    - For optional fields with weak evidence, return null
    - Make all responses natural, professional, and tailored to the field label/context
@@ -122,7 +134,29 @@ def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", str(value or "").lower())).strip()
 
 
+def _get_first_name(profile: dict[str, Any]) -> str | None:
+    if profile.get("firstName"):
+        return str(profile["firstName"]).strip()
+    name = profile.get("name") or ""
+    parts = str(name).strip().split()
+    if len(parts) >= 2:
+        return " ".join(parts[:-1])
+    return parts[0] if parts else None
+
+
+def _get_last_name(profile: dict[str, Any]) -> str | None:
+    if profile.get("lastName"):
+        return str(profile["lastName"]).strip()
+    name = profile.get("name") or ""
+    parts = str(name).strip().split()
+    return parts[-1] if parts else None
+
+
 def _field_key(field: dict[str, Any]) -> str:
+    """Use index as primary key for consistent client lookups (mappings[field.index])."""
+    idx = field.get("index")
+    if idx is not None and idx != "":
+        return str(idx)
     if field.get("id"):
         return str(field["id"])
     return str(field.get("index", ""))
@@ -240,7 +274,17 @@ def _fallback_map(
 
         if value is None:
             for profile_key, aliases in ALIAS_MAP.items():
-                profile_val = profile.get(profile_key)
+                if profile_key == "firstName":
+                    profile_val = _get_first_name(profile)
+                elif profile_key == "lastName":
+                    profile_val = _get_last_name(profile)
+                elif profile_key == "totalExperience":
+                    profile_val = profile.get(profile_key)
+                    if not profile_val and profile.get("experience"):
+                        match = re.search(r"(\d+)\+?\s*(?:years?|yrs?)", str(profile.get("experience", "")), re.I)
+                        profile_val = match.group(1) if match else None
+                else:
+                    profile_val = profile.get(profile_key)
                 if not profile_val:
                     continue
                 if any(_norm(alias) in field_text for alias in aliases):
@@ -251,7 +295,11 @@ def _fallback_map(
                             reason = f"Matched and formatted profile.{profile_key}"
                             confidence = 0.92
                             break
-                    value = str(profile_val)
+                    if profile_key == "totalExperience" and isinstance(profile_val, str):
+                        num_match = re.search(r"\d+", profile_val)
+                        value = num_match.group(0) if num_match else str(profile_val)
+                    else:
+                        value = str(profile_val)
                     reason = f"Matched profile.{profile_key}"
                     confidence = 0.9
                     break
@@ -283,6 +331,13 @@ def _clean_field_value(field: dict[str, Any], mapping: dict[str, Any]) -> dict[s
         return mapping
     field_label = str(field.get("label", "")).lower()
     field_type = str(field.get("type", "")).lower()
+    field_text = _norm(" ".join([str(field.get(k, "")) for k in ("label", "name", "placeholder")]))
+
+    if value == "RESUME_FILE" and field_type != "file" and "resume" not in field_text and "cv" not in field_text:
+        return {"value": None, "confidence": 0.0, "reason": "RESUME_FILE only for file upload fields"}
+    if value and value != "RESUME_FILE" and re.match(r"^\d{8,}$", str(value).strip()):
+        if "company" in field_text or "employer" in field_text or ("title" in field_text and "job" in field_text):
+            return {"value": None, "confidence": 0.0, "reason": "Phone number does not belong in company/title field"}
     if "experience" in field_label and ("year" in field_label or "years" in field_label):
         if isinstance(value, str):
             match = re.search(r'\d+', value)
@@ -293,8 +348,9 @@ def _clean_field_value(field: dict[str, Any], mapping: dict[str, Any]) -> dict[s
                     "reason": f"Extracted number from: {value}"
                 }
     if field_type in ("select", "combobox") and field.get("options"):
-        options = field["options"]
+        options = [o for o in field["options"] if o and str(o).strip()]
         value_str = str(value).strip()
+        # Exact match
         if value_str in options:
             return mapping
         for option in options:
@@ -304,6 +360,7 @@ def _clean_field_value(field: dict[str, Any], mapping: dict[str, Any]) -> dict[s
                     "confidence": mapping.get("confidence", 0.95),
                     "reason": f"Matched to dropdown option: {option}"
                 }
+        # Partial / contains match
         for option in options:
             if value_str.lower() in option.lower() or option.lower() in value_str.lower():
                 return {
@@ -311,6 +368,12 @@ def _clean_field_value(field: dict[str, Any], mapping: dict[str, Any]) -> dict[s
                     "confidence": mapping.get("confidence", 0.85),
                     "reason": f"Partial match to dropdown option: {option}"
                 }
+        # No option matches the LLM value — nullify so the field is skipped/highlighted
+        return {
+            "value": None,
+            "confidence": 0.0,
+            "reason": f"LLM value '{value_str}' not found in dropdown options"
+        }
     return mapping
 
 

@@ -37,8 +37,12 @@ const FIELD_SELECTOR = [
   "select",
   '[contenteditable="true"]',
   '[contenteditable=""]',
+  '[contenteditable]',
   '[role="textbox"]',
   '[role="combobox"]',
+  '[role="searchbox"]',
+  '[role="spinbutton"]',
+  ".ql-editor",
 ].join(",");
 
 const LOG_PREFIX = "[JobAutofill][content]";
@@ -120,7 +124,7 @@ function createAccordionItem(opts) {
   `;
 }
 
-function renderAccordions(containerEl, items) {
+function renderAccordions(containerEl, items, rootEl) {
   if (!containerEl) return;
   containerEl.innerHTML = items.map((item) => createAccordionItem(item)).join("");
   containerEl.querySelectorAll(".ja-accordion-header").forEach((btn) => {
@@ -128,11 +132,219 @@ function renderAccordions(containerEl, items) {
       const item = btn.closest(".ja-accordion-item");
       const body = item?.querySelector(".ja-accordion-body");
       const isExpanded = btn.getAttribute("aria-expanded") === "true";
-      btn.setAttribute("aria-expanded", !isExpanded);
-      if (body) body.hidden = isExpanded;
-      item?.classList.toggle("expanded", !isExpanded);
+      const expanding = !isExpanded;
+      btn.setAttribute("aria-expanded", expanding);
+      if (body) body.hidden = !expanding;
+      item?.classList.toggle("expanded", expanding);
+      if (expanding && rootEl) {
+        const id = item?.dataset?.accordionId || item?.querySelector("[data-accordion-id]")?.dataset?.accordionId;
+        const contentEl = item?.querySelector(".ja-accordion-content");
+        if (id && contentEl) loadAccordionContent(id, contentEl, rootEl);
+      }
     });
   });
+}
+
+async function loadAccordionContent(id, contentEl, rootEl) {
+  if (id === "resume") {
+    await loadResumeAccordionContent(contentEl, rootEl);
+  } else if (id === "cover-letter") {
+    await loadCoverLetterAccordionContent(contentEl, rootEl);
+  } else if (id === "unique-questions" || id === "common-questions") {
+    await loadQuestionsAccordionContent(id, contentEl, rootEl);
+  }
+}
+
+async function loadResumeAccordionContent(contentEl, rootEl) {
+  contentEl.innerHTML = "<p class=\"ja-score-text\">Loading...</p>";
+  try {
+    const resumes = await fetchResumesFromApi();
+    if (resumes.length === 0) {
+      contentEl.innerHTML = `
+        <p class="ja-score-text">No resumes yet. Upload in your OpsBrain profile.</p>
+        <button type="button" class="ja-action" style="margin-top:8px;">Open Profile</button>
+      `;
+      contentEl.querySelector(".ja-action")?.addEventListener("click", () => openResumeGeneratorUrl());
+      return;
+    }
+    const defaultResume = resumes.find((r) => r.is_default) || resumes[0];
+    const selectedId = defaultResume?.id ?? resumes[0]?.id;
+    const selectId = "ja-accordion-resume-select";
+    contentEl.innerHTML = `
+      <div class="ja-resume-accordion-row">
+        <select class="ja-resume-select" id="${selectId}">
+          ${resumes.map((r) => `<option value="${r.id}" ${r.id === selectedId ? "selected" : ""}>${escapeHtml(r.resume_name || `Resume ${r.id}`)}</option>`).join("")}
+        </select>
+        <button type="button" class="ja-action ja-upload-preview">Preview</button>
+      </div>
+      <p class="ja-resume-preview-hint">Default selected resume shown above. Click Preview to open PDF.</p>
+    `;
+    contentEl.querySelector(".ja-upload-preview")?.addEventListener("click", async () => {
+      const sel = contentEl.querySelector(`#${selectId}`);
+      const id = sel ? parseInt(sel.value, 10) : selectedId;
+      if (!id || id <= 0) return;
+      try {
+        const apiBase = await getApiBase();
+        const headers = await getAuthHeaders();
+        const res = await fetchWithAuthRetry(`${apiBase}/resume/${id}/file`, { headers });
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          window.open(url, "_blank");
+        }
+      } catch (_) {}
+    });
+  } catch (err) {
+    contentEl.innerHTML = "<p class=\"ja-score-text\">Failed to load resumes.</p>";
+  }
+}
+
+async function loadCoverLetterAccordionContent(contentEl, rootEl) {
+  contentEl.innerHTML = "<p class=\"ja-score-text\">Loading...</p>";
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    let data = null;
+    try {
+      const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/cover-letter`, { headers });
+      data = res.ok ? await res.json() : null;
+    } catch (_) {
+      data = null;
+    }
+    const letter = data?.content || "";
+    const jobTitle = data?.job_title || "";
+    if (letter) {
+      contentEl.innerHTML = `
+        <div class="ja-cover-letter-preview">
+          ${jobTitle ? `<p class="ja-cover-letter-job">${escapeHtml(jobTitle)}</p>` : ""}
+          <div class="ja-cover-letter-text">${escapeHtml(letter).replace(/\n/g, "<br>")}</div>
+        </div>
+        <button type="button" class="ja-action" id="ja-generate-cover-letter">Regenerate</button>
+      `;
+    } else {
+      contentEl.innerHTML = `
+        <p class="ja-score-text">No cover letter yet. Generate one based on your profile and this job.</p>
+        <button type="button" class="ja-action" id="ja-generate-cover-letter">Generate Cover Letter</button>
+      `;
+    }
+    contentEl.querySelector("#ja-generate-cover-letter")?.addEventListener("click", async () => {
+      const btn = contentEl.querySelector("#ja-generate-cover-letter");
+      if (btn) btn.disabled = true;
+      contentEl.querySelector(".ja-cover-letter-preview")?.remove();
+      const statusP = contentEl.querySelector(".ja-score-text") || contentEl.appendChild(document.createElement("p"));
+      statusP.className = "ja-score-text";
+      statusP.textContent = "Generating...";
+      try {
+        let jobDescription = "";
+        let jobTitle = document.title?.split(/[|\-–—]/)[0]?.trim() || "";
+        try {
+          const pageHtml = await getPageHtmlForKeywordsApi?.();
+          if (pageHtml) {
+            const analyzeRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
+              method: "POST",
+              headers: { ...headers, "Content-Type": "application/json" },
+              body: JSON.stringify({ url: window.location.href, page_html: pageHtml }),
+            });
+            if (analyzeRes.ok) {
+              const ad = await analyzeRes.json();
+              jobDescription = ad.job_description || "";
+              jobTitle = jobTitle || ad.job_title || "";
+            }
+          }
+        } catch (_) {}
+        const genRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/cover-letter/generate`, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ job_description: jobDescription, job_title: jobTitle }),
+        });
+        if (genRes.ok) {
+          const genData = await genRes.json();
+          await loadCoverLetterAccordionContent(contentEl, rootEl);
+        } else {
+          statusP.textContent = "Generation failed.";
+        }
+      } catch (_) {
+        statusP.textContent = "Generation failed.";
+      }
+      if (btn) btn.disabled = false;
+    });
+  } catch (_) {
+    contentEl.innerHTML = "<p class=\"ja-score-text\">No cover letter. Click Generate to create one.</p><button type=\"button\" class=\"ja-action\" id=\"ja-generate-cover-letter\">Generate</button>";
+    contentEl.querySelector("#ja-generate-cover-letter")?.addEventListener("click", () => loadCoverLetterAccordionContent(contentEl, rootEl));
+  }
+}
+
+async function loadQuestionsAccordionContent(id, contentEl, rootEl) {
+  contentEl.innerHTML = "<p class=\"ja-score-text\">Scanning page for form fields...</p>";
+  try {
+    let fields = [];
+    if (window.self === window.top) {
+      const scrapeRes = await chrome.runtime.sendMessage({ type: "SCRAPE_ALL_FRAMES", scope: "all" });
+      fields = scrapeRes?.ok ? (scrapeRes.fields || []) : [];
+    } else {
+      const scraped = scrapeFields({ scope: "all" });
+      fields = scraped?.fields || [];
+    }
+    if (!fields || fields.length === 0) {
+      contentEl.innerHTML = "<p class=\"ja-score-text\">No application form detected. Click &quot;Apply&quot; or navigate to the application form to see questions.</p>";
+      return;
+    }
+    const ctx = await getAutofillContextFromApi();
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const mapRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/form-fields/map`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        fields: fields.slice(0, 50).map((f) => ({ ...f, id: null })),
+        profile: ctx?.profile || {},
+        custom_answers: ctx?.customAnswers || {},
+        resume_text: ctx?.resumeText || "",
+      }),
+    });
+    if (!mapRes.ok) {
+      let errMsg = "Failed to load mappings";
+      try {
+        const errBody = await mapRes.json();
+        const d = errBody?.detail;
+        errMsg = typeof d === "string" ? d : Array.isArray(d) ? (d[0]?.msg || String(d[0] || d)) : errMsg;
+      } catch (_) {}
+      contentEl.innerHTML = `<p class="ja-score-text">${escapeHtml(String(errMsg))} (${mapRes.status})</p>`;
+      return;
+    }
+    const mapData = await mapRes.json();
+    const mappings = mapData?.mappings || {};
+    const commonKeys = ["firstname", "lastname", "email", "phone", "address", "linkedin", "github", "portfolio", "resume", "coverletter", "country", "city"];
+    const isCommon = (f) => {
+      const keys = getFieldKeys({ label: f.label, name: f.name, id: f.id, placeholder: f.placeholder });
+      return commonKeys.some((k) => keys.some((fk) => fk.includes(k) || k.includes(fk)));
+    };
+    const common = fields.filter(isCommon);
+    const unique = fields.filter((f) => !isCommon(f));
+    const list = id === "common-questions" ? common : unique;
+    const filled = list.filter((f) => {
+      const m = mappings[f.index];
+      return m?.value != null && String(m.value).trim() !== "";
+    }).length;
+    const total = list.length;
+    const itemHtml = list.slice(0, 15).map((f) => {
+      const m = mappings[f.index] || {};
+      const val = m.value != null ? String(m.value).trim() : "";
+      const label = f.label || f.name || f.placeholder || `Field ${f.index + 1}`;
+      // Derive display type: select, date, textarea, or input
+      let displayType = "input";
+      if (f.tag === "select") displayType = "select";
+      else if (f.tag === "textarea") displayType = "textarea";
+      else if (f.type === "date" || f.type === "datetime-local" || f.type === "month") displayType = "date";
+      const typeBadge = `<span class="ja-field-type-badge ja-field-type-${displayType}">${displayType}</span>`;
+      return `<div class="ja-question-row">${typeBadge}<span class="ja-question-label">${escapeHtml(label)}</span><span class="ja-question-value">${escapeHtml(val || "—")}</span></div>`;
+    }).join("");
+    contentEl.innerHTML = itemHtml ? `<div class="ja-questions-list">${itemHtml}</div>` : "<p class=\"ja-score-text\">No questions in this category.</p>";
+    const statusWrap = rootEl?.querySelector(`[data-accordion-id="${id}"]`)?.querySelector(".ja-accordion-status-text");
+    if (statusWrap) statusWrap.textContent = `Filled (${filled}/${total})`;
+  } catch (err) {
+    contentEl.innerHTML = "<p class=\"ja-score-text\">Failed to load questions.</p>";
+  }
 }
 
 function isVisible(el) {
@@ -147,11 +359,20 @@ function isVisible(el) {
 }
 
 function getAllRoots(doc) {
-  const roots = [doc];
-  const all = doc.querySelectorAll("*");
-  for (const el of all) {
-    if (el.shadowRoot) roots.push(el.shadowRoot);
+  const roots = [];
+  const seen = new Set();
+  function addRoot(root) {
+    if (!root || seen.has(root)) return;
+    seen.add(root);
+    roots.push(root);
+    try {
+      const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (const el of all) {
+        if (el.shadowRoot) addRoot(el.shadowRoot);
+      }
+    } catch (_) {}
   }
+  addRoot(doc);
   return roots;
 }
 
@@ -178,7 +399,7 @@ function getDocuments(includeNestedDocuments = true) {
   return docs;
 }
 
-function isFillable(field) {
+function isFillable(field, includeHidden = false) {
   if (!field || !field.ownerDocument || !field.isConnected) return false;
   const tag = (field.tagName || "").toLowerCase();
   const type = (field.type || "").toLowerCase();
@@ -188,7 +409,7 @@ function isFillable(field) {
     return true;
   }
 
-  if (!isVisible(field)) return false;
+  if (!includeHidden && !isVisible(field)) return false;
   if (field.disabled || field.readOnly) return false;
   if (field.getAttribute("aria-disabled") === "true") return false;
 
@@ -201,7 +422,11 @@ function isFillable(field) {
 
   if (tag === "textarea" || tag === "select") return true;
   if (field.isContentEditable) return true;
-  if (role === "textbox" || role === "combobox") return true;
+  if (role === "textbox" || role === "combobox" || role === "searchbox" || role === "spinbutton") return true;
+  if (tag === "div" || tag === "span") {
+    const ce = field.getAttribute("contenteditable");
+    if (ce === "true" || ce === "") return true;
+  }
 
   return false;
 }
@@ -295,35 +520,51 @@ function getFieldMeta(field) {
   };
 }
 
-function getFillableFields(includeNestedDocuments = true) {
+function isInsideExtensionWidget(el) {
+  if (!el?.ownerDocument) return false;
+  const doc = el.ownerDocument;
+  if (doc !== document) return false;
+  const widget = document.getElementById(INPAGE_ROOT_ID);
+  return !!(widget && widget.contains(el));
+}
+
+function getFillableFields(includeNestedDocuments = true, includeHidden = false) {
   const out = [];
   const seen = new Set();
+  let totalCandidates = 0;
   const docs = getDocuments(includeNestedDocuments);
 
   for (const doc of docs) {
     const roots = getAllRoots(doc);
     for (const root of roots) {
-      const candidates = Array.from(root.querySelectorAll(FIELD_SELECTOR));
-      for (const el of candidates) {
-        if (seen.has(el)) continue;
-        seen.add(el);
-        if (isFillable(el)) out.push(el);
-      }
+      try {
+        const candidates = Array.from(root.querySelectorAll(FIELD_SELECTOR));
+        for (const el of candidates) {
+          if (seen.has(el)) continue;
+          if (isInsideExtensionWidget(el)) continue;
+          seen.add(el);
+          totalCandidates += 1;
+          if (isFillable(el, includeHidden)) out.push(el);
+        }
+      } catch (_) {}
     }
   }
-
+  if (totalCandidates > 0 && out.length === 0) {
+    logWarn("Found form candidates but all filtered out", { totalCandidates, includeHidden, docCount: docs.length });
+  }
   return out;
 }
 
 function dispatchFrameworkEvents(field) {
+  const tag = (field.tagName || "").toLowerCase();
+  // Selects handle their own events in setNativeValue to avoid double-firing
+  if (tag === "select") return;
   field.dispatchEvent(new Event("focus", { bubbles: true }));
-
   try {
     field.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText" }));
   } catch (_) {
     field.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
   }
-
   field.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   field.dispatchEvent(new Event("blur", { bubbles: true }));
 }
@@ -420,9 +661,43 @@ function setNativeValue(field, nextValue) {
       });
       return false;
     }
-    
-    field.value = match.value;
-    dispatchFrameworkEvents(field);
+
+    // Step 1: Focus and simulate opening the dropdown
+    focusWithoutScroll(field);
+    field.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+    field.dispatchEvent(new MouseEvent("mouseup",  { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+    field.dispatchEvent(new MouseEvent("click",    { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+
+    // Step 2: Set value using the native prototype setter so React/Vue get the real DOM change
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(field), "value"
+    )?.set || Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+    if (nativeSetter) {
+      nativeSetter.call(field, match.value);
+    } else {
+      field.value = match.value;
+    }
+
+    // Step 3: Fool React's _valueTracker so it detects the value as changed
+    // (React skips onChange if tracker thinks value didn't change)
+    try {
+      const tracker = field._valueTracker;
+      if (tracker) {
+        tracker.setValue(field.value === match.value ? "" : field.value);
+      }
+    } catch (_) {}
+
+    // Step 4: Simulate clicking the matching <option> element
+    try {
+      match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+      match.dispatchEvent(new MouseEvent("mouseup",   { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+      match.dispatchEvent(new MouseEvent("click",     { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+    } catch (_) {}
+
+    // Step 5: Fire change + blur so all framework listeners fire
+    field.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    field.dispatchEvent(new Event("blur",   { bubbles: true }));
+
     logInfo("Select dropdown filled", {
       field: field.name || field.id,
       matchedOption: { text: match.text, value: match.value }
@@ -448,27 +723,37 @@ function setNativeValue(field, nextValue) {
     }
     if (inputType === "date" || inputType === "datetime-local" || inputType === "month") {
       const formattedDate = formatDateForInput(value);
+      focusWithoutScroll(field);
+      field.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       const proto = Object.getPrototypeOf(field);
       const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
       if (descriptor?.set) descriptor.set.call(field, formattedDate);
       else field.value = formattedDate;
+      try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) {}
       dispatchFrameworkEvents(field);
       return true;
     }
 
-    const proto = Object.getPrototypeOf(field);
-    const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-    if (descriptor?.set) descriptor.set.call(field, value);
+    // Regular text/email/tel/number input — simulate click then type
+    focusWithoutScroll(field);
+    field.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")?.set
+      || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (nativeSetter) nativeSetter.call(field, value);
     else field.value = value;
+    try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) {}
     dispatchFrameworkEvents(field);
     return true;
   }
 
   if (tag === "textarea") {
-    const proto = Object.getPrototypeOf(field);
-    const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-    if (descriptor?.set) descriptor.set.call(field, value);
+    focusWithoutScroll(field);
+    field.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")?.set
+      || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    if (nativeSetter) nativeSetter.call(field, value);
     else field.value = value;
+    try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) {}
     dispatchFrameworkEvents(field);
     return true;
   }
@@ -594,8 +879,14 @@ function findContinueButton(doc = document) {
 
 function scrapeFields(options = {}) {
   const includeNestedDocuments = options.scope !== "current_document";
-  logInfo("Starting DOM scrape for fillable fields");
-  const fillable = getFillableFields(includeNestedDocuments);
+  logInfo("Starting DOM scrape for fillable fields", { scope: options.scope });
+  let fillable = getFillableFields(includeNestedDocuments || true, true);
+  if (fillable.length === 0) {
+    fillable = getFillableFields(true, false);
+  }
+  if (fillable.length === 0) {
+    fillable = getFillableFields(true, true);
+  }
   const fields = fillable.map((el, index) => {
     const meta = getFieldMeta(el);
     const options =
@@ -713,7 +1004,8 @@ async function fillWithValues(payload) {
   const includeNestedDocuments = payload.scope !== "current_document";
   const { values = {}, resumeData, onProgress, shouldAbort, shouldSkip } = payload;
   logInfo("Starting mapped fill", { providedValues: Object.keys(values).length });
-  const fillable = getFillableFields(includeNestedDocuments);
+  let fillable = getFillableFields(includeNestedDocuments, false);
+  if (fillable.length === 0) fillable = getFillableFields(true, true);
   const effectiveResumeData = resumeData || (await getResumeFromBackground()) || (await getStaticResume());
   const fillDelay = 60 + Math.floor(Math.random() * 60);
   let filledCount = 0;
@@ -886,6 +1178,106 @@ function isCareerPage(urlStr = window.location.href) {
   );
 }
 
+/** Content hint: page shows multiple job listings (cards/links). */
+function hasListingPageContent() {
+  const body = document.body;
+  if (!body) return false;
+  const sel = [
+    "a[href*='job']",
+    "a[href*='career']",
+    "a[href*='position']",
+    "[data-job-id]",
+    "[data-testid*='job-card']",
+    "[class*='job-card']",
+    "[class*='job-listing']",
+    "[class*='position-card']",
+  ].join(",");
+  const matches = body.querySelectorAll(sel);
+  const jobLikeCount = Array.from(matches).filter((el) => {
+    const text = (el.textContent || "").trim();
+    const href = (el.getAttribute("href") || "").toLowerCase();
+    return text.length >= 10 && text.length < 120 && (href.includes("job") || href.includes("detail") || href.includes("position"));
+  }).length;
+  const headings = body.querySelectorAll("h2, h3, h4");
+  const multiTitle = headings.length >= 4 && Array.from(headings).filter((h) => (h.textContent || "").trim().length >= 5 && (h.textContent || "").trim().length < 100).length >= 3;
+  return jobLikeCount >= 5 || multiTitle;
+}
+
+/** Content hint: page has single JD (Apply button + JD keywords). */
+function hasJobDetailContent() {
+  const body = document.body;
+  if (!body) return false;
+  const text = (body.innerText || body.textContent || "").toLowerCase();
+  if (text.length < 400) return false;
+  const jdKeywords = ["responsibilities", "requirements", "qualifications", "experience", "about the role", "what you will"];
+  const jdScore = jdKeywords.filter((k) => text.includes(k)).length;
+  const hasApply =
+    /apply|submit application|apply now/i.test(text) ||
+    !!body.querySelector('a[href*="apply"]') ||
+    !!body.querySelector("[class*='apply']") ||
+    Array.from(body.querySelectorAll("a, button")).some((el) => /^\s*apply\s*$/i.test((el.textContent || "").trim()));
+  return jdScore >= 2 && hasApply;
+}
+
+/** True when page is a job LISTING (many jobs). No popup. Works across all career sites. */
+function isJobListingPage(urlStr = window.location.href) {
+  try {
+    const path = new URL(urlStr || "").pathname.toLowerCase().replace(/\/+$/, "") || "/";
+    const listingPaths = [
+      "/jobs",
+      "/careers",
+      "/positions",
+      "/opportunities",
+      "/vacancies",
+      "/openings",
+      "/open-positions",
+      "/current-openings",
+      "/jobs/all",
+      "/jobs/search",
+      "/careers/all",
+      "/careers/search",
+      "/positions/all",
+      "/opportunities/all",
+      "/join",
+      "/join-us",
+      "/work-with-us",
+    ];
+    if (listingPaths.some((p) => path === p)) return true;
+    if (/\/jobs\/?$|\/careers\/?$|\/positions\/?$/.test(path)) return true;
+    if (path === "/" && /jobs\.|careers\.|greenhouse\.|lever\.|workday\.|ashbyhq\.|bamboohr\.|icims\.|smartrecruiters\./i.test(urlStr || "")) return true;
+    if (hasListingPageContent() && !isJobDetailPage(urlStr)) return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** True when page is a single JD. Popup allowed. Works across all career sites. */
+function isJobDetailPage(urlStr = window.location.href) {
+  const url = (urlStr || "").toLowerCase();
+  try {
+    const path = new URL(urlStr || "").pathname.toLowerCase();
+    const search = new URL(urlStr || "").search.toLowerCase();
+
+    if (path === "/jobs" || path === "/jobs/" || path === "/careers" || path === "/careers/") return false;
+
+    const hasJdInPath = /\/(detail|job|position|opportunity|vacancy|posting|role|opening)\/?([^/]|$)/.test(path);
+    const hasJdInQuery = /[?&](gh_jid|jid|job_id|jobid|position_id|opportunity_id|posting_id|req_id|reqid|id)=/.test(search);
+    const hasNestedJobPath =
+      /\/jobs\/[^/]+\/detail/.test(path) ||
+      (/\/careers\/[^/]+/.test(path) && !/\/careers\/(all|search)\/?$/.test(path)) ||
+      /\/job\/[^/]+|\/position\/[^/]+|\/opportunity\/[^/]+|\/posting\/[^/]+|\/role\/[^/]+|\/vacancy\/[^/]+/.test(path);
+    const atsJdPattern = /(greenhouse|lever|workday|ashbyhq|bamboohr|icims|smartrecruiters|jobvite)[^/]*\/[^/]+\/[^/\s]+/.test(url);
+
+    if (hasJdInPath || hasJdInQuery || hasNestedJobPath || atsJdPattern) return true;
+
+    if (isCareerPage(urlStr) && hasJobDetailContent()) return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function isJobPageViaLLM(url, title, snippet) {
   try {
     const apiBase = await getApiBase();
@@ -905,16 +1297,34 @@ async function isJobPageViaLLM(url, title, snippet) {
 
 const KEYWORD_MATCH_ROOT_ID = "ja-keyword-match-root";
 
-/** Fetch job description via keywords/analyze (scrapes with Playwright, returns job_description in response). */
+/** Get page HTML from all frames (main + iframes) - works for Greenhouse embeds, Lever, etc. */
+async function getPageHtmlForKeywordsApi() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "GET_ALL_FRAMES_HTML" });
+    if (res?.ok && res.html) return res.html;
+  } catch (_) {}
+  try {
+    const el = document.documentElement || document.body;
+    if (!el) return null;
+    const html = (el.outerHTML || el.innerHTML || "").slice(0, 1500000);
+    return html && html.length > 100 ? html : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Fetch job description via keywords/analyze (sends client-scraped page_html from all frames). */
 async function fetchJobDescriptionFromKeywordsApi(url) {
   if (!url || !url.startsWith("http")) return null;
   try {
+    const pageHtml = await getPageHtmlForKeywordsApi();
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
+    const body = { url, page_html: pageHtml || undefined };
     const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -937,12 +1347,14 @@ async function runKeywordAnalysisAndMaybeShowWidget() {
   }
 
   try {
+    const pageHtml = await getPageHtmlForKeywordsApi();
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
+    const body = { url, page_html: pageHtml || undefined };
     const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
       method: "POST",
-      headers,
-      body: JSON.stringify({ url }),
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
     if (!res.ok) return;
 
@@ -1020,8 +1432,8 @@ function mountKeywordMatchWidgetWithData({ matched, total, percent }) {
     <div class="ja-kw-card">
       <div class="ja-kw-circle" id="ja-kw-circle"><div class="ja-kw-circle-inner" id="ja-kw-percent">${percent}%</div></div>
       <div class="ja-kw-title">Resume Match</div>
-      <div class="ja-kw-desc" id="ja-kw-desc">${matched} of ${total} keywords are present in your resume.</div>
-      <span class="ja-kw-tag">HireMate</span>
+      <div class="ja-kw-desc" id="ja-kw-desc">${percent}% – ${matched} of ${total} keywords in your resume.</div>
+      <span class="ja-kw-tag">OpsBrain</span>
     </div>
   `;
   document.documentElement.appendChild(root);
@@ -1058,7 +1470,26 @@ async function getApiBase() {
 async function openResumeGeneratorUrl() {
   const data = await chrome.storage.local.get(["loginPageUrl"]);
   const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
-  const url = `${base}/resume-generator`;
+  let url = `${base}/resume-generator`;
+  try {
+    const pageHtml = await getPageHtmlForKeywordsApi();
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    if (pageHtml && pageHtml.length > 100 && headers?.Authorization) {
+      const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/tailor-context`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          page_html: pageHtml,
+          url: window.location.href,
+          job_title: document.querySelector("h1, [data-automation-id='jobTitle'], .job-title, [class*='job-title']")?.textContent?.trim?.()?.slice(0, 100) || "",
+        }),
+      });
+      if (res.ok) url = `${base}/resume-generator?tailor=1`;
+    }
+  } catch (err) {
+    logWarn("Tailor context save failed", { error: String(err) });
+  }
   chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url });
 }
 
@@ -1202,6 +1633,8 @@ async function loadProfileIntoPanel(root) {
   const linksEl = root?.querySelector("#ja-profile-links");
   const skillsEl = root?.querySelector("#ja-profile-skills");
   const languagesEl = root?.querySelector("#ja-profile-languages");
+  const avatarEl = root?.querySelector("#ja-profile-avatar");
+  const titleEl = root?.querySelector("#ja-profile-title");
 
   const setHtml = (el, html) => {
     if (el) el.innerHTML = html || "—";
@@ -1217,6 +1650,19 @@ async function loadProfileIntoPanel(root) {
 
     const fullName = [flat.firstName, flat.lastName].filter(Boolean).join(" ") || flat.name || "—";
     setText(nameEl, fullName);
+    setText(titleEl, flat.title || flat.professionalHeadline || "");
+    // Avatar initials
+    try {
+      if (avatarEl) {
+        const initials = (fullName || "")
+          .split(" ")
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((s) => s[0]?.toUpperCase() || "")
+          .join("");
+        avatarEl.textContent = initials || (flat.name || flat.firstName || "—").charAt(0).toUpperCase();
+      }
+    } catch (_) {}
 
     const location = [flat.city, flat.country].filter(Boolean).join(", ") || "—";
     const contactHtml = `
@@ -1229,16 +1675,17 @@ async function loadProfileIntoPanel(root) {
       makeCopyable(node, node.dataset.copy ?? node.innerText.trim());
     });
 
-    if (detail?.educations?.length) {
-      const eduHtml = detail.educations
+    const educations = detail?.educations ?? flat.educations ?? [];
+    if (educations.length) {
+      const eduHtml = educations
         .map(
           (e) => `
         <div class="ja-edu-item ja-copyable" data-copy="${escapeHtml(
           `${e.institution || ""}\n${e.degree || ""} ${e.fieldOfStudy || ""}\n${e.startYear || ""} - ${e.endYear || ""}`
         )}">
-          <div><strong>${escapeHtml(e.institution || "—")}</strong></div>
-          <div>${escapeHtml(e.degree || "")}${e.fieldOfStudy ? ", " + escapeHtml(e.fieldOfStudy) : ""}</div>
-          <div class="ja-exp-meta">${escapeHtml(e.startYear || "")} - ${escapeHtml(e.endYear || "")}</div>
+          <div class="ja-edu-institution">${escapeHtml(e.institution || "—")}</div>
+          <div class="ja-edu-degree">${escapeHtml(e.degree || "")}${e.fieldOfStudy ? " · " + escapeHtml(e.fieldOfStudy) : ""}</div>
+          <div class="ja-edu-meta">${escapeHtml(e.startYear || "")} — ${escapeHtml(e.endYear || "")}</div>
         </div>
       `
         )
@@ -1251,25 +1698,24 @@ async function loadProfileIntoPanel(root) {
       setText(educationEl, flat.education || "—");
     }
 
-    if (detail?.experiences?.length) {
-      const expHtml = detail.experiences
+    const experiences = detail?.experiences ?? flat.experiences ?? [];
+    if (experiences.length) {
+      const expHtml = experiences
         .map(
           (e) => {
-            const metaParts = [e.companyName, e.location, `${e.startDate || ""} - ${e.endDate || ""}`].filter(Boolean);
+            const metaParts = [e.companyName, e.location, `${e.startDate || ""} — ${e.endDate || ""}`].filter(Boolean);
             const bullets = (e.description || "")
               .split(/\n|•/)
               .map((s) => s.trim())
               .filter(Boolean)
               .map((b) => `<li>${escapeHtml(b)}</li>`)
               .join("");
-            const copyText = `${e.jobTitle || ""} at ${e.companyName || ""}\n${e.startDate || ""} - ${e.endDate || ""}\n${e.description || ""}`;
+            const copyText = `${e.jobTitle || ""} at ${e.companyName || ""}\n${e.startDate || ""} — ${e.endDate || ""}\n${e.description || ""}`;
             return `
           <div class="ja-exp-item ja-copyable" data-copy="${escapeHtml(copyText)}">
-            <div class="ja-exp-company">
-  <strong>${escapeHtml(e.jobTitle || "—")}</strong>
-  ${e.companyName ? ` at <strong>${escapeHtml(e.companyName)}</strong>` : ""}
-</div>
-            <div class="ja-exp-meta">${escapeHtml(metaParts.join(" • "))}</div>
+            <div class="ja-exp-role">${escapeHtml(e.jobTitle || "—")}</div>
+            <div class="ja-exp-company">${e.companyName ? escapeHtml(e.companyName) : ""}</div>
+            <div class="ja-exp-meta">${escapeHtml(metaParts.join(" · "))}</div>
             ${bullets ? `<ul class="ja-exp-bullets">${bullets}</ul>` : ""}
           </div>
         `;
@@ -1284,7 +1730,7 @@ async function loadProfileIntoPanel(root) {
       setText(experienceEl, (flat.experience || flat.professionalSummary || "—").slice(0, 800) + (flat.experience && flat.experience.length > 800 ? "…" : ""));
     }
 
-    const resumeName = ctx.resumeFileName || (ctx.resumeUrl || "").split("/").pop() || "Resume";
+    const resumeName = ctx.resumeName || ctx.resumeFileName || (ctx.resumeUrl || "").split("/").pop() || "Resume";
     const resumeDate = detail?.resumeLastUpdated ? new Date(detail.resumeLastUpdated).toLocaleString() : "";
     const hasResume = !!(ctx.resumeUrl || ctx.resumeFileName);
     const uploadsHtml = hasResume
@@ -1338,16 +1784,21 @@ async function loadProfileIntoPanel(root) {
     const skills = [];
     (detail?.techSkills || []).forEach((s) => skills.push(s.name));
     (detail?.softSkills || []).forEach((s) => skills.push(s.name));
-    if (skills.length === 0 && flat.skills) skills.push(...flat.skills.split(",").map((s) => s.trim()).filter(Boolean));
+    if (skills.length === 0 && Array.isArray(flat.skills_list) && flat.skills_list.length) {
+      skills.push(...flat.skills_list);
+    } else if (skills.length === 0 && flat.skills) {
+      skills.push(...String(flat.skills).split(",").map((s) => s.trim()).filter(Boolean));
+    }
     if (skills.length) {
-      setHtml(skillsEl, skills.map((s) => `<span class="ja-skill-chip ja-copyable" data-copy="${escapeHtml(s)}">${escapeHtml(s)}</span>`).join(""));
+      const chips = skills.map((s) => `<span class="ja-skill-chip ja-copyable" data-copy="${escapeHtml(s)}">${escapeHtml(s)}</span>`).join("");
+      setHtml(skillsEl, `<div class="ja-skill-list">${chips}</div>`);
       skillsEl?.querySelectorAll(".ja-skill-chip").forEach((node) => makeCopyable(node, node.dataset.copy));
     } else {
       setText(skillsEl, "—");
     }
 
     const langs = detail?.willingToWorkIn || [];
-    setHtml(languagesEl, langs.length ? langs.map((l) => `<span class="ja-skill-chip">${escapeHtml(l)}</span>`).join("") : (flat.country ? escapeHtml(flat.country) : "—"));
+    setHtml(languagesEl, langs.length ? `<div class="ja-skill-list">${langs.map((l) => `<span class="ja-skill-chip">${escapeHtml(l)}</span>`).join("")}</div>` : (flat.country ? escapeHtml(flat.country) : "—"));
   } catch (_) {
     setText(nameEl, "Sign in to load profile");
     setHtml(contactEl, "<div class=\"ja-profile-line\">—</div>");
@@ -1365,32 +1816,130 @@ function extractCompanyAndPosition() {
   const url = window.location.href || "";
   let company = "";
   let position = "";
+  let location = "";
+
+  // 1. Extract company from URL (Greenhouse, Lever, Workday, etc.)
+  try {
+    const u = new URL(url);
+    const path = (u.pathname || "").replace(/^\/+|\/+$/g, "");
+    const segments = path.split("/").filter(Boolean);
+    if (u.hostname.includes("greenhouse.io") && segments.length >= 1) {
+      company = segments[0];
+    } else if (u.hostname.includes("lever.co") && segments.length >= 1) {
+      company = segments[0];
+    } else if (u.hostname.includes("jobs.workday.com") && segments.length >= 2) {
+      company = segments[0];
+    } else if (u.hostname.includes("ashbyhq.com") && segments.length >= 1) {
+      company = segments[0];
+    } else if (u.hostname.includes("bamboohr.com") && segments.length >= 1) {
+      company = segments[0];
+    }
+    if (company) {
+      company = company.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  } catch (_) {}
+
+  // 2. Try JSON-LD JobPosting on page
+  if (!company || !position) {
+    document.querySelectorAll('script[type="application/ld+json"]').forEach((script) => {
+      try {
+        const data = JSON.parse(script.textContent || "{}");
+        const item = Array.isArray(data) ? data.find((i) => i["@type"] === "JobPosting") : data["@type"] === "JobPosting" ? data : null;
+        if (item) {
+          if (!company && item.hiringOrganization?.name) company = item.hiringOrganization.name;
+          if (!position && item.title) position = item.title;
+          if (!location && item.jobLocation) {
+            const loc = item.jobLocation;
+            location = typeof loc === "string" ? loc : loc.address?.addressLocality && loc.address?.addressCountry
+              ? `${loc.address.addressLocality}, ${loc.address.addressCountry}`
+              : loc.name || "";
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  // 3. og:title — "Job Title | Company" or "Tagline | Company" (job titles usually 2+ words)
   const ogTitle = document.querySelector('meta[property="og:title"]')?.content;
-  const h1 = document.querySelector("h1");
+  const isTagline = (t) => !t || /^(best|payment|gateway|online|financial|leading|top|number one)/i.test(t) || t.length > 55;
+  const looksLikeJobTitle = (t) => t && t.length >= 5 && t.length < 80 && !isTagline(t) && t.split(/\s+/).length >= 2;
   if (ogTitle) {
-    const parts = ogTitle.split(/[|\-–—]/);
+    const parts = ogTitle.split(/[|\-–—]/).map((p) => p.trim()).filter(Boolean);
     if (parts.length >= 2) {
-      company = (parts[0] || "").trim();
-      position = (parts[1] || "").trim();
-    } else {
+      const a = parts[0], b = parts[1];
+      if (!company) company = (b.length <= 30 && b.split(/\s+/).length <= 3) ? b : (a.length <= 30 ? a : "");
+      if (!position && looksLikeJobTitle(a)) position = a;
+      else if (!position && looksLikeJobTitle(b)) position = b;
+    } else if (!position && looksLikeJobTitle(ogTitle.trim())) {
       position = ogTitle.trim();
     }
-  } else if (h1) {
-    position = getText(h1);
   }
-  if (!position && title) position = title;
-  return { company, position };
+
+  // 4. Page content: h1 first (most reliable on job detail pages)
+  const h1 = document.querySelector("h1");
+  if (!position && h1) position = getText(h1);
+
+  // 5. "Back to jobs JOB_TITLE Location Apply" pattern (Greenhouse / common ATS)
+  const bodyText = document.body?.innerText?.slice(0, 1500) || "";
+  if (!position && /Back to jobs\s+(.+?)\s+(?:Apply|Remote|Hybrid|Malaysia|India|Singapore|Bangalore|Kuala Lumpur)/i.test(bodyText)) {
+    const m = bodyText.match(/Back to jobs\s+(.+?)\s+(?:Apply|Remote|Hybrid|Malaysia|India|Singapore|Bangalore|Kuala Lumpur|,\s*[A-Za-z]+)/i);
+    if (m) {
+      const candidate = m[1].trim();
+      if (candidate.length >= 5 && candidate.length < 80 && !/^(payment|best|gateway|online|financial|leading|india)/i.test(candidate)) {
+        position = candidate;
+      }
+    }
+  }
+  if (!position && /Back to jobs\s+(.+?)\s+Apply/i.test(bodyText)) {
+    const m = bodyText.match(/Back to jobs\s+(.+?)\s+Apply/i);
+    if (m && !position) {
+      const candidate = m[1].trim();
+      if (candidate.length >= 5 && candidate.length < 80) position = candidate;
+    }
+  }
+
+  if (!company || !location) {
+    if (!company && /About\s+([A-Za-z0-9&\s]+):/i.test(bodyText)) {
+      const m = bodyText.match(/About\s+([A-Za-z0-9&\s]+):/i);
+      if (m) company = m[1].trim();
+    }
+    if (!location && /([A-Za-z\s]+,\s*[A-Za-z\s]+)\s*(?:Apply|Remote|Hybrid)/i.test(bodyText)) {
+      const m = bodyText.match(/([A-Za-z\s]+,\s*[A-Za-z\s]+)\s*(?:Apply|Remote|Hybrid)/i);
+      if (m) location = m[1].trim();
+    }
+    if (!location && /([A-Za-z\s]+,\s+[A-Za-z]{2,})\s*$/.test(bodyText.slice(0, 800))) {
+      const m = bodyText.slice(0, 800).match(/([A-Za-z][A-Za-z\s]+,\s*[A-Za-z]{2,})/);
+      if (m && m[1].length < 50) location = m[1].trim();
+    }
+  }
+
+  if (!position && ogTitle) {
+    const parts = ogTitle.split(/[|\-–—]/).map((p) => p.trim()).filter(Boolean);
+    for (const p of parts) {
+      if (p.length >= 5 && p.length < 80 && !/^(payment|best|gateway|online|financial|leading|india|razorpay)/i.test(p)) {
+        position = p;
+        break;
+      }
+    }
+  }
+  if (!position && title) {
+    const t = title.trim();
+    if (t.length >= 5 && t.length < 80 && !/^(payment|best|gateway|online|financial)/i.test(t)) position = t;
+  }
+  return { company: company || "", position: position || "", location: location || "" };
 }
 
 async function prefillJobForm(root) {
-  const { company, position } = extractCompanyAndPosition();
+  const { company, position, location } = extractCompanyAndPosition();
   const urlInput = root?.querySelector("#ja-job-url");
   const descInput = root?.querySelector("#ja-job-description");
   const companyInput = root?.querySelector("#ja-job-company");
   const positionInput = root?.querySelector("#ja-job-position");
+  const locationInput = root?.querySelector("#ja-job-location");
   if (urlInput) urlInput.value = window.location.href || "";
   if (companyInput) companyInput.value = company || "";
   if (positionInput) positionInput.value = position || "";
+  if (locationInput) locationInput.value = location || "";
 
   if (descInput) {
     descInput.placeholder = "Scraping job description...";
@@ -1403,7 +1952,11 @@ async function prefillJobForm(root) {
 
 async function saveJobFromForm(root) {
   const btn = root?.querySelector("#ja-job-save");
-  if (btn) btn.disabled = true;
+  const origText = btn?.textContent || "Save Job";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Saving...";
+  }
   try {
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
@@ -1423,7 +1976,7 @@ async function saveJobFromForm(root) {
     };
     const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/jobs`, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify(payload),
     });
     if (res.ok) {
@@ -1437,14 +1990,17 @@ async function saveJobFromForm(root) {
   } catch (err) {
     logWarn("Save job failed", { error: String(err) });
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
   }
 }
 
 async function fetchResumesFromApi() {
   const apiBase = await getApiBase();
   const headers = await getAuthHeaders();
-  const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/resumes`, { headers });
+  const res = await fetchWithAuthRetry(`${apiBase}/resume`, { headers });
   if (!res.ok) return [];
   return res.json();
 }
@@ -1460,43 +2016,63 @@ async function loadKeywordsIntoPanel(root) {
 
   try {
     const resumes = await fetchResumesFromApi();
+    if (resumes.length === 0) {
+      container.innerHTML = `
+        <p class="ja-score-text">Please upload resume in profile to analyze keywords.</p>
+        <button type="button" class="ja-action ja-upload-resume-btn" style="margin-top:8px;">Upload Resume</button>
+      `;
+      container.querySelector(".ja-upload-resume-btn")?.addEventListener("click", () => openResumeGeneratorUrl());
+      if (card) card.classList.remove("ja-loading");
+      return;
+    }
+
     if (selectEl) {
+      const prevSelection = selectEl.value ? parseInt(selectEl.value, 10) : null;
+      const validIds = new Set(resumes.map((r) => r.id));
       selectEl.innerHTML = "";
-      if (resumes.length === 0) {
-        selectEl.innerHTML = "<option value=\"\">No resumes – add one in profile</option>";
-      } else {
-        let defaultId = null;
-        resumes.forEach((r, idx) => {
-          const opt = document.createElement("option");
-          opt.value = r.id;
-          opt.textContent = r.resume_name || `Resume ${idx + 1}`;
-          if (r.is_default) {
-            opt.textContent += " (default)";
-            defaultId = r.id;
-          }
-          selectEl.appendChild(opt);
-        });
-        if (defaultId !== null) selectEl.value = String(defaultId);
-        else if (resumes.length) selectEl.value = String(resumes[0].id);
+      let defaultId = null;
+      resumes.forEach((r, idx) => {
+        const opt = document.createElement("option");
+        opt.value = r.id;
+        opt.textContent = r.resume_name || `Resume ${idx + 1}`;
+        if (r.is_default) {
+          opt.textContent += " (default)";
+          defaultId = r.id;
+        }
+        selectEl.appendChild(opt);
+      });
+      if (prevSelection && validIds.has(prevSelection)) {
+        selectEl.value = String(prevSelection);
+      } else if (defaultId !== null) {
+        selectEl.value = String(defaultId);
+      } else if (resumes.length) {
+        selectEl.value = String(resumes[0].id);
       }
     }
 
     const selectedId = selectEl?.value ? parseInt(selectEl.value, 10) : null;
     const resumeId = selectedId && selectedId > 0 ? selectedId : null;
 
-    container.innerHTML = "<p class=\"ja-score-text\">Scraping job description...</p>";
+    container.innerHTML = "<p class=\"ja-score-text\">Analyzing keywords...</p>";
+    const pageHtml = await getPageHtmlForKeywordsApi();
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
-    const body = { url: window.location.href };
+    const body = { url: window.location.href, page_html: pageHtml || undefined };
     if (resumeId) body.resume_id = resumeId;
 
     const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
       method: "POST",
-      headers,
+      headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      container.innerHTML = "<p class=\"ja-score-text\">Add resume in your HireMate profile to see keyword match.</p>";
+      let errMsg = "Unable to analyze keywords.";
+      try {
+        const errData = await res.json();
+        errMsg = errData.detail || errMsg;
+        if (typeof errMsg === "object" && errMsg.msg) errMsg = errMsg.msg;
+      } catch (_) {}
+      container.innerHTML = `<p class="ja-score-text">${escapeHtml(String(errMsg))}</p>`;
       if (card) card.classList.remove("ja-loading");
       return;
     }
@@ -1508,15 +2084,16 @@ async function loadKeywordsIntoPanel(root) {
     const percent = data.percent || 0;
     const highMatched = high.filter((i) => i.matched).length;
     const lowMatched = low.filter((i) => i.matched).length;
-    const statusLabel = percent >= 70 ? "Great match" : "Needs Work";
+    const statusLabel = total === 0 ? "No skills found" : percent >= 70 ? "Great match" : "Needs Work";
+    const apiMessage = data.message || "";
     const renderItem = (item) =>
       `<div class="ja-kw-item"><span class="ja-kw-check ${item.matched ? "ja-matched" : "ja-unmatched"}">✓</span><span class="${item.matched ? "ja-kw-matched" : "ja-kw-unmatched"}">${escapeHtml(item.keyword)}</span></div>`;
     const highHtml = high.map(renderItem).join("");
     const lowHtml = low.map(renderItem).join("");
     container.innerHTML = `
       <h4>Keyword Match – ${statusLabel}</h4>
-      <p class="ja-score-text">Your resume has <strong>${matched} out of ${total} (${percent}%)</strong> keywords that appear in the job description.</p>
-      <p style="font-size:11px;background:#fef9c3;padding:6px 8px;border-radius:6px;margin:0 0 12px 0;">Try to get your score above <strong>70%</strong> to increase your chances!</p>
+      ${total === 0 ? `<p class="ja-score-text">${escapeHtml(apiMessage || "No technical skills found in the job description. Scroll down for the full requirements section.")}</p>` : `<p class="ja-score-text"><strong>${percent}%</strong> match – Your resume has <strong>${matched} of ${total}</strong> keywords from the job description.</p>`}
+      ${total > 0 ? `<p style="font-size:11px;background:#fef9c3;padding:6px 8px;border-radius:6px;margin:0 0 12px 0;">Try to get your score above <strong>70%</strong> to increase your chances!</p>` : ""}
       ${high.length ? `<div class="ja-kw-priority-section">
         <div class="ja-kw-priority-header">
           <span class="ja-kw-priority-title">High Priority Keywords</span>
@@ -1553,6 +2130,7 @@ async function getAutofillContextFromApi() {
     profileDetail: json.profile_detail || null,
     customAnswers: json.custom_answers || {},
     resumeText: json.resume_text || "",
+    resumeName: json.resume_name || null,
     resumeFileName: json.resume_file_name || null,
     resumeUrl: json.resume_url || null,
   };
@@ -1594,12 +2172,56 @@ async function getStaticResume() {
   return null;
 }
 
+async function trackCareerPageView() {
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    if (!headers?.Authorization) return;
+    const key = `ja_page_viewed_${window.location.href}`;
+    if (sessionStorage.getItem(key)) return;
+    const { company } = extractCompanyAndPosition();
+    await fetchWithAuthRetry(`${apiBase}/chrome-extension/career-page/view`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        page_url: window.location.href || "",
+        company_name: company || null,
+        job_url: window.location.href || null,
+        job_title: null,
+      }),
+    });
+    sessionStorage.setItem(key, "1");
+  } catch (e) {
+    logWarn("Failed to track career page view", { error: String(e) });
+  }
+}
+
+async function trackAutofillUsed() {
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const { company, position } = extractCompanyAndPosition();
+    await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/track`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        page_url: window.location.href || "",
+        company_name: company || null,
+        job_url: window.location.href || null,
+        job_title: position || null,
+      }),
+    });
+  } catch (e) {
+    logWarn("Failed to track autofill", { error: String(e) });
+  }
+}
+
 async function fetchMappingsFromApi(fields, context) {
   const apiBase = await getApiBase();
   const headers = await getAuthHeaders();
   const mapRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/form-fields/map`, {
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify({
       fields: fields.map((field) => ({ ...field, id: null })),
       profile: context.profile,
@@ -1672,10 +2294,12 @@ async function updateWidgetAuthUI(root) {
 }
 
 function mountInPageUI() {
+  if (window.self !== window.top) return;
   const existing = document.getElementById(INPAGE_ROOT_ID);
   if (existing) {
     existing.classList.remove("collapsed");
     updateWidgetAuthUI(existing);
+    if (isCareerPage()) trackCareerPageView();
     return;
   }
   
@@ -1722,16 +2346,9 @@ function mountInPageUI() {
         gap: 6px;
       }
       #${INPAGE_ROOT_ID} .ja-logo-icon {
-        width: 24px;
-        height: 24px;
-        background: linear-gradient(135deg, #38bdf8 0%, #0ea5e9 100%);
-        border-radius: 6px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #fff;
-        font-size: 14px;
-        font-weight: 700;
+        height: 28px;
+        object-fit: contain;
+        flex-shrink: 0;
       }
         #${INPAGE_ROOT_ID} .ja-upload-box-up{
         margin-top:-7px;
@@ -2005,6 +2622,21 @@ function mountInPageUI() {
       }
       #${INPAGE_ROOT_ID} .ja-accordion-item.expanded .ja-accordion-chevron { transform: rotate(180deg); }
       #${INPAGE_ROOT_ID} .ja-accordion-body { border-top: 1px solid #e5e7eb; }
+      #${INPAGE_ROOT_ID} .ja-resume-accordion-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+      #${INPAGE_ROOT_ID} .ja-resume-accordion-row .ja-resume-select { flex: 1; padding: 6px 10px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 13px; }
+      #${INPAGE_ROOT_ID} .ja-resume-preview-hint { font-size: 11px; color: #6b7280; margin: 4px 0 0 0; }
+      #${INPAGE_ROOT_ID} .ja-cover-letter-preview { margin-bottom: 10px; padding: 8px; background: #f9fafb; border-radius: 6px; max-height: 200px; overflow-y: auto; font-size: 12px; line-height: 1.5; }
+      #${INPAGE_ROOT_ID} .ja-cover-letter-job { font-weight: 600; margin: 0 0 6px 0; font-size: 12px; }
+      #${INPAGE_ROOT_ID} .ja-cover-letter-text { white-space: pre-wrap; word-break: break-word; }
+      #${INPAGE_ROOT_ID} .ja-questions-list { max-height: 240px; overflow-y: auto; }
+      #${INPAGE_ROOT_ID} .ja-question-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+      #${INPAGE_ROOT_ID} .ja-question-label { flex: 0 0 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #374151; }
+      #${INPAGE_ROOT_ID} .ja-question-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6b7280; }
+      #${INPAGE_ROOT_ID} .ja-field-type-badge { flex-shrink: 0; font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
+      #${INPAGE_ROOT_ID} .ja-field-type-select   { background: #dbeafe; color: #1d4ed8; }
+      #${INPAGE_ROOT_ID} .ja-field-type-date      { background: #fef9c3; color: #854d0e; }
+      #${INPAGE_ROOT_ID} .ja-field-type-textarea  { background: #dcfce7; color: #166534; }
+      #${INPAGE_ROOT_ID} .ja-field-type-input     { background: #f3f4f6; color: #4b5563; }
       #${INPAGE_ROOT_ID} .ja-accordion-content {
         padding: 12px 14px;
         font-size: 13px;
@@ -2117,7 +2749,7 @@ function mountInPageUI() {
       }
       #${INPAGE_ROOT_ID} .ja-kw-matched { color: #2563eb; }
       #${INPAGE_ROOT_ID} .ja-kw-unmatched { color: #6b7280; }
-      /* High/Low Priority sections - light blue bg (HireMateAI theme) */
+      /* High/Low Priority sections - light blue bg (OpsBrain theme) */
       #${INPAGE_ROOT_ID} .ja-kw-priority-section {
         margin-bottom: 14px;
         background: rgba(96, 165, 250, 0.04);
@@ -2178,7 +2810,7 @@ function mountInPageUI() {
         background: #6b7280;
       }
       #${INPAGE_ROOT_ID} .ja-panel-profile .ja-profile-authenticated {
-        padding-bottom: 8px;
+        padding-bottom: 16px;
       }
       #${INPAGE_ROOT_ID} .ja-profile-cards {
         display: grid;
@@ -2203,15 +2835,23 @@ function mountInPageUI() {
       #${INPAGE_ROOT_ID} .ja-profile-card h4 { margin: 0 0 6px 0; font-size: 14px; font-weight: 600; color: #0f172a; }
       #${INPAGE_ROOT_ID} .ja-profile-card p { margin: 0; font-size: 12px; color: #64748b; line-height: 1; }
       #${INPAGE_ROOT_ID} .ja-copy-tip {
-        background: #e0f2fe;
-        color: #0369a1;
-        padding: 12px 14px;
-        margin:10px;
+        background: #f8fafc;
+        color: #64748b;
+        padding: 10px 14px;
+        margin: 0 10px 14px 10px;
         border-radius: 8px;
-        font-size: 12px;
-        margin-bottom: 16px;
-        line-height: 1;
-        border: 1px solid #bae6fd;
+        font-size: 11px;
+        line-height: 1.4;
+        border: 1px solid #e2e8f0;
+      }
+      /* Profile card container: clean SaaS look */
+      #${INPAGE_ROOT_ID} .ja-profile-card-container {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+        border: 1px solid #e2e8f0;
+        margin: 0 10px 16px 10px;
       }
       #${INPAGE_ROOT_ID} .ja-profile-section {
         padding: 14px 0;
@@ -2233,15 +2873,29 @@ function mountInPageUI() {
         word-break: break-word;
       }
       #${INPAGE_ROOT_ID} .ja-profile-main { margin-top: 4px; margin-bottom:20px }
+      #${INPAGE_ROOT_ID} .ja-profile-main .ja-profile-card-container { display: flex; flex-direction: column; gap: 14px; }
       #${INPAGE_ROOT_ID} .ja-profile-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-       
         flex-wrap: wrap;
       }
-      #${INPAGE_ROOT_ID} .ja-profile-name { font-size: 16px; font-weight: 600; color: #0f172a; padding-left:15px}
+      #${INPAGE_ROOT_ID} .ja-profile-name { font-size: 18px; font-weight: 700; color: #0f172a; line-height:1; }
+      #${INPAGE_ROOT_ID} .ja-profile-title { font-size: 13px; color: #64748b; margin-top: 2px; }
+      #${INPAGE_ROOT_ID} .ja-avatar {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg,#2563eb 0%,#3b82f6 100%);
+        color: white;
+        font-weight: 700;
+        font-size: 16px;
+        flex-shrink: 0;
+      }
       #${INPAGE_ROOT_ID} .ja-profile-header-actions { display: flex; gap: 6px; }
       #${INPAGE_ROOT_ID} .ja-profile-btn {
         font-size: 11px;
@@ -2256,49 +2910,115 @@ function mountInPageUI() {
       #${INPAGE_ROOT_ID} .ja-profile-contact {
         font-size: 13px;
         color: #475569;
-        line-height: 1;
-        margin-bottom: 16px;
-        padding-left:30px;
-        
+        line-height: 1.4;
+        margin-bottom: 20px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid #e2e8f0;
       }
       #${INPAGE_ROOT_ID} .ja-profile-contact .ja-profile-line { margin: 2px 0; }
       #${INPAGE_ROOT_ID} .ja-profile-block {
-        margin-bottom: 16px;
-       
-
+        margin-bottom: 20px;
+        padding-bottom: 20px;
         border-bottom: 1px solid #e2e8f0;
-        
       }
-      #${INPAGE_ROOT_ID} .ja-profile-block:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+      #${INPAGE_ROOT_ID} .ja-profile-block:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+      }
       #${INPAGE_ROOT_ID} .ja-profile-block-title {
-        font-size: 16px;
+        font-size: 12px;
         font-weight: 600;
-        color:black;
-        padding-left:15px;
-        padding-bottom:3px;
-        
-        
-        
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 10px;
       }
-      #${INPAGE_ROOT_ID} .ja-profile-block-content { font-size: 13px; color: #1e293b; line-height: 1; 
-  padding-left: 30px; margin-bottom:5px;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-block-content .ja-copyable { cursor: pointer; padding: 2px 0; }
+      #${INPAGE_ROOT_ID} .ja-profile-block-content { font-size: 13px; color: #1e293b; line-height: 1.55; margin: 0; }
+      #${INPAGE_ROOT_ID} .ja-profile-block-content .ja-copyable { cursor: pointer; }
       #${INPAGE_ROOT_ID} .ja-profile-block-content .ja-copyable:hover { background: #f1f5f9; border-radius: 4px; }
-      #${INPAGE_ROOT_ID} .ja-edu-item, #${INPAGE_ROOT_ID} .ja-exp-item { margin-bottom: 14px; }
-      #${INPAGE_ROOT_ID} .ja-edu-item:last-child, #${INPAGE_ROOT_ID} .ja-exp-item:last-child { margin-bottom: 0; }
-      #${INPAGE_ROOT_ID} .ja-exp-company { font-weight: 600; color: #0f172a; margin-bottom: 2px; }
-      #${INPAGE_ROOT_ID} .ja-exp-meta { font-size: 12px; color: #64748b; margin-bottom: 6px; }
-      #${INPAGE_ROOT_ID} .ja-exp-bullets { padding-left: 16px; margin: 0; }
-      #${INPAGE_ROOT_ID} .ja-exp-bullets li { margin: 4px 0; }
-      #${INPAGE_ROOT_ID} .ja-skill-chip {
-        display: inline-block;
-        padding: 3px 8px;
-        margin: 2px 4px 2px 0;
+      /* Experience & Education: card-style entries with clear hierarchy */
+      #${INPAGE_ROOT_ID} .ja-exp-item, #${INPAGE_ROOT_ID} .ja-edu-item {
+        margin-bottom: 16px;
+        padding: 14px 0;
+        border-bottom: 1px solid #e2e8f0;
+        transition: background 0.15s;
+      }
+      #${INPAGE_ROOT_ID} .ja-exp-item:last-child, #${INPAGE_ROOT_ID} .ja-edu-item:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+      }
+      #${INPAGE_ROOT_ID} .ja-exp-item:hover, #${INPAGE_ROOT_ID} .ja-edu-item:hover {
+        background: linear-gradient(90deg, transparent, rgba(15,23,42,0.02) 8%, transparent);
+      }
+      #${INPAGE_ROOT_ID} .ja-exp-role {
+        font-size: 15px;
+        font-weight: 600;
+        color: #0f172a;
+        margin-bottom: 4px;
+        line-height: 1.3;
+      }
+      #${INPAGE_ROOT_ID} .ja-exp-company {
+        font-size: 13px;
+        font-weight: 500;
+        color: #475569;
+        margin-bottom: 6px;
+      }
+      #${INPAGE_ROOT_ID} .ja-exp-meta {
         font-size: 11px;
-        background: #e2e8f0;
+        color: #94a3b8;
+        margin-bottom: 8px;
+        letter-spacing: 0.02em;
+      }
+      #${INPAGE_ROOT_ID} .ja-exp-bullets {
+        padding-left: 18px;
+        margin: 8px 0 0 0;
         color: #334155;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      #${INPAGE_ROOT_ID} .ja-exp-bullets li { margin: 4px 0; }
+      #${INPAGE_ROOT_ID} .ja-edu-institution {
+        font-size: 14px;
+        font-weight: 600;
+        color: #0f172a;
+        margin-bottom: 4px;
+      }
+      #${INPAGE_ROOT_ID} .ja-edu-degree {
+        font-size: 13px;
+        color: #475569;
+        margin-bottom: 4px;
+      }
+      #${INPAGE_ROOT_ID} .ja-edu-meta {
+        font-size: 11px;
+        color: #94a3b8;
+      }
+      /* Skill chips: professional pill styling with consistent spacing */
+      #${INPAGE_ROOT_ID} .ja-skill-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 2px 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-skill-chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-weight: 500;
+        background: #f1f5f9;
+        color: #334155;
+        border: 1px solid #e2e8f0;
         border-radius: 6px;
+        cursor: default;
+        white-space: nowrap;
+      }
+      #${INPAGE_ROOT_ID} .ja-profile-block-content .ja-skill-chip.ja-copyable:hover {
+        background: #e2e8f0;
+        border-color: #cbd5e1;
       }
       #${INPAGE_ROOT_ID} .ja-link-row {
         display: flex;
@@ -2363,8 +3083,7 @@ function mountInPageUI() {
     <div class="ja-card">
       <div class="ja-head" id="ja-drag-handle">
         <div class="ja-logo-wrap">
-          <div class="ja-logo-icon">H</div>
-          <span class="ja-title">HireMate</span>
+          <img class="ja-logo-icon" src="${chrome.runtime.getURL('logo.png')}" alt="OpsBrain" />
         </div>
         <div class="ja-head-actions">
 
@@ -2389,7 +3108,7 @@ function mountInPageUI() {
         <div class="ja-panel active" id="ja-panel-autofill">
           <div class="ja-signin-cta ja-autofill-box" id="ja-signin-cta" style="display:none">
             <h3>Sign in to autofill</h3>
-            <p>Information is pulled from your HireMate profile</p>
+            <p>Information is pulled from your OpsBrain profile</p>
             <button type="button" class="ja-action ja-signin-to-autofill" id="ja-signin-to-autofill">Log in to apply</button>
           </div>
           <div class="ja-autofill-authenticated" id="ja-autofill-authenticated">
@@ -2403,6 +3122,9 @@ function mountInPageUI() {
             <div class="ja-action-row">
               <button type="button" class="ja-action" id="ja-run">Autofill this page</button>
             </div>
+            <div class="ja-quick-save-row" id="ja-quick-save-row" style="display:none;margin-top:10px;">
+              <button type="button" class="ja-action ja-save-applied" id="ja-save-applied">Save & Mark Applied</button>
+            </div>
             <div class="ja-fill-controls" id="ja-fill-controls">
               <span class="ja-fill-label">Autofilling</span>
               <button type="button" class="ja-stop" id="ja-stop">Stop</button>
@@ -2414,7 +3136,7 @@ function mountInPageUI() {
             </label>
           </div>
           <div class="ja-footer-links">
-            <button type="button" class="ja-footer-link">Save Job Instead</button>
+            <button type="button" class="ja-footer-link" id="ja-save-job-instead">Save Job Instead</button>
             <button type="button" class="ja-footer-link">Get referrals →</button>
           </div>
           <div class="ja-accordions" id="ja-autofill-accordions"></div>
@@ -2424,7 +3146,7 @@ function mountInPageUI() {
         <div class="ja-panel" id="ja-panel-keywords">
           <div class="ja-signin-cta ja-autofill-box" id="ja-signin-cta-keywords" style="display:none">
             <h3>Sign in to view keywords</h3>
-            <p>Information is pulled from your HireMate profile</p>
+            <p>Information is pulled from your OpsBrain profile</p>
             <button type="button" class="ja-action ja-signin-to-autofill">Log in to apply</button>
           </div>
           <div class="ja-keywords-authenticated" id="ja-keywords-authenticated">
@@ -2505,49 +3227,57 @@ function mountInPageUI() {
         <div class="ja-panel" id="ja-panel-profile">
           <div class="ja-signin-cta ja-autofill-box" id="ja-signin-cta-profile" style="display:none">
             <h3>Sign in to view profile</h3>
-            <p>Information is pulled from your HireMate profile</p>
+            <p>Information is pulled from your OpsBrain profile</p>
             <button type="button" class="ja-action ja-signin-to-autofill">Log in to apply</button>
           </div>
           <div class="ja-profile-authenticated" id="ja-profile-authenticated">
-          <div class="ja-profile-cards">
-            <div class="ja-profile-card"><h4>Job Matches</h4><p>Fill out my preferences →</p></div>
-            <div class="ja-profile-card"><h4>Job Tracker</h4><p>Add your first job! →</p></div>
-          </div>
-          <div class="ja-copy-tip">Click any block of text below to copy it! Reference your profile to fill out your application.</div>
-          <div class="ja-profile-main" id="ja-profile-main">
-            <div class="ja-profile-header">
-              <span class="ja-profile-name" id="ja-profile-name">—</span>
-              <div class="ja-profile-header-actions">
-                <button type="button" class="ja-profile-btn" id="ja-profile-refresh" title="Refresh">Refresh</button>
-                <button type="button" class="ja-profile-btn" id="ja-profile-edit" title="Edit">Edit</button>
+            <div class="ja-profile-cards">
+              <div class="ja-profile-card"><h4>Job Matches</h4><p>Fill out my preferences →</p></div>
+              <div class="ja-profile-card"><h4>Job Tracker</h4><p>Add your first job! →</p></div>
+            </div>
+            <div class="ja-copy-tip">Click any block of text below to copy it — handy when filling applications.</div>
+            <div class="ja-profile-main" id="ja-profile-main">
+              <div class="ja-profile-card-container">
+                <div class="ja-profile-header">
+                  <div style="display:flex;align-items:center;gap:12px">
+                    <div class="ja-avatar" id="ja-profile-avatar">—</div>
+                    <div>
+                      <div class="ja-profile-name" id="ja-profile-name">—</div>
+                      <div class="ja-profile-title" id="ja-profile-title"></div>
+                    </div>
+                  </div>
+                  <div class="ja-profile-header-actions">
+                    <button type="button" class="ja-profile-btn" id="ja-profile-refresh" title="Refresh">Refresh</button>
+                    <button type="button" class="ja-profile-btn" id="ja-profile-edit" title="Edit">Edit</button>
+                  </div>
+                </div>
+                <div class="ja-profile-contact" id="ja-profile-contact"></div>
+                <div class="ja-profile-block" id="ja-profile-education-block">
+                  <h4 class="ja-profile-block-title">Education</h4>
+                  <div class="ja-profile-block-content" id="ja-profile-education"></div>
+                </div>
+                <div class="ja-profile-block" id="ja-profile-experience-block">
+                  <h4 class="ja-profile-block-title">Experience</h4>
+                  <div class="ja-profile-block-content" id="ja-profile-experience"></div>
+                </div>
+                <div class="ja-profile-block" id="ja-profile-uploads-block">
+                  <h4 class="ja-profile-block-title">Uploads</h4>
+                  <div class="ja-profile-block-content ja-upload-box-up" id="ja-profile-uploads" ></div>
+                </div>
+                <div class="ja-profile-block" id="ja-profile-links-block">
+                  <h4 class="ja-profile-block-title">Links</h4>
+                  <div class="ja-profile-block-content" id="ja-profile-links"></div>
+                </div>
+                <div class="ja-profile-block" id="ja-profile-skills-block">
+                  <h4 class="ja-profile-block-title">Skills</h4>
+                  <div class="ja-profile-block-content" id="ja-profile-skills"></div>
+                </div>
+                <div class="ja-profile-block" id="ja-profile-languages-block">
+                  <h4 class="ja-profile-block-title">Languages</h4>
+                  <div class="ja-profile-block-content" id="ja-profile-languages" ></div>
+                </div>
               </div>
             </div>
-            <div class="ja-profile-contact" id="ja-profile-contact"></div>
-            <div class="ja-profile-block" id="ja-profile-education-block">
-              <h4 class="ja-profile-block-title">Education</h4>
-              <div class="ja-profile-block-content" id="ja-profile-education"></div>
-            </div>
-            <div class="ja-profile-block" id="ja-profile-experience-block">
-              <h4 class="ja-profile-block-title">Experience</h4>
-              <div class="ja-profile-block-content" id="ja-profile-experience"></div>
-            </div>
-            <div class="ja-profile-block" id="ja-profile-uploads-block">
-              <h4 class="ja-profile-block-title">Uploads</h4>
-              <div class="ja-profile-block-content ja-upload-box-up" id="ja-profile-uploads" ></div>
-            </div>
-            <div class="ja-profile-block" id="ja-profile-links-block">
-              <h4 class="ja-profile-block-title">Links</h4>
-              <div class="ja-profile-block-content" id="ja-profile-links"></div>
-            </div>
-            <div class="ja-profile-block" id="ja-profile-skills-block">
-              <h4 class="ja-profile-block-title">Skills</h4>
-              <div class="ja-profile-block-content" id="ja-profile-skills"></div>
-            </div>
-            <div class="ja-profile-block" id="ja-profile-languages-block">
-              <h4 class="ja-profile-block-title">Languages</h4>
-              <div class="ja-profile-block-content" id="ja-profile-languages" ></div>
-            </div>
-          </div>
           </div>
         </div>
       </div>
@@ -2557,6 +3287,7 @@ function mountInPageUI() {
   document.documentElement.appendChild(root);
 
   updateWidgetAuthUI(root);
+  if (isCareerPage()) trackCareerPageView();
 
   // Render autofill accordions (Resume, Cover Letter, Unique Questions, Common Questions)
   const accordionsContainer = root.querySelector("#ja-autofill-accordions");
@@ -2564,9 +3295,9 @@ function mountInPageUI() {
     renderAccordions(accordionsContainer, [
       { id: "resume", iconBg: "#e9d5ff", iconSvg: ACCORDION_ICONS.document, title: "Resume", showHelpIcon: true },
       { id: "cover-letter", iconBg: "#fed7aa", iconSvg: ACCORDION_ICONS.coverLetter, title: "Cover Letter", statusText: "No Field Found" },
-      { id: "unique-questions", iconBg: "#fef08a", iconSvg: ACCORDION_ICONS.star, title: "Unique Questions", statusText: "Filled (0/6)", statusCheckmark: true },
-      { id: "common-questions", iconBg: "#99f6e4", iconSvg: ACCORDION_ICONS.person, title: "Common Questions", statusText: "Filled (0/9)", statusCheckmark: true },
-    ]);
+      { id: "unique-questions", iconBg: "#fef08a", iconSvg: ACCORDION_ICONS.star, title: "Unique Questions", statusText: "Filled (0/0)", statusCheckmark: true },
+      { id: "common-questions", iconBg: "#99f6e4", iconSvg: ACCORDION_ICONS.person, title: "Common Questions", statusText: "Filled (0/0)", statusCheckmark: true },
+    ], root);
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -2715,12 +3446,24 @@ function mountInPageUI() {
   let skipToNextRequested = false;
 
   const runOneStep = async (stepNum = 1) => {
-    const isWorkday = /workday\.com|myworkdayjobs\.com/i.test(window.location.href);
-    const scope = isWorkday ? "all" : "current_document";
     setStatus(stepNum > 1 ? `Step ${stepNum} — Extracting fields...` : "Extracting form fields...", "loading");
     setProgress(5);
-    const { fields } = scrapeFields({ scope });
-    if (!fields.length) throw new Error("No form fields found");
+    let fields = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        setStatus(`Waiting for form to load... (attempt ${attempt + 1}/3)`, "loading");
+        await new Promise((r) => setTimeout(r, 1500 + attempt * 1000));
+      }
+      const scrapeRes = await chrome.runtime.sendMessage({
+        type: "SCRAPE_ALL_FRAMES",
+        scope: "all",
+      });
+      if (scrapeRes?.ok && scrapeRes.fields?.length) {
+        fields = scrapeRes.fields;
+        break;
+      }
+    }
+    if (!fields.length) throw new Error("No form fields found. Click \"Apply\" on a job to open the application form, then try again.");
 
     setStatus(`Found ${fields.length} fields — loading profile & resume...`, "loading");
     setProgress(15);
@@ -2739,32 +3482,25 @@ function mountInPageUI() {
     setStatus("Preparing to fill...", "loading");
     setProgress(50);
 
-    const values = {};
-    for (const [key, mapping] of Object.entries(mappings)) {
-      values[key] = typeof mapping === "object" && mapping !== null ? mapping.value : mapping;
+    const valuesByFrame = {};
+    for (const field of fields) {
+      const mapData = mappings[String(field.index)] || mappings[field.index];
+      let val = mapData?.value;
+      if ((field.type || "").toLowerCase() === "file" && !val) val = "RESUME_FILE";
+      if (val === undefined || val === null || val === "") continue;
+      const fid = String(field.frameId ?? 0);
+      const localKey = String(field.frameLocalIndex ?? field.index);
+      if (!valuesByFrame[fid]) valuesByFrame[fid] = {};
+      valuesByFrame[fid][localKey] = val;
     }
 
-    const result = await fillWithValues({
-      values,
-      scope,
-      resumeData,
-      shouldAbort: () => abortRequested,
-      shouldSkip: () => {
-        if (skipToNextRequested) {
-          skipToNextRequested = false;
-          return true;
-        }
-        return false;
-      },
-      onProgress: (p) => {
-        if (p?.phase === "filling" && p?.message) {
-          setStatus(p.message, "loading");
-          const fillPct = 50 + Math.round((p.current / p.total) * 45);
-          setProgress(fillPct);
-        }
-      },
+    const fillRes = await chrome.runtime.sendMessage({
+      type: "FILL_ALL_FRAMES",
+      payload: { valuesByFrame, resumeData },
     });
-    return result;
+
+    if (!fillRes?.ok) throw new Error(fillRes?.error || "Fill failed");
+    return { filledCount: fillRes.totalFilled || 0, resumeUploadCount: fillRes.totalResumes || 0, failedCount: 0, failedFields: [] };
   };
 
   const doContinueAndAdvance = async () => {
@@ -2798,6 +3534,13 @@ function mountInPageUI() {
     continueBtn?.style.setProperty("display", "none");
     abortRequested = false;
     skipToNextRequested = false;
+    const saveAppliedBtn = root.querySelector("#ja-save-applied");
+    if (saveAppliedBtn) {
+      saveAppliedBtn.textContent = "Save & Mark Applied";
+      saveAppliedBtn.disabled = false;
+    }
+
+    trackAutofillUsed();
 
     const autoAdvance = root.querySelector("#ja-auto-advance")?.checked;
     const isWorkday = /workday\.com|myworkdayjobs\.com/i.test(window.location.href);
@@ -2836,6 +3579,9 @@ function mountInPageUI() {
         }
         const statusHtml = bullets.length > 0 ? `<ul class="ja-status-bullets">${bullets.map((b) => `<li>${b}</li>`).join("")}</ul>` : "Done";
         setStatus(statusHtml, "success", true);
+
+        const quickSaveRow = root.querySelector("#ja-quick-save-row");
+        if (quickSaveRow) quickSaveRow.style.display = totalFilled > 0 ? "block" : "none";
 
         if (lastFailedFields.length > 0) {
           root.querySelectorAll(".ja-failed-field-link").forEach((btn, idx) => {
@@ -2878,8 +3624,74 @@ function mountInPageUI() {
       runBtn.disabled = false;
       runBtn.style.display = "";
       fillControls?.classList.remove("visible");
+      const qsr = root.querySelector("#ja-quick-save-row");
+      if (qsr) qsr.style.display = "none";
     }
   };
+
+  async function quickSaveAsApplied() {
+    const btn = root.querySelector("#ja-save-applied");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Saving...";
+    }
+    setStatus("Saving to tracker...", "loading");
+    try {
+      const apiBase = await getApiBase();
+      const headers = await getAuthHeaders();
+      const { company, position, location } = extractCompanyAndPosition();
+      const payload = {
+        company: company || "",
+        position_title: position || "",
+        location: location || "",
+        job_posting_url: window.location.href || null,
+        application_status: "saved",
+      };
+      const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setStatus("Saved to tracker.", "success");
+        if (btn) btn.textContent = "Saved!";
+      } else {
+        setStatus("Save failed. Try Save Job Instead.", "error");
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Save & Mark Applied";
+        }
+      }
+    } catch (err) {
+      logWarn("Quick save as applied failed", { error: String(err) });
+      setStatus("Save failed. Try Save Job Instead.", "error");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Save & Mark Applied";
+      }
+    }
+  }
+
+  root.querySelector("#ja-save-applied")?.addEventListener("click", quickSaveAsApplied);
+
+  root.querySelector("#ja-save-job-instead")?.addEventListener("click", async () => {
+    root.querySelectorAll(".ja-tab").forEach((t) => t.classList.remove("active"));
+    root.querySelectorAll(".ja-panel").forEach((p) => p.classList.remove("active"));
+    const kwTab = root.querySelector('[data-tab="keywords"]');
+    const kwPanel = root.querySelector("#ja-panel-keywords");
+    if (kwTab) kwTab.classList.add("active");
+    if (kwPanel) kwPanel.classList.add("active");
+    loadKeywordsIntoPanel(root);
+    const view = root.querySelector("#ja-keywords-view");
+    const formPanel = root.querySelector("#ja-job-form-panel");
+    if (view && formPanel) {
+      view.style.display = "none";
+      formPanel.style.display = "block";
+      await prefillJobForm(root);
+      const statusSelect = root.querySelector("#ja-job-status");
+      if (statusSelect) statusSelect.value = "I have not yet applied";
+    }
+  });
 
   runBtn?.addEventListener("click", () => runFlow(false));
 
@@ -2983,11 +3795,16 @@ function isJobFormPage() {
   const hasApplicationForm = looksLikeJobApplicationForm();
   const bodyText = (document.body?.innerText || document.body?.textContent || "").trim();
   const hasSubstantialContent = bodyText.length >= 400;
-  const urlSuggestsJob = isCareerPage();
-  return (urlSuggestsJob && (hasApplicationForm || hasSubstantialContent)) || (hasApplicationForm && hasSubstantialContent);
+
+  if (hasApplicationForm) return true;
+
+  if (isJobListingPage()) return false;
+
+  return isJobDetailPage() && hasSubstantialContent;
 }
 
 function tryAutoOpenPopup() {
+  if (window.self !== window.top) return;
   if (!isJobFormPage()) return;
   mountInPageUI();
   const widget = document.getElementById(INPAGE_ROOT_ID);

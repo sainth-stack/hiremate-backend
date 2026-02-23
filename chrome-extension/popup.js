@@ -533,6 +533,25 @@ async function fillMappedValuesForTab(tabId, fields, mappings) {
   return { totalFilled, totalResumes };
 }
 
+async function trackAutofillUsed(pageUrl) {
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/track`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        page_url: pageUrl || "",
+        company_name: null,
+        job_url: pageUrl || null,
+        job_title: null,
+      }),
+    });
+  } catch (e) {
+    logWarn("Failed to track autofill", { error: String(e) });
+  }
+}
+
 document.getElementById("process-and-fill").addEventListener("click", async () => {
   const btn = document.getElementById("process-and-fill");
   btn.disabled = true;
@@ -545,34 +564,40 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
     if (!tab?.id) throw new Error("No active tab");
     logInfo("Starting scrape + map flow", { tabId: tab.id, url: tab.url || "" });
 
+    trackAutofillUsed(tab.url || "");
+
     // Kick off context loading in parallel with DOM scraping for lower end-to-end latency.
     const contextPromise = getLLMMappingContext();
 
-    // 1. Scrape all frames and merge.
-    showProgress("Scanning fields", "Collecting input fields across all frames...", true);
-    const scrapeResponses = await sendMessageToAllFrames(tab.id, () => ({
-      type: "SCRAPE_FIELDS",
-      payload: { scope: "current_document" }
-    }));
-    const mergedFields = [];
-    let globalIndex = 0;
-    for (const item of scrapeResponses) {
-      if (!item.ok || !item.res?.ok) continue;
-      const frameFields = item.res.fields || [];
-      for (const field of frameFields) {
-        mergedFields.push({
-          ...field,
-          index: globalIndex,
-          frameId: item.frameId,
-          frameLocalIndex: field.index,
-          domId: field.id || null,
-        });
-        globalIndex += 1;
+    // 1. Scrape all frames and merge (retry for JS-rendered forms).
+    let fields = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      showProgress("Scanning fields", attempt > 0 ? `Waiting for form... (attempt ${attempt + 1}/3)` : "Collecting input fields across all frames...", true);
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 + attempt * 800));
+      const scrapeResponses = await sendMessageToAllFrames(tab.id, () => ({
+        type: "SCRAPE_FIELDS",
+        payload: { scope: "all" }
+      }));
+      const mergedFields = [];
+      let globalIndex = 0;
+      for (const item of scrapeResponses) {
+        if (!item.ok || !item.res?.ok) continue;
+        const frameFields = item.res.fields || [];
+        for (const field of frameFields) {
+          mergedFields.push({
+            ...field,
+            index: globalIndex,
+            frameId: item.frameId,
+            frameLocalIndex: field.index,
+            domId: field.id || null,
+          });
+          globalIndex += 1;
+        }
       }
+      fields = mergedFields;
+      if (fields.length > 0) break;
     }
-
-    const fields = mergedFields;
-    if (fields.length === 0) throw new Error("No fields found");
+    if (fields.length === 0) throw new Error("No form fields found. Click \"Apply\" on a job to open the application form, then try again.");
     logInfo("DOM scrape response received", {
       fieldCount: fields.length,
       requiredFields: fields.filter((f) => !!f.required).length,

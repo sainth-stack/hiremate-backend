@@ -176,6 +176,148 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === "GET_ALL_FRAMES_HTML") {
+    (async () => {
+      try {
+        const tabId = sender.tab?.id;
+        if (!tabId) {
+          sendResponse({ ok: false, html: null, error: "No tab" });
+          return;
+        }
+        const results = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          func: () => {
+            try {
+              const el = document.documentElement || document.body;
+              return el ? (el.outerHTML || el.innerHTML || "").slice(0, 1500000) : "";
+            } catch {
+              return "";
+            }
+          },
+        });
+        const htmls = (results || [])
+          .map((r) => (r.result && typeof r.result === "string" ? r.result : ""))
+          .filter((h) => h && h.length > 200);
+        const combined = htmls.length ? htmls.join("\n<!--FRAME_SEP-->\n") : null;
+        sendResponse({ ok: true, html: combined });
+      } catch (err) {
+        sendResponse({ ok: false, html: null, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "SCRAPE_ALL_FRAMES") {
+    (async () => {
+      try {
+        const tabId = msg.tabId ?? sender.tab?.id;
+        if (!tabId) {
+          sendResponse({ ok: false, fields: [], error: "No tab" });
+          return;
+        }
+        const scope = msg.scope || "all";
+        let frameIds = [0];
+        try {
+          const frames = await chrome.webNavigation.getAllFrames({ tabId });
+          frameIds = (frames || []).map((f) => f.frameId).filter((id) => id != null);
+          if (!frameIds.length) frameIds = [0];
+          frameIds = [...new Set(frameIds)];
+        } catch (_) {}
+
+        const results = [];
+        for (const frameId of frameIds) {
+          try {
+            let res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload: { scope } }, { frameId });
+            results.push({ frameId, ok: true, res });
+          } catch (e) {
+            if (e?.message?.includes("Receiving end does not exist")) {
+              try {
+                await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content.js"] });
+                const res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload: { scope } }, { frameId });
+                results.push({ frameId, ok: true, res });
+              } catch (e2) {
+                results.push({ frameId, ok: false, err: String(e2) });
+              }
+            } else {
+              results.push({ frameId, ok: false, err: String(e) });
+            }
+          }
+        }
+
+        const mergedFields = [];
+        let idx = 0;
+        for (const r of results) {
+          if (!r.ok || !r.res?.fields?.length) continue;
+          for (const f of r.res.fields) {
+            mergedFields.push({ ...f, index: idx, frameId: r.frameId, frameLocalIndex: f.index, domId: f.id || null });
+            idx += 1;
+          }
+        }
+        sendResponse({ ok: true, fields: mergedFields });
+      } catch (err) {
+        logInfo("SCRAPE_ALL_FRAMES error", err);
+        sendResponse({ ok: false, fields: [], error: String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "FILL_ALL_FRAMES") {
+    (async () => {
+      try {
+        const { tabId: msgTabId, valuesByFrame, resumeData } = msg.payload || {};
+        const tabId = msgTabId ?? sender?.tab?.id;
+        if (!tabId || !valuesByFrame) {
+          sendResponse({ ok: false, totalFilled: 0, totalResumes: 0, error: "Missing tabId or valuesByFrame" });
+          return;
+        }
+        let frameIds = Object.keys(valuesByFrame);
+        if (!frameIds.length) {
+          try {
+            const frames = await chrome.webNavigation.getAllFrames({ tabId });
+            frameIds = (frames || []).map((f) => String(f.frameId)).filter(Boolean);
+            if (!frameIds.length) frameIds = ["0"];
+          } catch (_) {
+            frameIds = ["0"];
+          }
+        }
+        let totalFilled = 0;
+        let totalResumes = 0;
+        for (const fid of frameIds) {
+          try {
+            const vals = valuesByFrame[fid] || {};
+            let res = await chrome.tabs.sendMessage(tabId, {
+              type: "FILL_WITH_VALUES",
+              payload: { values: vals, resumeData, scope: "current_document" }
+            }, { frameId: parseInt(fid, 10) || 0 });
+            if (res?.ok) {
+              totalFilled += res.filledCount || 0;
+              totalResumes += res.resumeUploadCount || 0;
+            }
+          } catch (e) {
+            if (e?.message?.includes("Receiving end does not exist")) {
+              try {
+                await chrome.scripting.executeScript({ target: { tabId, frameIds: [parseInt(fid, 10) || 0] }, files: ["content.js"] });
+                const res = await chrome.tabs.sendMessage(tabId, {
+                  type: "FILL_WITH_VALUES",
+                  payload: { values: valuesByFrame[fid] || {}, resumeData, scope: "current_document" }
+                }, { frameId: parseInt(fid, 10) || 0 });
+                if (res?.ok) {
+                  totalFilled += res.filledCount || 0;
+                  totalResumes += res.resumeUploadCount || 0;
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        sendResponse({ ok: true, totalFilled, totalResumes });
+      } catch (err) {
+        sendResponse({ ok: false, totalFilled: 0, totalResumes: 0, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
   if (msg.type === "GET_RESUME") {
     getResume()
       .then((row) => {
