@@ -21,8 +21,6 @@ _OPENAI_CLIENT: OpenAI | None = None
 
 # Two-tier cache: extraction by JD (skip LLM on same JD), full result by (JD, resume)
 _extraction_cache: dict[str, tuple[float, dict]] = {}
-_EXTRACTION_TTL = 1800
-_EXTRACTION_MAX = 500
 
 # Tech aliases for match accuracy (resume may say "React.js", JD says "React")
 _ALIASES: dict[str, list[str]] = {
@@ -140,13 +138,13 @@ def _extract_keywords(job_description: str) -> dict[str, list[str]]:
     now = time.time()
     if jd_key in _extraction_cache:
         ts, val = _extraction_cache[jd_key]
-        if now - ts < _EXTRACTION_TTL:
+        if now - ts < settings.keyword_extraction_ttl:
             logger.debug("Keyword extraction cache hit (same JD)")
             return val
         del _extraction_cache[jd_key]
 
     result = _extract_keywords_llm(job_description)
-    while len(_extraction_cache) >= _EXTRACTION_MAX and _extraction_cache:
+    while len(_extraction_cache) >= settings.keyword_extraction_max_entries and _extraction_cache:
         oldest = min(_extraction_cache.items(), key=lambda x: x[1][0])[0]
         del _extraction_cache[oldest]
     _extraction_cache[jd_key] = (now, result)

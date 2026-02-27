@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LinkedIn Easy Apply Style (Simulated)</title>
+  <style>
+    body { font-family: -apple-system, system-ui; max-width: 500px; margin: 2rem auto; padding: 0 1rem; }
+    .jobs-resume-upload__form { margin-bottom: 1rem; }
+    .jobs-resume-upload__label { display: block; margin-bottom: 0.5rem; }
+    input, select, textarea { width: 100%; padding: 10px; }
+    .artdeco-form-input { border: 1px solid #e0e0e0; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Easy Apply - Frontend Developer (Simulated LinkedIn)</h1>
+  <form class="jobs-easy-apply-form" action="#" method="post">
+    <div class="jobs-resume-upload__form">
+      <label class="jobs-resume-upload__label">Resume *</label>
+      <input type="file" class="artdeco-form-input" name="resume" id="resume-upload" accept=".pdf,.doc,.docx" required>
+    </div>
+    <div class="jobs-resume-upload__form">
+      <label class="jobs-resume-upload__label">First name *</label>
+      <input type="text" class="artdeco-form-input" name="firstName" required>
+    </div>
+    <div class="jobs-resume-upload__form">
+      <label class="jobs-resume-upload__label">Last name *</label>
+      <input type="text" class="artdeco-form-input" name="lastName" required>
+    </div>
+    <div class="jobs-resume-upload__form">
+      <label class="jobs-resume-upload__label">Email *</label>
+      <input type="email" class="artdeco-form-input" name="email" required>
+    </div>
+    <div class="jobs-resume-upload__form">
+      <label class="jobs-resume-upload__label">Phone</label>
+      <input type="tel" class="artdeco-form-input" name="phone">
+    </div>
+    <div class="jobs-resume-upload__form">
+      <label class="jobs-resume-upload__label">Country *</label>
+      <select class="artdeco-form-input" name="country" required>
+        <option value="">Select country</option>
+        <option value="US">United States</option>
+        <option value="IN">India</option>
+      </select>
+    </div>
+    <div class="jobs-resume-upload__form">
+      <label class="jobs-resume-upload__label">City</label>
+      <input type="text" class="artdeco-form-input" name="city">
+    </div>
+    <button type="submit" class="artdeco-button">Submit</button>
+  </form>
+  <script>
+    window.runScraperTest = function() {
+      return new Promise(function(resolve) {
+        document.addEventListener("scraper-test-response", function onResp(e) {
+          document.removeEventListener("scraper-test-response", onResp);
+          resolve(e.detail);
+        }, { once: true });
+        document.dispatchEvent(new CustomEvent("scraper-test-request"));
+      });
+    };
+  </script>
+</body>
+</html>

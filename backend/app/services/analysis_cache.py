@@ -11,10 +11,9 @@ import time
 from collections import OrderedDict
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
+from backend.app.core.config import settings
 
-TTL_SECONDS = 1800  # 30 min - analysis (jd, resume) pairs rarely change
-MAX_ENTRIES = 1000
+logger = logging.getLogger(__name__)
 
 _cache: OrderedDict[str, tuple[dict[str, Any], float]] = OrderedDict()
 _lock = threading.Lock()
@@ -36,9 +35,9 @@ def get(key: str) -> Optional[dict[str, Any]]:
 def set(key: str, value: dict[str, Any]) -> None:
     """Cache analysis result with TTL. Evicts LRU when at capacity."""
     with _lock:
-        while len(_cache) >= MAX_ENTRIES and _cache:
+        while len(_cache) >= settings.analysis_cache_max_entries and _cache:
             _cache.popitem(last=False)
-        _cache[key] = (value, time.time() + TTL_SECONDS)
+        _cache[key] = (value, time.time() + settings.analysis_cache_ttl)
         _cache.move_to_end(key)
     logger.debug("Analysis cached key=%s entries=%d", key[:16], len(_cache))
 

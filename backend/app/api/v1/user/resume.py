@@ -41,18 +41,20 @@ class GenerateResumeIn(BaseModel):
     job_description: str = ""
 
 
-@router.get("/tailor-context")
-def get_tailor_context(
+@router.get("/workspace")
+def get_resume_workspace(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> dict:
     """
-    Fetch and clear stored tailor context from extension (JD + title).
-    Used when opening resume-generator via "Tailor Resume" on a job page.
+    Merged: resume list + tailor context (fetch-and-clear).
     """
-    ctx = get_and_clear_tailor_context(current_user.id)
-    if not ctx:
-        return {}
-    return ctx
+    resumes = list_resumes_svc(db, current_user)
+    tailor_context = get_and_clear_tailor_context(current_user.id)
+    return {
+        "resumes": resumes,
+        "tailor_context": tailor_context,
+    }
 
 
 @router.post("/generate")
@@ -103,7 +105,7 @@ def get_resume_file(
 
     if resume_url.startswith("http://") or resume_url.startswith("https://"):
         try:
-            with urlopen(resume_url, timeout=30) as resp:
+            with urlopen(resume_url, timeout=settings.http_request_timeout) as resp:
                 data = resp.read()
             logger.info("Proxied resume from S3 user_id=%s resume_id=%s bytes=%d", current_user.id, resume_id, len(data))
             return Response(
@@ -122,15 +124,6 @@ def get_resume_file(
     if not resume_path.exists():
         raise HTTPException(status_code=404, detail="Resume file not found")
     return FileResponse(resume_path, media_type="application/pdf", filename=filename)
-
-
-@router.get("")
-def list_resumes(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """List user's resumes. Single source - used by frontend and extension."""
-    return list_resumes_svc(db, current_user)
 
 
 @router.patch("/{resume_id}")
@@ -375,6 +368,9 @@ async def upload_resume(
     except Exception as e:
         logger.warning("Failed to add resume to user_resumes: %s", e)
         db.rollback()
+
+    from backend.app.utils import cache
+    await cache.delete(f"autofill_ctx:{current_user.id}")
 
     logger.info(
         "Resume uploaded and profile created/updated successfully user_id=%s filename=%s",

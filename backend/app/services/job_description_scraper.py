@@ -17,10 +17,9 @@ from typing import Any, Optional
 
 from bs4 import BeautifulSoup
 
-logger = logging.getLogger(__name__)
+from backend.app.core.config import FRAME_SEP, MAX_HTML_BYTES
 
-FRAME_SEP = "<!--FRAME_SEP-->"
-MAX_HTML_BYTES = 2_000_000
+logger = logging.getLogger(__name__)
 
 SELECTORS = [
     # Workday

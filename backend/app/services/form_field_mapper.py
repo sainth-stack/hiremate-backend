@@ -15,34 +15,7 @@ from backend.app.services.field_normalization import FieldNormalizationService
 
 logger = logging.getLogger(__name__)
 _OPENAI_CLIENT: OpenAI | None = None
-_CACHE_TTL_SECONDS = 300
-_CACHE_MAX_ENTRIES = 64
 _MAP_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-
-ALIAS_MAP: dict[str, list[str]] = {
-    "firstName": ["first name", "given name", "fname", "first"],
-    "lastName": ["last name", "family name", "surname", "lname", "last"],
-    "name": ["full name", "candidate name", "legal name"],
-    "email": ["email", "e-mail"],
-    "phone": ["phone", "mobile", "cell", "telephone", "contact number"],
-    "linkedin": ["linkedin", "linkedin url", "linkedin profile"],
-    "github": ["github", "github url", "github profile"],
-    "portfolio": ["portfolio", "portfolio url", "website", "personal site"],
-    "location": ["location", "current location", "city"],
-    "company": ["company name", "current company", "company", "employer"],
-    "title": ["job title", "title", "position", "current title"],
-    "totalExperience": ["total experience", "years of experience", "experience years", "years experience"],
-    "skills": ["skills", "technical skills", "technologies"],
-    "experience": ["experience", "work experience", "employment", "summary"],
-    "education": ["education", "degree", "university", "college", "school"],
-    "coverLetter": ["cover letter"],
-    "workAuthorization": ["authorized to work", "work authorization"],
-    "requiresSponsorship": ["sponsorship", "visa sponsorship"],
-    "salaryExpectation": ["salary expectation", "salary", "compensation"],
-    "startDate": ["start date", "when can you start", "notice period"],
-    "dateOfBirth": ["date of birth", "dob", "birth date", "birthday"],
-    "gender": ["gender", "sex"],
-}
 
 MAP_PROMPT = """You are an expert job application autofill assistant with natural language generation capabilities.
 
@@ -53,8 +26,9 @@ Task:
 **FIELD-SPECIFIC RULES:**
 
 1. **NUMERIC FIELDS (years of experience, age, etc.):**
-   - Extract ONLY the number from experience data
-   - "Total Experience (in years)" → Return just the number like "3" NOT "3+ years" or text
+   - Extract ONLY the number from experience data. NEVER return job descriptions or experience paragraphs.
+   - "Total Years of Experience" / "Years of Experience" → Return just the number like "2" or "3" (calculate from experience dates)
+   - NEVER use profile.experience text for this field - only a single number
    - If experience says "3+ years" or "3 years", return just "3"
    - If it says "5-7 years", return "6" (midpoint)
 
@@ -83,17 +57,37 @@ Task:
    - "Last Name" → Use profile.lastName ONLY, or last word of profile.name. NEVER use full name.
    - Example: name="Sainath Reddy Guraka" → First="Sainath Reddy", Last="Guraka"
 
-6. **FIELD-SPECIFIC (never cross-map):**
-   - "Phone" / "mobile" / "cell" → Use profile.phone ONLY. Never put phone in Company/Title.
-   - "Company name" / "employer" → Use profile.company ONLY. Never put phone number here.
-   - "Title" / "job title" → Use profile.title ONLY. Never use RESUME_FILE or file tokens.
-   - RESUME_FILE token → ONLY for resume/CV file upload fields, never for text fields.
+6. **FIELD-SPECIFIC (CRITICAL - never cross-map):**
+   - RESUME_FILE → For input type="file" fields labeled Resume/CV/Attach, ALWAYS return RESUME_FILE (client attaches the file). For cover letter file fields, return RESUME_FILE if no cover letter, else null. NEVER use RESUME_FILE for School, Degree, Year, LinkedIn, or any text/select field.
+   - "School" / "University" / "College" / "Institution" → Use profile.education school name ONLY. NEVER phone, RESUME_FILE, degree text.
+   - "Degree" / "Qualification" → Use degree from education (e.g. "B.Tech", "Bachelor's") ONLY. NEVER RESUME_FILE or phone.
+   - "LinkedIn" / "LinkedIn Profile" / "LinkedIn URL" → Use profile.linkedin URL ONLY. NEVER education or experience text.
+   - "Phone" / "mobile" / "cell" → Use profile.phone ONLY. Never put phone in School, Degree, Company, Title.
+   - "Company name" / "employer" → Use profile.company for first block. For selector/domId ending in -1 use experiences[1].companyName, -2 use experiences[2], etc.
+   - "Title" / "job title" → Same pattern: -0 = profile.title or experiences[0].jobTitle, -1 = experiences[1].jobTitle, -2 = experiences[2].jobTitle.
+   - "Start date year" / "year" / "graduation year" / "start year" → Return ONLY a 4-digit year like "2025". NEVER RESUME_FILE or education paragraph.
+   - "Start date month" / "Start month" → Return month only: "January", "Jan", or "01" depending on options. NEVER a year like "2026".
+   - "Current role" (checkbox) → Return "Yes" if most recent job has endDate "Present"/"Current", else "No".
+   - "End date month" / "End date year" when current role is ongoing (Present): Use CURRENT month and CURRENT year (e.g. "January", "2025"). Required fields must have values.
+   - "Country" → Return country name (e.g. "India"). For dropdowns with "Country+code" format, the system will match "India+91".
+   - For ANY dropdown/select: Return EXACTLY one option from the options array. NEVER return a value not in the options list. When options exist, pick the best match from profile/candidate data.
+   - "Are you currently a [company] employee?" / "Have you previously worked at [company]?" / "Do you know anyone at [company]?" → Return exactly "Yes" or "No". NEVER education, experience, or long text.
+   - Match EACH field by its LABEL and INDEX. Index N must map to the value for field at position N in the fields array.
 
 7. **SIMPLE FIELDS (email, dates):**
    - Use exact profile values
    - For date fields: Format as YYYY-MM-DD or match dropdown (e.g. "Jan", "2025")
 
-8. **GENERAL:**
+8. **YES/NO DEFAULTS (when no explicit info in profile):**
+   - Visa/sponsorship, work authorization, relocation, notice period (as Yes/No): Use "No" when absent from profile
+   - Language fluency (e.g. Mandarin, other languages): Use "No" when absent
+   - These are reasonable defaults for unspecified candidate info
+
+9. **REPEATING BLOCKS (CRITICAL):**
+   - Employment: Block -0 = experiences[0], -1 = experiences[1], etc. Map ALL employment blocks from profile.experiences.
+   - Education: Block -0 = educations[0], -1 = educations[1], etc. ONLY map blocks where profile.educations[N] exists. If user has 1 education, fill block 0 only; leave blocks 1, 2, etc. as null.
+
+10. **GENERAL:**
    - Never hallucinate hard facts (company names, degree names, years) that are absent from data
    - For optional fields with weak evidence, return null
    - Make all responses natural, professional, and tailored to the field label/context
@@ -111,7 +105,7 @@ Output JSON format (use "index" as the key):
   }}
 }}
 
-IMPORTANT: Use the field's "index" value as the mapping key (e.g., "0", "1", "2"), NOT the field name or id.
+CRITICAL: Map by INDEX. Field at index 0 gets mappings["0"], index 1 gets mappings["1"], etc. The index is the array position. Do NOT swap values between fields. School gets school name, Degree gets degree, LinkedIn gets URL, Year gets year.
 
 Confidence rules:
 - 0.95-1.0 for exact profile/custom-answer matches
@@ -134,22 +128,118 @@ def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", str(value or "").lower())).strip()
 
 
-def _get_first_name(profile: dict[str, Any]) -> str | None:
-    if profile.get("firstName"):
-        return str(profile["firstName"]).strip()
-    name = profile.get("name") or ""
-    parts = str(name).strip().split()
-    if len(parts) >= 2:
-        return " ".join(parts[:-1])
-    return parts[0] if parts else None
+# Common country → "CountryName +Code" for intl-tel-input / country dropdowns when options are truncated
+_COUNTRY_OPTION_FALLBACK: dict[str, str] = {
+    "india": "India +91",
+    "united states": "United States +1",
+    "us": "United States +1",
+    "usa": "United States +1",
+    "united kingdom": "United Kingdom +44",
+    "uk": "United Kingdom +44",
+    "canada": "Canada +1",
+    "australia": "Australia +61",
+    "germany": "Germany +49",
+    "france": "France +33",
+    "japan": "Japan +81",
+    "china": "China +86",
+    "brazil": "Brazil +55",
+    "mexico": "Mexico +52",
+    "spain": "Spain +34",
+    "italy": "Italy +39",
+    "netherlands": "Netherlands +31",
+    "south korea": "South Korea +82",
+    "indonesia": "Indonesia +62",
+    "russia": "Russia +7",
+    "saudi arabia": "Saudi Arabia +966",
+    "uae": "United Arab Emirates +971",
+    "united arab emirates": "United Arab Emirates +971",
+    "singapore": "Singapore +65",
+    "malaysia": "Malaysia +60",
+    "philippines": "Philippines +63",
+    "pakistan": "Pakistan +92",
+    "bangladesh": "Bangladesh +880",
+    "south africa": "South Africa +27",
+    "nigeria": "Nigeria +234",
+    "egypt": "Egypt +20",
+    "ireland": "Ireland +353",
+    "new zealand": "New Zealand +64",
+    "sweden": "Sweden +46",
+    "poland": "Poland +48",
+    "switzerland": "Switzerland +41",
+    "belgium": "Belgium +32",
+    "austria": "Austria +43",
+}
 
 
-def _get_last_name(profile: dict[str, Any]) -> str | None:
-    if profile.get("lastName"):
-        return str(profile["lastName"]).strip()
-    name = profile.get("name") or ""
-    parts = str(name).strip().split()
-    return parts[-1] if parts else None
+def _calculate_years_experience(profile: dict[str, Any]) -> str | None:
+    """Calculate total years of experience from profile.experiences or experience text."""
+    # First try explicit totalExperience
+    total = profile.get("totalExperience") or profile.get("yearsExperience")
+    if total is not None:
+        match = re.search(r"(\d+)", str(total))
+        if match:
+            return match.group(1)
+
+    experiences = profile.get("experiences") or []
+    if not experiences:
+        # Fallback: parse from experience text (e.g. "3+ years" or "Jan 2025-Present")
+        exp_text = profile.get("experience") or ""
+        match = re.search(r"(\d+)\+?\s*(?:years?|yrs?)?", exp_text, re.I)
+        if match:
+            return match.group(1)
+        # Try to infer from date ranges in text
+        year_matches = re.findall(r"\b(19|20)\d{2}\b", exp_text)
+        if year_matches:
+            years_sorted = sorted(int(y) for y in year_matches)
+            return str(max(1, datetime.now().year - years_sorted[0]))
+        return None
+
+    total_months = 0
+    for exp in experiences:
+        start_str = (exp.get("startDate") or exp.get("start_year") or "").strip()
+        end_str = (exp.get("endDate") or exp.get("end_year") or "present").strip().lower()
+        if not start_str:
+            continue
+        try:
+            start_year = _parse_year_from_date(start_str)
+            if start_year is None:
+                continue
+            if end_str in ("present", "current", "now", ""):
+                end_year = datetime.now().year
+                end_month = datetime.now().month
+            else:
+                end_year = _parse_year_from_date(end_str)
+                end_month = 6
+                if end_year is None:
+                    end_year = start_year + 1
+            start_month = _parse_month_from_date(start_str) or 1
+            total_months += max(0, (end_year - start_year) * 12 + (end_month - start_month))
+        except (TypeError, ValueError):
+            continue
+    if total_months > 0:
+        years = max(1, round(total_months / 12))
+        return str(years)
+    return None
+
+
+def _parse_year_from_date(s: str) -> int | None:
+    """Extract 4-digit year from date string like 'Jan 2025', '2025', '04/2023'."""
+    if not s:
+        return None
+    match = re.search(r"\b(19|20)\d{2}\b", str(s))
+    return int(match.group(0)) if match else None
+
+
+def _parse_month_from_date(s: str) -> int | None:
+    """Extract month (1-12) from date string like 'Jan 2025', 'January 2025'."""
+    if not s:
+        return None
+    months = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+              "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+    for name, num in months.items():
+        if name in str(s).lower():
+            return num
+    return None
 
 
 def _field_key(field: dict[str, Any]) -> str:
@@ -196,178 +286,304 @@ def _cache_get(cache_key: str) -> dict[str, Any] | None:
     if not cached:
         return None
     cached_at, mappings = cached
-    if (time.time() - cached_at) > _CACHE_TTL_SECONDS:
+    if (time.time() - cached_at) > settings.form_field_cache_ttl:
         _MAP_CACHE.pop(cache_key, None)
         return None
     return mappings
 
 
 def _cache_put(cache_key: str, mappings: dict[str, Any]) -> None:
-    if len(_MAP_CACHE) >= _CACHE_MAX_ENTRIES:
+    if len(_MAP_CACHE) >= settings.form_field_cache_max_entries:
         oldest_key = min(_MAP_CACHE.items(), key=lambda item: item[1][0])[0]
         _MAP_CACHE.pop(oldest_key, None)
     _MAP_CACHE[cache_key] = (time.time(), mappings)
 
 
-def _format_date(date_str: str, field_type: str = "") -> str | None:
-    """Format date string to appropriate format based on field type."""
-    if not date_str:
-        return None
-    date_str = str(date_str).strip()
-    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
-        try:
-            dt = datetime.strptime(date_str, '%Y-%m-%d')
-            if field_type == "date":
-                return dt.strftime('%Y-%m-%d')
-            elif "mm" in field_type.lower() or "dd" in field_type.lower():
-                return dt.strftime('%m/%d/%Y')
-            return dt.strftime('%Y-%m-%d')
-        except ValueError:
-            pass
-    for pattern, fmt in [
-        (r'^(\d{2})[/-](\d{2})[/-](\d{4})$', '%d/%m/%Y'),
-        (r'^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$', '%d/%m/%Y'),
-    ]:
-        match = re.match(pattern, date_str)
-        if match:
-            try:
-                dt = datetime.strptime(date_str.replace('-', '/'), fmt)
-                if field_type == "date":
-                    return dt.strftime('%Y-%m-%d')
-                return dt.strftime('%d/%m/%Y')
-            except ValueError:
-                continue
-    return date_str
+def _empty_mapping(key: str) -> dict[str, Any]:
+    """Return empty mapping for a field."""
+    return {"value": None, "confidence": 0.5, "reason": "No mapping"}
 
 
-def _fallback_map(
-    fields: list[dict[str, Any]],
-    profile: dict[str, Any],
-    custom_answers: dict[str, str],
-) -> dict[str, Any]:
-    mappings: dict[str, Any] = {}
-    normalized_custom = {_norm(k): v for k, v in (custom_answers or {}).items() if v}
-
-    for field in fields:
-        key = _field_key(field)
-        field_text = _combined_field_text(field)
-        value: Any = None
-        reason = "No reliable local match"
-        confidence = 0.35
-
-        if str(field.get("type", "")).lower() == "file" or "resume" in field_text or "cv" in field_text:
-            mappings[key] = {
-                "value": "RESUME_FILE",
-                "confidence": 0.99,
-                "reason": "Resume file field mapped to auto-upload token",
-            }
-            continue
-
-        for question, answer in normalized_custom.items():
-            if not question:
-                continue
-            if question in field_text or field_text in question:
-                value = answer
-                reason = "Matched saved custom answer"
-                confidence = 0.95
-                break
-
-        if value is None:
-            for profile_key, aliases in ALIAS_MAP.items():
-                if profile_key == "firstName":
-                    profile_val = _get_first_name(profile)
-                elif profile_key == "lastName":
-                    profile_val = _get_last_name(profile)
-                elif profile_key == "totalExperience":
-                    profile_val = profile.get(profile_key)
-                    if not profile_val and profile.get("experience"):
-                        match = re.search(r"(\d+)\+?\s*(?:years?|yrs?)", str(profile.get("experience", "")), re.I)
-                        profile_val = match.group(1) if match else None
-                else:
-                    profile_val = profile.get(profile_key)
-                if not profile_val:
-                    continue
-                if any(_norm(alias) in field_text for alias in aliases):
-                    if profile_key == "dateOfBirth" or "dob" in field_text or "birth" in field_text:
-                        formatted_date = _format_date(str(profile_val), field.get("type", ""))
-                        if formatted_date:
-                            value = formatted_date
-                            reason = f"Matched and formatted profile.{profile_key}"
-                            confidence = 0.92
-                            break
-                    if profile_key == "totalExperience" and isinstance(profile_val, str):
-                        num_match = re.search(r"\d+", profile_val)
-                        value = num_match.group(0) if num_match else str(profile_val)
-                    else:
-                        value = str(profile_val)
-                    reason = f"Matched profile.{profile_key}"
-                    confidence = 0.9
-                    break
-
-        mappings[key] = {"value": value, "confidence": confidence, "reason": reason}
-
-    return mappings
-
-
-def _requires_llm(field: dict[str, Any], fallback_value: dict[str, Any]) -> bool:
-    field_type = str(field.get("type", "")).lower()
-    field_text = _combined_field_text(field)
-    confidence = float(fallback_value.get("confidence", 0.0) or 0.0)
-    value = fallback_value.get("value")
-    if field_type in {"textarea"}:
-        return True
-    if any(keyword in field_text for keyword in ("cover letter", "why ", "describe", "summary", "explain")):
-        return True
-    if value not in (None, "") and confidence >= 0.9:
+def _is_education_like(value: str) -> bool:
+    """Detect if value looks like education text (B.Tech, degree, university, etc.)."""
+    if not value:
         return False
-    if field.get("required") and confidence < 0.85:
+    v = str(value).lower()
+    edu_keywords = ("b.tech", "btech", "m.tech", "mtech", "bachelor", "degree", "university", "college", "engineering", "computer science", "aug ", "apr ")
+    if any(kw in v for kw in edu_keywords):
         return True
-    return confidence < 0.75
+    if len(v.strip()) >= 20 and any(kw in v for kw in ("in ", " and ", "from ")):
+        return True
+    return False
 
 
-def _clean_field_value(field: dict[str, Any], mapping: dict[str, Any]) -> dict[str, Any]:
+def _is_year_only_field(field_label: str, field_text: str) -> bool:
+    """Detect if field expects only a year (e.g. Start date year)."""
+    lbl = field_label.lower()
+    txt = field_text.lower()
+    return "year" in lbl or "year" in txt or ("start" in lbl and "date" in lbl) or ("date" in lbl and "start" in txt)
+
+
+def _is_yes_no_employee_question(field_label: str, field_text: str) -> bool:
+    """Detect company-specific yes/no questions (employee, worked at, etc.)."""
+    combined = (field_label + " " + field_text).lower()
+    return (
+        "are you currently" in combined or "are you a " in combined or "currently a " in combined
+        or "previously worked" in combined or "worked at" in combined or "have you previously" in combined
+        or "do you know anyone" in combined or "know anyone at" in combined
+        or "employee?" in combined or "if \"yes\"" in combined or "if \"no\"" in combined
+    )
+
+
+def _is_school_or_degree_field(field_label: str, field_text: str) -> bool:
+    """Detect School/University/Degree fields - must receive education data only."""
+    combined = (field_label + " " + field_text).lower()
+    school_kw = "school" in combined or "university" in combined or "college" in combined or "institution" in combined
+    degree_kw = "degree" in combined or "qualification" in combined
+    return school_kw or degree_kw
+
+
+def _is_linkedin_field(field_label: str, field_text: str) -> bool:
+    """Detect LinkedIn URL field - must receive URL only, not education/experience."""
+    combined = (field_label + " " + field_text).lower()
+    return "linkedin" in combined and ("url" in combined or "profile" in combined or "link" in combined)
+
+
+def _looks_like_phone(value: str) -> bool:
+    """Value is likely a phone number (e.g. 9676688586)."""
+    s = re.sub(r"[\s\-\(\)\.]", "", str(value or ""))
+    return len(s) >= 9 and s.isdigit()
+
+
+def _looks_like_email(value: str) -> bool:
+    """Value looks like an email address."""
+    s = str(value or "").strip()
+    return "@" in s and "." in s and len(s) > 5
+
+
+def _looks_like_name(value: str) -> bool:
+    """Value looks like a person name (not a number, not email)."""
+    s = str(value or "").strip()
+    if not s or len(s) > 80:
+        return False
+    if _looks_like_phone(s) or _looks_like_email(s) or s.isdigit():
+        return False
+    # Names typically have letters and maybe spaces
+    return bool(re.match(r"^[a-zA-Z\s\-\.]+$", s))
+
+
+def _looks_like_location(value: str) -> bool:
+    """Value looks like location (city, country, address)."""
+    s = str(value or "").strip().lower()
+    if "," in s and any(kw in s for kw in ("india", "usa", "uk", "city", "bangalore", "london")):
+        return True
+    return "(" in s and "+" in s  # e.g. "India (+91)"
+
+
+def _clean_field_value(
+    field: dict[str, Any],
+    mapping: dict[str, Any],
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     value = mapping.get("value")
     if value is None or value == "":
         return mapping
     field_label = str(field.get("label", "")).lower()
     field_type = str(field.get("type", "")).lower()
     field_text = _norm(" ".join([str(field.get(k, "")) for k in ("label", "name", "placeholder")]))
+    value_str = str(value).strip()
 
     if value == "RESUME_FILE" and field_type != "file" and "resume" not in field_text and "cv" not in field_text:
         return {"value": None, "confidence": 0.0, "reason": "RESUME_FILE only for file upload fields"}
+    # Email: reject Yes/No and non-email values
+    if ("email" in field_text or "e-mail" in field_text) and value not in (None, "", "RESUME_FILE"):
+        if str(value).strip().lower() in ("yes", "no"):
+            return {"value": None, "confidence": 0.0, "reason": "Email field must not receive Yes/No"}
+        if not _looks_like_email(value_str) and len(value_str) > 3:
+            return {"value": None, "confidence": 0.0, "reason": "Email field received non-email value"}
+    # Phone country code vs full number: country code dropdown gets "Country +N", number field gets digits only
+    field_sel = str(field.get("selector") or field.get("domId") or "").lower()
+    field_name = str(field.get("name") or "").lower()
+    is_country_code_field = (
+        "country-codes" in field_sel or "country-code" in field_sel or "countrycode" in field_name
+        or "country code" in field_label
+    )
+    if is_country_code_field and _looks_like_phone(value_str):
+        profile_country = (profile or {}).get("country") or ""
+        country_key = str(profile_country).strip().lower()
+        country_option = _COUNTRY_OPTION_FALLBACK.get(country_key)
+        if country_option:
+            return {
+                "value": country_option,
+                "confidence": 0.95,
+                "reason": f"Phone country code from profile.country: {country_option}",
+            }
+    # Phone: reject location-like values
+    if ("phone" in field_text or "mobile" in field_text or "cell" in field_text or "telephone" in field_text) and value:
+        if _looks_like_location(value_str):
+            return {"value": None, "confidence": 0.0, "reason": "Phone field must not receive location"}
+        if _looks_like_name(value_str) and not _looks_like_phone(value_str):
+            return {"value": None, "confidence": 0.0, "reason": "Phone field must not receive name"}
+    # Postal/Zip: reject name-like values
+    if ("postal" in field_text or "zip" in field_text or "postcode" in field_text) and value:
+        if _looks_like_name(value_str):
+            return {"value": None, "confidence": 0.0, "reason": "Postal field must not receive name"}
+        if _looks_like_location(value_str):
+            return {"value": None, "confidence": 0.0, "reason": "Postal field must not receive location"}
+    # School/Degree: reject phone numbers and RESUME_FILE
+    if _is_school_or_degree_field(field_label, field_text):
+        if value == "RESUME_FILE":
+            return {"value": None, "confidence": 0.0, "reason": "School/Degree must not receive RESUME_FILE"}
+        if _looks_like_phone(value_str):
+            return {"value": None, "confidence": 0.0, "reason": "School/Degree must not receive phone number"}
+    # LinkedIn: reject education/experience text; use profile.linkedin when available
+    if _is_linkedin_field(field_label, field_text) and _is_education_like(value_str):
+        linkedin = (profile or {}).get("linkedin")
+        if linkedin and str(linkedin).strip().startswith(("http", "linkedin.com", "www.")):
+            return {"value": linkedin, "confidence": 0.9, "reason": "LinkedIn field received education; used profile.linkedin"}
+        return {"value": None, "confidence": 0.0, "reason": "LinkedIn field must receive URL, not education text"}
+    # Year/date fields: reject education text, extract year or use reasonable default
+    if _is_year_only_field(field_label, field_text) and _is_education_like(str(value)):
+        year_match = re.search(r"\b(19|20)\d{2}\b", str(value))
+        if year_match:
+            return {
+                "value": year_match.group(0),
+                "confidence": 0.85,
+                "reason": "Extracted year from misplaced education text",
+            }
+        return {"value": None, "confidence": 0.0, "reason": "Year field received education text; no year found"}
+    # Yes/no employee questions: must be Yes or No only; use "No" when LLM sent wrong type
+    if _is_yes_no_employee_question(field_label, field_text) and _is_education_like(str(value)):
+        return {
+            "value": "No",
+            "confidence": 0.85,
+            "reason": "Yes/no question received education text; defaulting to No",
+        }
     if value and value != "RESUME_FILE" and re.match(r"^\d{8,}$", str(value).strip()):
         if "company" in field_text or "employer" in field_text or ("title" in field_text and "job" in field_text):
             return {"value": None, "confidence": 0.0, "reason": "Phone number does not belong in company/title field"}
     if "experience" in field_label and ("year" in field_label or "years" in field_label):
-        if isinstance(value, str):
-            match = re.search(r'\d+', value)
+        if isinstance(value, str) and len(value) > 50:
+            # Long text wrongly mapped - calculate from profile
+            years_val = _calculate_years_experience(profile or {})
+            if years_val:
+                return {
+                    "value": years_val,
+                    "confidence": 0.9,
+                    "reason": "Extracted years from profile (field received experience text)",
+                }
+            match = re.search(r"(\d+)\+?\s*(?:years?|yrs?)?", value, re.I)
             if match:
                 return {
-                    "value": match.group(0),
+                    "value": match.group(1),
                     "confidence": mapping.get("confidence", 0.9),
-                    "reason": f"Extracted number from: {value}"
+                    "reason": f"Extracted number from: {value[:50]}...",
+                }
+        elif isinstance(value, str):
+            match = re.search(r"(\d+)\+?\s*(?:years?|yrs?)?", value, re.I)
+            if match:
+                return {
+                    "value": match.group(1),
+                    "confidence": mapping.get("confidence", 0.9),
+                    "reason": f"Extracted number from: {value}",
                 }
     if field_type in ("select", "combobox") and field.get("options"):
         options = [o for o in field["options"] if o and str(o).strip()]
         value_str = str(value).strip()
+        val_lower = value_str.lower()
+        field_lower = field_label + " " + field_text
         # Exact match
         if value_str in options:
             return mapping
+
+        def _norm_apostrophe(s: str) -> str:
+            return str(s).replace("\u2019", "'").replace("\u2018", "'").lower()
+
         for option in options:
-            if option.lower() == value_str.lower():
+            if option.lower() == val_lower or _norm_apostrophe(option) == _norm_apostrophe(value_str):
                 return {
                     "value": option,
                     "confidence": mapping.get("confidence", 0.95),
                     "reason": f"Matched to dropdown option: {option}"
                 }
-        # Partial / contains match
+        # For country: prefer options that START with country name (India+91 not British Indian Ocean Territory+246)
+        if "country" in field_lower and val_lower:
+            for option in options:
+                opt_lower = str(option).lower()
+                if opt_lower.startswith(val_lower) or opt_lower.startswith(val_lower + "+"):
+                    return {
+                        "value": option,
+                        "confidence": mapping.get("confidence", 0.95),
+                        "reason": f"Country prefix match: {option}"
+                    }
+            for option in options:
+                if val_lower in opt_lower and not any(
+                    x in opt_lower for x in ["territory", "ocean", "island", "virgin", "samoa"]
+                ):
+                    return {
+                        "value": option,
+                        "confidence": mapping.get("confidence", 0.9),
+                        "reason": f"Country match: {option}"
+                    }
+        # Partial / contains match (general)
+        # For country: never accept options where val is substring but option contains territory/ocean etc (India ≠ British Indian Ocean Territory)
+        excluded_substrings = ("territory", "ocean", "island", "virgin", "samoa")
         for option in options:
-            if value_str.lower() in option.lower() or option.lower() in value_str.lower():
+            opt_lower = str(option).lower()
+            if val_lower in opt_lower or opt_lower in val_lower:
+                if "country" in field_lower and len(val_lower) < 15:
+                    if any(x in opt_lower for x in excluded_substrings):
+                        continue
                 return {
                     "value": option,
                     "confidence": mapping.get("confidence", 0.85),
                     "reason": f"Partial match to dropdown option: {option}"
                 }
+        # Country fallback: options may be truncated (e.g. 100 items); use lookup for common countries
+        if "country" in field_lower and val_lower:
+            constructed = _COUNTRY_OPTION_FALLBACK.get(val_lower)
+            if constructed:
+                if constructed in options:
+                    return {
+                        "value": constructed,
+                        "confidence": mapping.get("confidence", 0.95),
+                        "reason": f"Country fallback match: {constructed}",
+                    }
+                return {
+                    "value": constructed,
+                    "confidence": 0.9,
+                    "reason": f"Country fallback (options truncated): {constructed}",
+                }
+        # School/Institution/College: when value not in closed list, try "Other"/"Not listed" (generic across forms)
+        if any(kw in field_lower for kw in ("school", "university", "college", "institution")):
+            other_opts = [
+                o for o in options
+                if re.search(r"\bother\b|not\s*listed|not\s*in\s*list|my\s*school\s*is|specify|please\s*specify|_other|other\s*[\(\-\:]", str(o).lower())
+            ]
+            if other_opts:
+                return {
+                    "value": other_opts[0],
+                    "confidence": 0.75,
+                    "reason": "Institution not in dropdown; selected 'Other/Not listed'",
+                }
+            # Best partial match: option containing most significant words from value (e.g. "Nehru" in "JNU")
+            val_words = set(re.findall(r"\b[a-z]{4,}\b", val_lower)) - {"university", "college", "institute", "school", "of", "the", "and"}
+            if val_words:
+                best = None
+                best_score = 0
+                for opt in options:
+                    opt_lower = str(opt).lower()
+                    opt_words = set(re.findall(r"\b[a-z]{4,}\b", opt_lower))
+                    overlap = len(val_words & opt_words)
+                    if overlap > best_score and overlap >= 1:
+                        best_score = overlap
+                        best = opt
+                if best:
+                    return {
+                        "value": best,
+                        "confidence": 0.7,
+                        "reason": f"Partial word match: {best}",
+                    }
         # No option matches the LLM value — nullify so the field is skipped/highlighted
         return {
             "value": None,
@@ -409,11 +625,15 @@ def map_form_fields(
         len(custom_answers or {}),
         len((resume_text or "")),
     )
+    logger.info(
+        "Scraped fields preview (idx|label|type|required): %s",
+        [(f.get("index"), (f.get("label") or f.get("name") or "?")[:40], f.get("type"), f.get("required")) for f in (fields or [])[:15]],
+    )
 
     custom_answers = custom_answers or {}
-    resume_text = (resume_text or "").strip()[:8000]
+    resume_text = (resume_text or "").strip()[:4000]  # Reduced for faster LLM processing
     processed_fields = _normalize_fields(fields)
-    fallback = _fallback_map(processed_fields, profile, custom_answers)
+
     cache_key = _build_cache_key(processed_fields, profile or {}, custom_answers, resume_text)
     cached_mapping = _cache_get(cache_key)
     if cached_mapping is not None:
@@ -421,26 +641,12 @@ def map_form_fields(
         return cached_mapping
 
     if not settings.openai_api_key:
-        logger.warning("OPENAI_API_KEY missing; returning fallback mapping only")
-        return fallback
+        logger.warning("OPENAI_API_KEY missing; returning empty mappings")
+        return {str(_field_key(f)): _empty_mapping(str(_field_key(f))) for f in processed_fields}
 
-    llm_fields = []
-    merged: dict[str, Any] = {}
-    for field in processed_fields:
-        key = _field_key(field)
-        fallback_value = fallback.get(key, {"value": None, "confidence": 0.3, "reason": "No mapping"})
-        if _requires_llm(field, fallback_value):
-            llm_fields.append(field)
-        else:
-            merged[key] = fallback_value
-
-    if not llm_fields:
-        logger.info("Field mapping completed using fallback only fields=%d", len(processed_fields))
-        _cache_put(cache_key, fallback)
-        return fallback
+    logger.info("LLM mapping: sending %d fields to LLM", len(processed_fields))
 
     client = _get_openai_client()
-    fields_desc = json.dumps(llm_fields, separators=(",", ":"))
     profile_desc = json.dumps(profile or {}, separators=(",", ":"))
     custom_answers_desc = json.dumps(custom_answers, separators=(",", ":"))
     prompt = MAP_PROMPT.format(
@@ -448,6 +654,21 @@ def map_form_fields(
         custom_answers_json=custom_answers_desc,
         resume_text=resume_text or "No resume text provided.",
     )
+
+    # Send minimal field payload (index, label, type, options, selector/domId for block inference)
+    llm_fields_minimal = []
+    for f in processed_fields:
+        item = {
+            "index": f.get("index"),
+            "label": (f.get("label") or f.get("name") or "")[:80],
+            "type": f.get("type"),
+            "options": (f.get("options") or [])[:30],
+        }
+        sel = f.get("selector") or f.get("domId") or ""
+        if sel:
+            item["selector"] = sel[:60]
+        llm_fields_minimal.append(item)
+    fields_desc = json.dumps(llm_fields_minimal, separators=(",", ":"))
 
     response = client.chat.completions.create(
         model=settings.openai_model,
@@ -457,7 +678,7 @@ def map_form_fields(
         ],
         response_format={"type": "json_object"},
         temperature=0,
-        max_tokens=4096,
+        max_tokens=2048,
     )
 
     content = response.choices[0].message.content or "{}"
@@ -470,34 +691,28 @@ def map_form_fields(
             json.dumps({k: v for k, v in list((llm_mappings or {}).items())[:3]}, indent=2) if isinstance(llm_mappings, dict) else "N/A"
         )
     except json.JSONDecodeError:
-        logger.warning("LLM mapping response was invalid JSON; using fallback")
+        logger.warning("LLM mapping response was invalid JSON")
         llm_mappings = {}
 
-    for field in llm_fields:
-        key = _field_key(field)
-        llm_value = llm_mappings.get(key) if isinstance(llm_mappings, dict) else None
-        fallback_value = fallback.get(key, {"value": None, "confidence": 0.3, "reason": "No mapping"})
-        if isinstance(llm_value, dict) and "value" in llm_value:
-            if (fallback_value.get("confidence", 0) > llm_value.get("confidence", 0) and
-                fallback_value.get("value") is not None):
-                merged[key] = fallback_value
-            else:
-                cleaned_value = _clean_field_value(field, llm_value)
-                merged[key] = cleaned_value
-        else:
-            merged[key] = fallback_value
-
+    merged: dict[str, Any] = {}
     for field in processed_fields:
-        key = _field_key(field)
-        if key not in merged:
-            merged[key] = fallback.get(key, {"value": None, "confidence": 0.3, "reason": "No mapping"})
+        key = str(_field_key(field))
+        llm_value = llm_mappings.get(key) if isinstance(llm_mappings, dict) else None
+        if isinstance(llm_value, dict) and "value" in llm_value:
+            merged[key] = _clean_field_value(field, llm_value, profile)
+        else:
+            merged[key] = _empty_mapping(key)
+
+    elapsed_ms = int((time.monotonic() - started_at) * 1000)
     logger.info(
-        "Field mapping completed processed_fields=%d llm_requested=%d llm_keys=%d merged_keys=%d elapsed_ms=%d",
+        "Field mapping completed fields=%d merged_keys=%d elapsed_ms=%d",
         len(processed_fields),
-        len(llm_fields),
-        len(llm_mappings) if isinstance(llm_mappings, dict) else 0,
         len(merged),
-        int((time.monotonic() - started_at) * 1000),
+        elapsed_ms,
+    )
+    logger.info(
+        "Mappings preview: %s",
+        [(k, str((v or {}).get("value", ""))[:25]) for k, v in list(merged.items())[:15]],
     )
     _cache_put(cache_key, merged)
     return merged

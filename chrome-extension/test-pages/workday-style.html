@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Workday-Style Job Application (Simulated)</title>
+  <style>
+    body { font-family: system-ui; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    [data-automation-id] { margin-bottom: 1rem; display: block; }
+    input, select, textarea { width: 100%; padding: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Apply: Data Engineer (Workday-style)</h1>
+  <form data-automation-id="jobApplicationForm" action="#" method="post">
+    <div data-automation-id="formField-firstName">
+      <input type="text" data-automation-id="input-firstName" aria-label="First Name" name="firstName" required>
+    </div>
+    <div data-automation-id="formField-lastName">
+      <input type="text" data-automation-id="input-lastName" aria-label="Last Name" name="lastName" required>
+    </div>
+    <div data-automation-id="formField-email">
+      <input type="email" data-automation-id="input-email" aria-label="Email" name="email" required>
+    </div>
+    <div data-automation-id="formField-phone">
+      <input type="tel" data-automation-id="input-phone" aria-label="Phone" name="phone">
+    </div>
+    <div data-automation-id="formField-resume">
+      <input type="file" data-automation-id="input-resumeAttachment" aria-label="Resume" name="resume" accept=".pdf,.doc,.docx" required>
+    </div>
+    <div data-automation-id="formField-coverLetter">
+      <textarea data-automation-id="textInput-coverLetter" aria-label="Cover Letter" name="coverLetter" rows="4"></textarea>
+    </div>
+    <div data-automation-id="formField-country">
+      <select data-automation-id="dropdown-country" aria-label="Country" name="country" required>
+        <option value="">Select country</option>
+        <option value="US">United States</option>
+        <option value="IN">India</option>
+      </select>
+    </div>
+    <div data-automation-id="formField-howDidYouHear">
+      <input type="text" data-automation-id="input-howDidYouHear" aria-label="How did you hear about us?" name="howDidYouHear">
+    </div>
+    <div data-automation-id="formField-veteranStatus">
+      <select data-automation-id="dropdown-veteranStatus" aria-label="Veteran status" name="veteranStatus">
+        <option value="">Select</option>
+        <option value="veteran">I am a veteran</option>
+        <option value="not">I am not a veteran</option>
+      </select>
+    </div>
+    <button type="submit" data-automation-id="continueButton">Continue</button>
+  </form>
+  <script>
+    window.runScraperTest = function() {
+      return new Promise(function(resolve) {
+        document.addEventListener("scraper-test-response", function onResp(e) {
+          document.removeEventListener("scraper-test-response", onResp);
+          resolve(e.detail);
+        }, { once: true });
+        document.dispatchEvent(new CustomEvent("scraper-test-request"));
+      });
+    };
+  </script>
+</body>
+</html>

@@ -7,7 +7,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-_TTL_SEC = 300
+from backend.app.core.config import settings
+
 _store: dict[int, tuple[float, dict[str, Any]]] = {}
 
 
@@ -24,6 +25,6 @@ def get_and_clear_tailor_context(user_id: int) -> dict[str, Any] | None:
     if not entry:
         return None
     ts, ctx = entry
-    if time.time() - ts > _TTL_SEC:
+    if time.time() - ts > settings.tailor_context_ttl:
         return None
     return ctx

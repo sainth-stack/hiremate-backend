@@ -12,11 +12,9 @@ import time
 from collections import OrderedDict
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from backend.app.core.config import settings
 
-# Config
-TTL_SECONDS = 3600  # 1 hour - job postings rarely change
-MAX_ENTRIES = 500
+logger = logging.getLogger(__name__)
 
 # Key -> (value, expiry_timestamp) - OrderedDict maintains LRU order
 _cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
@@ -50,9 +48,9 @@ async def set(url: str, job_description: str) -> None:
     key = _cache_key(url)
     async with _lock:
         # Evict oldest until we have room
-        while len(_cache) >= MAX_ENTRIES and _cache:
+        while len(_cache) >= settings.job_description_cache_max_entries and _cache:
             _cache.popitem(last=False)
-        _cache[key] = (job_description, time.monotonic() + TTL_SECONDS)
+        _cache[key] = (job_description, time.monotonic() + settings.job_description_cache_ttl)
         _cache.move_to_end(key)
     logger.debug("Cached job description url=%s len=%d entries=%d", url[:60], len(job_description), len(_cache))
 

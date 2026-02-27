@@ -47,6 +47,7 @@ const FIELD_SELECTOR = [
 
 const LOG_PREFIX = "[JobAutofill][content]";
 const INPAGE_ROOT_ID = "job-autofill-inpage-root";
+const _visitedUrls = new Set();
 const LOGIN_PAGE_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -199,24 +200,26 @@ async function loadResumeAccordionContent(contentEl, rootEl) {
   }
 }
 
-async function loadCoverLetterAccordionContent(contentEl, rootEl) {
+async function loadCoverLetterAccordionContent(contentEl, rootEl, forceRegenerate = false) {
   contentEl.innerHTML = "<p class=\"ja-score-text\">Loading...</p>";
   try {
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
-    let data = null;
-    try {
-      const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/cover-letter`, { headers });
-      data = res.ok ? await res.json() : null;
-    } catch (_) {
-      data = null;
-    }
-    const letter = data?.content || "";
-    const jobTitle = data?.job_title || "";
+    const currentJobUrl = forceRegenerate ? `${window.location.href}#regenerate=${Date.now()}` : window.location.href;
+    const pageHtml = await getPageHtmlForKeywordsApi?.().catch(() => "") || "";
+    const jobTitle = document.title?.split(/[|\-–—]/)[0]?.trim() || "";
+    const _clRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/cover-letter/upsert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ job_url: currentJobUrl, page_html: pageHtml, job_title: jobTitle }),
+    });
+    const coverLetterData = await _clRes.json();
+    const letter = coverLetterData?.content || "";
+    const displayTitle = coverLetterData?.job_title || jobTitle;
     if (letter) {
       contentEl.innerHTML = `
         <div class="ja-cover-letter-preview">
-          ${jobTitle ? `<p class="ja-cover-letter-job">${escapeHtml(jobTitle)}</p>` : ""}
+          ${displayTitle ? `<p class="ja-cover-letter-job">${escapeHtml(displayTitle)}</p>` : ""}
           <div class="ja-cover-letter-text">${escapeHtml(letter).replace(/\n/g, "<br>")}</div>
         </div>
         <button type="button" class="ja-action" id="ja-generate-cover-letter">Regenerate</button>
@@ -235,34 +238,7 @@ async function loadCoverLetterAccordionContent(contentEl, rootEl) {
       statusP.className = "ja-score-text";
       statusP.textContent = "Generating...";
       try {
-        let jobDescription = "";
-        let jobTitle = document.title?.split(/[|\-–—]/)[0]?.trim() || "";
-        try {
-          const pageHtml = await getPageHtmlForKeywordsApi?.();
-          if (pageHtml) {
-            const analyzeRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
-              method: "POST",
-              headers: { ...headers, "Content-Type": "application/json" },
-              body: JSON.stringify({ url: window.location.href, page_html: pageHtml }),
-            });
-            if (analyzeRes.ok) {
-              const ad = await analyzeRes.json();
-              jobDescription = ad.job_description || "";
-              jobTitle = jobTitle || ad.job_title || "";
-            }
-          }
-        } catch (_) {}
-        const genRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/cover-letter/generate`, {
-          method: "POST",
-          headers: { ...headers, "Content-Type": "application/json" },
-          body: JSON.stringify({ job_description: jobDescription, job_title: jobTitle }),
-        });
-        if (genRes.ok) {
-          const genData = await genRes.json();
-          await loadCoverLetterAccordionContent(contentEl, rootEl);
-        } else {
-          statusP.textContent = "Generation failed.";
-        }
+        await loadCoverLetterAccordionContent(contentEl, rootEl, true);
       } catch (_) {
         statusP.textContent = "Generation failed.";
       }
@@ -282,7 +258,7 @@ async function loadQuestionsAccordionContent(id, contentEl, rootEl) {
       const scrapeRes = await chrome.runtime.sendMessage({ type: "SCRAPE_ALL_FRAMES", scope: "all" });
       fields = scrapeRes?.ok ? (scrapeRes.fields || []) : [];
     } else {
-      const scraped = scrapeFields({ scope: "all" });
+      const scraped = await scrapeFields({ scope: "all" });
       fields = scraped?.fields || [];
     }
     if (!fields || fields.length === 0) {
@@ -529,6 +505,20 @@ function isInsideExtensionWidget(el) {
 }
 
 function getFillableFields(includeNestedDocuments = true, includeHidden = false) {
+  const scraper = typeof window !== "undefined" && window.__HIREMATE_FIELD_SCRAPER__;
+  if (scraper) {
+    try {
+      const result = scraper.getScrapedFields({
+        scope: includeNestedDocuments ? "all" : "current_document",
+        includeHidden,
+        excludePredicate: isInsideExtensionWidget,
+      });
+      const elements = result.elements || (result.fields || []).map((f) => f.element).filter(Boolean);
+      if (elements.length > 0) return elements;
+    } catch (e) {
+      logWarn("Enhanced field scraper failed, falling back", { error: String(e) });
+    }
+  }
   const out = [];
   const seen = new Set();
   let totalCandidates = 0;
@@ -785,12 +775,23 @@ function ensureFailHighlightStyle(doc = document) {
 
 function openDropdownForSelection(field) {
   try {
+    if (field.disabled || field.getAttribute("aria-disabled") === "true") return;
     const tag = (field.tagName || "").toLowerCase();
     const role = (field.getAttribute("role") || "").toLowerCase();
-    if (tag === "select" || role === "combobox") {
+    const isCombobox = role === "combobox" || field.closest?.("[class*='select']");
+    if (tag === "select" || role === "combobox" || isCombobox) {
       field.focus();
-      field.click();
-      field.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      const rect = field.getBoundingClientRect();
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        view: field.ownerDocument?.defaultView || window,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+      };
+      field.dispatchEvent(new MouseEvent("mousedown", opts));
+      field.dispatchEvent(new MouseEvent("mouseup", opts));
+      field.dispatchEvent(new MouseEvent("click", opts));
     }
   } catch (_) {}
 }
@@ -877,9 +878,92 @@ function findContinueButton(doc = document) {
   return null;
 }
 
-function scrapeFields(options = {}) {
+async function scrapeFields(options = {}) {
   const includeNestedDocuments = options.scope !== "current_document";
-  logInfo("Starting DOM scrape for fillable fields", { scope: options.scope });
+  const expandSelectOptions = options.expandSelectOptions !== false;
+  const preExpandEmployment = Math.max(0, options.preExpandEmployment || 0);
+  const preExpandEducation = Math.max(0, options.preExpandEducation || 0);
+  logInfo("Scrape: starting", { scope: options.scope, expandSelectOptions, preExpandEmployment, preExpandEducation });
+
+  const scraper = typeof window !== "undefined" && window.__HIREMATE_FIELD_SCRAPER__;
+  if (scraper?.findAddAnotherLinks) {
+    const doc = document;
+    for (let round = 0; round < 2; round++) {
+      const hint = round === 0 ? "employment" : "education";
+      const count = round === 0 ? preExpandEmployment : preExpandEducation;
+      for (let i = 0; i < count; i++) {
+        const links = scraper.findAddAnotherLinks(doc, hint);
+        if (links.length === 0) break;
+        try {
+          const el = links[0];
+          el.scrollIntoView({ block: "center", behavior: "auto" });
+          await new Promise((r) => setTimeout(r, 200));
+          const rect = el.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          for (const name of ["mousedown", "mouseup", "click"]) {
+            el.dispatchEvent(new MouseEvent(name, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+          }
+          await new Promise((r) => setTimeout(r, 800));
+        } catch (_) {}
+      }
+    }
+  }
+
+  if (scraper) {
+    try {
+      const scrapeOpts = {
+        scope: includeNestedDocuments ? "all" : "current_document",
+        includeHidden: true,
+        excludePredicate: isInsideExtensionWidget,
+        expandSelectOptions,
+      };
+      let result = expandSelectOptions && scraper.getScrapedFieldsWithExpandedOptions
+        ? await scraper.getScrapedFieldsWithExpandedOptions(scrapeOpts)
+        : scraper.getScrapedFields(scrapeOpts);
+      if (result.fields.length === 0) {
+        result = scraper.getScrapedFields({
+          scope: includeNestedDocuments ? "all" : "current_document",
+          includeHidden: false,
+          excludePredicate: isInsideExtensionWidget,
+          expandSelectOptions: false,
+        });
+      }
+      if (result.fields.length > 0) {
+        const fields = result.fields.map((f, index) => ({
+          index,
+          label: f.label || null,
+          name: f.name || null,
+          id: f.id || null,
+          placeholder: f.placeholder || null,
+          required: f.required,
+          type: f.type || null,
+          tag: f.tagName || null,
+          role: f.element?.getAttribute?.("role") || null,
+          options: f.options || null,
+          selector: f.selector,
+          atsFieldType: f.atsFieldType,
+          isStandardField: f.isStandardField,
+        }));
+        const preview = fields.slice(0, 15).map((f) => ({
+          index: f.index,
+          type: f.type,
+          label: f.label,
+          id: f.id,
+          name: f.name,
+          required: f.required,
+        }));
+        logInfo("Scrape: completed", {
+          totalFields: fields.length,
+          requiredFields: fields.filter((f) => f.required).length,
+          fields: preview,
+        });
+        return { fields };
+      }
+    } catch (e) {
+      logWarn("Enhanced field scraper failed, falling back", { error: String(e) });
+    }
+  }
   let fillable = getFillableFields(includeNestedDocuments || true, true);
   if (fillable.length === 0) {
     fillable = getFillableFields(true, false);
@@ -889,24 +973,27 @@ function scrapeFields(options = {}) {
   }
   const fields = fillable.map((el, index) => {
     const meta = getFieldMeta(el);
-    const options =
+    const opts =
       meta.tag === "select"
         ? Array.from(el.options || [])
             .map((o) => (o.text || "").trim())
             .filter(Boolean)
         : null;
+    const id = meta.id || null;
+    const selector = id ? `#${CSS.escape(id)}` : null;
 
     return {
       index,
       label: meta.label || null,
       name: meta.name || null,
-      id: meta.id || null,
+      id,
+      selector,
       placeholder: meta.placeholder || null,
       required: meta.required,
       type: meta.type || null,
       tag: meta.tag || null,
       role: meta.role || null,
-      options,
+      options: opts,
     };
   });
   const preview = fields.slice(0, 15).map((f) => ({
@@ -917,10 +1004,10 @@ function scrapeFields(options = {}) {
     name: f.name,
     required: f.required,
   }));
-  logInfo("DOM scrape completed", {
+  logInfo("Scrape: completed (legacy)", {
     totalFields: fields.length,
     requiredFields: fields.filter((f) => f.required).length,
-    preview,
+    fields: preview,
   });
   return { fields };
 }
@@ -1001,9 +1088,54 @@ async function getResumeFromBackground() {
 }
 
 async function fillWithValues(payload) {
+  const humanFiller = typeof window !== "undefined" && window.__HIREMATE_HUMAN_FILLER__;
+  if (humanFiller) {
+    try {
+      const includeNestedDocuments = payload.scope !== "current_document";
+      const { values = {}, fieldsForFrame = [], resumeData, onProgress, shouldAbort } = payload;
+      logInfo("Fill: starting (human-like)", {
+        providedValues: Object.keys(values).length,
+        fieldsWithSelectors: fieldsForFrame.length,
+        scope: payload.scope,
+      });
+      // Use includeHidden: true to match scrape order (avoids index mismatch)
+      let fillable = getFillableFields(includeNestedDocuments, true);
+      if (fillable.length === 0) fillable = getFillableFields(true, false);
+      const effectiveResumeData = resumeData || (await getResumeFromBackground()) || (await getStaticResume());
+
+      const result = await humanFiller.fillWithValuesHumanLike({
+        elements: fillable,
+        values,
+        valuesByIndex: values,
+        fieldsForFrame,
+        resumeData: effectiveResumeData,
+        getFieldMeta,
+        getFieldKeys,
+        dispatchFrameworkEvents,
+        onProgress,
+        shouldAbort,
+        formatDateForInput,
+        highlightFailedField,
+      });
+
+      logInfo("Fill: completed (human-like)", {
+        totalFillable: fillable.length,
+        filled: result.filledCount,
+        resumes: result.resumeUploadCount,
+        failed: result.failedCount,
+      });
+      return result;
+    } catch (e) {
+      logWarn("Human filler failed, falling back to legacy", { error: String(e) });
+    }
+  }
+
   const includeNestedDocuments = payload.scope !== "current_document";
   const { values = {}, resumeData, onProgress, shouldAbort, shouldSkip } = payload;
-  logInfo("Starting mapped fill", { providedValues: Object.keys(values).length });
+  logInfo("Fill: starting (legacy)", {
+    providedValues: Object.keys(values).length,
+    scope: payload.scope,
+  });
   let fillable = getFillableFields(includeNestedDocuments, false);
   if (fillable.length === 0) fillable = getFillableFields(true, true);
   const effectiveResumeData = resumeData || (await getResumeFromBackground()) || (await getStaticResume());
@@ -1098,11 +1230,11 @@ async function fillWithValues(payload) {
     }
     await delay(fillDelay);
   }
-  logInfo("Mapped fill completed", {
+  logInfo("Fill: completed (legacy)", {
     totalFillable: fillable.length,
-    textFieldsFilled: filledCount,
-    resumeUploads: resumeUploadCount,
-    failedCount,
+    filled: filledCount,
+    resumes: resumeUploadCount,
+    failed: failedCount,
   });
   return { filledCount, resumeUploadCount, failedCount, failedFields };
 }
@@ -1346,26 +1478,44 @@ async function runKeywordAnalysisAndMaybeShowWidget() {
     if (llmSaysJob !== true) return;
   }
 
-  try {
-    const pageHtml = await getPageHtmlForKeywordsApi();
-    const apiBase = await getApiBase();
-    const headers = await getAuthHeaders();
-    const body = { url, page_html: pageHtml || undefined };
-    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) return;
+  setTimeout(async () => {
+    const _jdSample = (document.documentElement.innerText || "").slice(100, 600);
+    let _jdKey = "hm_kw_fallback";
+    try {
+      _jdKey = "hm_kw_" + btoa(unescape(encodeURIComponent(_jdSample))).replace(/\W/g, "").slice(0, 40);
+    } catch (_) {}
+    const KW_TTL = 30 * 60 * 1000;
 
-    const data = await res.json();
-    const matched = data.matched_count || 0;
-    const total = data.total_keywords || 0;
-    if (total === 0) return;
+    const _kwStored = await chrome.storage.local.get(_jdKey);
+    const _kwCached = _kwStored[_jdKey];
+    if (_kwCached && Date.now() - _kwCached.ts < KW_TTL) {
+      mountKeywordMatchWidgetWithData(_kwCached.result);
+      return;
+    }
 
-    const percent = data.percent || 0;
-    mountKeywordMatchWidgetWithData({ matched, total, percent });
-  } catch (_) {}
+    try {
+      const pageHtml = await getPageHtmlForKeywordsApi();
+      const apiBase = await getApiBase();
+      const headers = await getAuthHeaders();
+      const body = { url, page_html: pageHtml || undefined };
+      const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return;
+
+      const data = await res.json();
+      const matched = data.matched_count || 0;
+      const total = data.total_keywords || 0;
+      if (total === 0) return;
+
+      const percent = data.percent || 0;
+      const result = { matched, total, percent };
+      await chrome.storage.local.set({ [_jdKey]: { result, ts: Date.now() } });
+      mountKeywordMatchWidgetWithData(result);
+    } catch (_) {}
+  }, 2000);
 }
 
 function mountKeywordMatchWidgetWithData({ matched, total, percent }) {
@@ -1604,6 +1754,9 @@ async function fetchWithAuthRetry(url, options = {}) {
         }
       } catch (_) {}
     }
+    if (!newToken) {
+      await chrome.storage.local.remove([AUTOFILL_CTX_KEY]);
+    }
     if (newToken) {
       const base = toPlainHeaders(options.headers);
       const retryOptions = { ...options, headers: { ...base, Authorization: `Bearer ${newToken}` } };
@@ -1749,12 +1902,15 @@ async function loadProfileIntoPanel(root) {
       uploadsEl?.querySelector(".ja-upload-preview")?.addEventListener("click", async (ev) => {
         ev.preventDefault();
         try {
+          const resumeUrl = ctx?.resumeUrl || ctx?.resume_url;
+          const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
+          if (!resumeFilename) return;
           const apiBase = await getApiBase();
           const headers = await getAuthHeaders();
-          const path = ctx.resumeFileName
-            ? `/chrome-extension/autofill/resume/${(ctx.resumeFileName || "").split("/").pop()}`
-            : "/chrome-extension/autofill/resume";
-          const res = await fetchWithAuthRetry(`${apiBase}${path}`, { headers });
+          const res = await fetchWithAuthRetry(
+            `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
+            { headers }
+          );
           if (res.ok) {
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
@@ -2000,9 +2156,10 @@ async function saveJobFromForm(root) {
 async function fetchResumesFromApi() {
   const apiBase = await getApiBase();
   const headers = await getAuthHeaders();
-  const res = await fetchWithAuthRetry(`${apiBase}/resume`, { headers });
+  const res = await fetchWithAuthRetry(`${apiBase}/resume/workspace`, { headers });
   if (!res.ok) return [];
-  return res.json();
+  const data = await res.json();
+  return data.resumes || [];
 }
 
 async function loadKeywordsIntoPanel(root) {
@@ -2117,51 +2274,65 @@ async function loadKeywordsIntoPanel(root) {
   }
 }
 
+const AUTOFILL_CTX_KEY = "hm_autofill_ctx";
+const AUTOFILL_CTX_TTL = 10 * 60 * 1000;
+
 async function getAutofillContextFromApi() {
   const apiBase = await getApiBase();
   const headers = await getAuthHeaders();
-  const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/data`, { headers });
-  if (!res.ok) {
-    throw new Error(`Profile load failed (${res.status})`);
+  const _stored = await chrome.storage.local.get(AUTOFILL_CTX_KEY);
+  const _cached = _stored[AUTOFILL_CTX_KEY];
+  let autofillCtx;
+  if (_cached && (Date.now() - _cached.ts) < AUTOFILL_CTX_TTL) {
+    autofillCtx = _cached.data;
+  } else {
+    const _res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/context`, { headers });
+    if (!_res.ok) throw new Error(`Profile load failed (${_res.status})`);
+    autofillCtx = await _res.json();
+    await chrome.storage.local.set({ [AUTOFILL_CTX_KEY]: { data: autofillCtx, ts: Date.now() } });
   }
-  const json = await res.json();
   return {
-    profile: json.profile || {},
-    profileDetail: json.profile_detail || null,
-    customAnswers: json.custom_answers || {},
-    resumeText: json.resume_text || "",
-    resumeName: json.resume_name || null,
-    resumeFileName: json.resume_file_name || null,
-    resumeUrl: json.resume_url || null,
+    profile: autofillCtx.profile || {},
+    profileDetail: null,
+    customAnswers: autofillCtx.custom_answers || {},
+    resumeText: autofillCtx.resume_text || "",
+    resumeName: autofillCtx.resume_name || null,
+    resumeFileName: autofillCtx.resume_url ? (autofillCtx.resume_url.split("/").pop() || "").split("?")[0] : null,
+    resumeUrl: autofillCtx.resume_url || null,
   };
 }
 
-/** Fetch resume from API (backend proxies S3/local file). Always use API to avoid CORS when fetching from S3. */
+/** Sanitize resume display name to valid filename (e.g. "Sainath Reddy (default)" → "Sainath_Reddy_Resume.pdf"). */
+function sanitizeResumeFilename(displayName) {
+  if (!displayName || typeof displayName !== "string") return null;
+  const s = displayName.replace(/\s*\(default\)\s*/gi, "").replace(/\s+/g, "_").replace(/[^\w\-_.]/g, "");
+  if (!s) return null;
+  return s.endsWith(".pdf") ? s : s + ".pdf";
+}
+
+/** Fetch resume from API (backend proxies S3/local file). Uses resume_url from context. */
 async function fetchResumeFromContext(context) {
   const resumeUrl = context?.resumeUrl || context?.resume_url;
-  const resumeFileName = context?.resumeFileName || context?.resume_file_name;
-  if (!resumeUrl && !resumeFileName) return null;
-
+  const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
+  if (!resumeFilename) return null;
   try {
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
-    const path = resumeFileName
-      ? `/chrome-extension/autofill/resume/${(resumeFileName || "").split("/").pop()}`
-      : "/chrome-extension/autofill/resume";
-    const fetchUrl = `${apiBase}${path}`;
-    const resumeRes = await fetchWithAuthRetry(fetchUrl, { headers });
+    const resumeRes = await fetchWithAuthRetry(
+      `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
+      { headers }
+    );
     if (!resumeRes.ok) return null;
-
     const resumeBuffer = await resumeRes.arrayBuffer();
-    const fileName = (resumeFileName || resumeUrl || "").split("/").pop()?.split("?")[0] || "resume.pdf";
     const buffer = Array.from(new Uint8Array(resumeBuffer));
-
     await chrome.runtime.sendMessage({
       type: "SAVE_RESUME",
-      payload: { buffer, name: fileName },
+      payload: { buffer, name: resumeFilename },
     });
-    logInfo("Resume fetched and saved from context", { fileName, bytes: buffer.length });
-    return { buffer, name: fileName };
+    const displayName = context?.resumeName ? sanitizeResumeFilename(context.resumeName) : null;
+    const fillName = displayName || resumeFilename;
+    logInfo("Resume fetched and saved from context", { fileName: fillName, bytes: buffer.length });
+    return { buffer, name: fillName };
   } catch (e) {
     logWarn("Failed to fetch resume from context", e);
     return null;
@@ -2172,48 +2343,67 @@ async function getStaticResume() {
   return null;
 }
 
-async function trackCareerPageView() {
-  try {
-    const apiBase = await getApiBase();
-    const headers = await getAuthHeaders();
-    if (!headers?.Authorization) return;
-    const key = `ja_page_viewed_${window.location.href}`;
-    if (sessionStorage.getItem(key)) return;
-    const { company } = extractCompanyAndPosition();
-    await fetchWithAuthRetry(`${apiBase}/chrome-extension/career-page/view`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({
-        page_url: window.location.href || "",
-        company_name: company || null,
-        job_url: window.location.href || null,
-        job_title: null,
-      }),
-    });
-    sessionStorage.setItem(key, "1");
-  } catch (e) {
-    logWarn("Failed to track career page view", { error: String(e) });
+function trackCareerPageView() {
+  if (!_visitedUrls.has(location.href)) {
+    _visitedUrls.add(location.href);
+    getApiBase().then((apiBase) =>
+      getAuthHeaders().then((headers) => {
+        if (!headers?.Authorization) return;
+        const { company } = extractCompanyAndPosition();
+        fetch(`${apiBase}/activity/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+          body: JSON.stringify({
+            event_type: "career_page_view",
+            page_url: location.href,
+            metadata: { company_name: company || null, job_url: location.href || null, job_title: null },
+          }),
+        }).catch((e) => logWarn("Failed to track career page view", { error: String(e) }));
+      })
+    );
   }
 }
 
-async function trackAutofillUsed() {
-  try {
-    const apiBase = await getApiBase();
-    const headers = await getAuthHeaders();
-    const { company, position } = extractCompanyAndPosition();
-    await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/track`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({
-        page_url: window.location.href || "",
-        company_name: company || null,
-        job_url: window.location.href || null,
-        job_title: position || null,
-      }),
+function trackAutofillUsed() {
+  const currentUrl = window.location.href || "";
+  getApiBase().then((apiBase) =>
+    getAuthHeaders().then((headers) => {
+      if (!headers?.Authorization) return;
+      const { company, position } = extractCompanyAndPosition();
+      fetch(`${apiBase}/activity/track`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({
+          event_type: "autofill_used",
+          page_url: currentUrl,
+          metadata: { company_name: company || null, job_url: currentUrl || null, job_title: position || null },
+        }),
+      }).catch((e) => logWarn("Failed to track autofill", { error: String(e) }));
+    })
+  );
+}
+
+/** Build field metadata per frame for selector-based element resolution during fill */
+function buildFieldsByFrame(fields) {
+  const fieldsByFrame = {};
+  for (const field of fields) {
+    const frameId = String(field.frameId ?? 0);
+    if (!fieldsByFrame[frameId]) fieldsByFrame[frameId] = [];
+    const localKey = String(field.frameLocalIndex ?? field.index);
+    fieldsByFrame[frameId].push({
+      index: localKey,
+      frameLocalIndex: field.frameLocalIndex ?? field.index,
+      selector: field.selector || null,
+      id: field.domId || field.id || null,
+      domId: field.domId || field.id || null,
+      label: field.label || null,
+      type: field.type || null,
+      tag: field.tag || null,
+      atsFieldType: field.atsFieldType || null,
+      options: field.options || [],
     });
-  } catch (e) {
-    logWarn("Failed to track autofill", { error: String(e) });
   }
+  return fieldsByFrame;
 }
 
 async function fetchMappingsFromApi(fields, context) {
@@ -2237,14 +2427,24 @@ async function fetchMappingsFromApi(fields, context) {
 }
 
 async function updateWidgetAuthUI(root) {
-  let data = await chrome.storage.local.get(["accessToken", "loginPageUrl"]);
-  let hasToken = !!data.accessToken;
+  let data = {};
+  let hasToken = false;
+  let loginUrl = DEFAULT_LOGIN_PAGE_URL;
+
+  try {
+    data = await chrome.storage.local.get(["accessToken", "loginPageUrl"]);
+    hasToken = !!data.accessToken;
+    if (data.loginPageUrl) loginUrl = data.loginPageUrl;
+  } catch (e) {
+    if (e?.message?.includes("Extension context invalidated")) return;
+    throw e;
+  }
 
   let isHireMateOrigin = LOGIN_PAGE_ORIGINS.some((o) => window.location.origin === o);
   if (!isHireMateOrigin && data.loginPageUrl) {
     try {
       isHireMateOrigin = new URL(data.loginPageUrl).origin === window.location.origin;
-    } catch {}
+    } catch (_) {}
   }
 
   // 1) If no token in chrome.storage, try localStorage (when on HireMate frontend - same origin)
@@ -2256,7 +2456,9 @@ async function updateWidgetAuthUI(root) {
         await chrome.storage.local.set({ accessToken: localToken });
         logInfo("Token synced from localStorage to extension storage");
       }
-    } catch (e) {}
+    } catch (e) {
+      if (e?.message?.includes("Extension context invalidated")) return;
+    }
   }
 
   // 2) If still no token, try fetching from any open HireMate tab (works when on job sites)
@@ -2264,10 +2466,10 @@ async function updateWidgetAuthUI(root) {
     try {
       const res = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
       if (res?.ok && res?.token) hasToken = true;
-    } catch (e) {}
+    } catch (e) {
+      if (e?.message?.includes("Extension context invalidated")) return;
+    }
   }
-
-  const loginUrl = data.loginPageUrl || DEFAULT_LOGIN_PAGE_URL;
 
   const signinCta = root?.querySelector("#ja-signin-cta");
   const autofillAuth = root?.querySelector("#ja-autofill-authenticated");
@@ -2288,7 +2490,11 @@ async function updateWidgetAuthUI(root) {
   signinBtns?.forEach((btn) => {
     btn.onclick = (e) => {
       e.preventDefault();
-      chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url: loginUrl });
+      try {
+        chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url: loginUrl });
+      } catch (err) {
+        if (!err?.message?.includes("Extension context invalidated")) logWarn("Sign-in click failed", err);
+      }
     };
   });
 }
@@ -3448,6 +3654,11 @@ function mountInPageUI() {
   const runOneStep = async (stepNum = 1) => {
     setStatus(stepNum > 1 ? `Step ${stepNum} — Extracting fields...` : "Extracting form fields...", "loading");
     setProgress(5);
+    const context = await getAutofillContextFromApi();
+    const experiences = context?.profile?.experiences || [];
+    const educations = context?.profile?.educations || [];
+    const preExpandEmployment = Math.max(0, experiences.length - 1);
+    const preExpandEducation = Math.max(0, educations.length - 1);
     let fields = [];
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
@@ -3457,6 +3668,8 @@ function mountInPageUI() {
       const scrapeRes = await chrome.runtime.sendMessage({
         type: "SCRAPE_ALL_FRAMES",
         scope: "all",
+        preExpandEmployment,
+        preExpandEducation,
       });
       if (scrapeRes?.ok && scrapeRes.fields?.length) {
         fields = scrapeRes.fields;
@@ -3467,12 +3680,15 @@ function mountInPageUI() {
 
     setStatus(`Found ${fields.length} fields — loading profile & resume...`, "loading");
     setProgress(15);
-    const context = await getAutofillContextFromApi();
     let resumeData = await getResumeFromBackground();
     if (!resumeData && (context.resumeUrl || context.resumeFileName)) {
       resumeData = await fetchResumeFromContext(context);
     }
     if (!resumeData) resumeData = await getStaticResume();
+    if (resumeData && context?.resumeName) {
+      const displayName = sanitizeResumeFilename(context.resumeName);
+      if (displayName) resumeData = { ...resumeData, name: displayName };
+    }
 
     setStatus("Mapping fields with AI...", "loading");
     setProgress(35);
@@ -3493,10 +3709,11 @@ function mountInPageUI() {
       if (!valuesByFrame[fid]) valuesByFrame[fid] = {};
       valuesByFrame[fid][localKey] = val;
     }
+    const fieldsByFrame = buildFieldsByFrame(fields);
 
     const fillRes = await chrome.runtime.sendMessage({
       type: "FILL_ALL_FRAMES",
-      payload: { valuesByFrame, resumeData },
+      payload: { valuesByFrame, fieldsByFrame, resumeData },
     });
 
     if (!fillRes?.ok) throw new Error(fillRes?.error || "Fill failed");
@@ -3749,16 +3966,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   
   if (msg.type === "SCRAPE_FIELDS") {
-    try {
-      sendResponse({ ok: true, ...scrapeFields(msg.payload || {}) });
-    } catch (e) {
-      sendResponse({ ok: false, error: String(e) });
-    }
+    const payload = msg.payload || {};
+    logInfo("Scrape: received SCRAPE_FIELDS", { scope: payload.scope });
+    scrapeFields(payload)
+      .then((result) => {
+        logInfo("Scrape: responding", { fieldCount: result?.fields?.length || 0 });
+        sendResponse({ ok: true, ...result });
+      })
+      .catch((e) => {
+        logWarn("Scrape: failed", { error: String(e) });
+        sendResponse({ ok: false, error: String(e) });
+      });
     return true;
   }
 
   if (msg.type === "FILL_WITH_VALUES") {
-    fillWithValues(msg.payload || {})
+    const p = msg.payload || {};
+    logInfo("Fill: received FILL_WITH_VALUES", {
+      valueCount: Object.keys(p.values || {}).length,
+      hasResume: !!p.resumeData,
+      scope: p.scope,
+    });
+    fillWithValues(p)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
@@ -3772,6 +4001,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   return false;
+});
+
+// Test hook: when page dispatches 'scraper-test-request', run scrape and respond
+document.addEventListener("scraper-test-request", async () => {
+  try {
+    const { fields } = await scrapeFields({ scope: "all" });
+    const elements = getFillableFields(true, true);
+    document.dispatchEvent(new CustomEvent("scraper-test-response", {
+      detail: { ok: true, fields, elementCount: elements.length },
+    }));
+  } catch (e) {
+    document.dispatchEvent(new CustomEvent("scraper-test-response", {
+      detail: { ok: false, error: String(e) },
+    }));
+  }
 });
 
 function looksLikeJobApplicationForm() {

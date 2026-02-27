@@ -7,21 +7,13 @@ import razorpay
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from backend.app.core.config import settings
+from backend.app.core.config import settings, PLAN_AMOUNTS
 from backend.app.core.dependencies import get_current_user
 from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
 
 logger = get_logger("api.payment")
 router = APIRouter()
-
-# Plan IDs to amount in paise (1 INR = 100 paise)
-PLAN_AMOUNTS = {
-    "daily": 9900,   # ₹99
-    "weekly": 39900,  # ₹399
-    "monthly": 99900, # ₹999
-}
-
 
 class CreateOrderRequest(BaseModel):
     plan_id: str  # daily | weekly | monthly

@@ -28,7 +28,7 @@ def upload_file_to_s3(
     file_name: str,
     user_id: int,
     mime_type: str = "application/octet-stream",
-    key_prefix: str = "user-profiles",
+    key_prefix: str | None = None,
 ) -> dict:
     """
     Upload file to S3 under user-profiles/{user_id}/{file_name}.
@@ -43,7 +43,8 @@ def upload_file_to_s3(
     Returns:
         dict with key, url
     """
-    key = f"{key_prefix}/{user_id}/{file_name}"
+    prefix = key_prefix or settings.s3_key_prefix
+    key = f"{prefix}/{user_id}/{file_name}"
 
     logger.info(
         "S3 upload started bucket=%s region=%s key=%s user_id=%s file_name=%s size_bytes=%d",
@@ -86,19 +87,20 @@ def upload_file_to_s3(
         raise RuntimeError(f"S3 upload failed - {code}: {msg}") from e
 
 
-def generate_presigned_url(key: str, expiration: int = 3600) -> str:
+def generate_presigned_url(key: str, expiration: int | None = None) -> str:
     """
     Generate a presigned URL for temporary access to an S3 object.
-    Default expiration: 1 hour.
+    Default expiration from config (s3_presigned_url_expiration).
     """
     if not settings.aws_access_key_id or not settings.aws_secret_access_key:
         return ""
+    exp = expiration if expiration is not None else settings.s3_presigned_url_expiration
     try:
         s3 = _get_s3_client()
         url = s3.generate_presigned_url(
             "get_object",
             Params={"Bucket": settings.aws_bucket_name, "Key": key},
-            ExpiresIn=expiration,
+            ExpiresIn=exp,
         )
         return url or ""
     except ClientError as e:

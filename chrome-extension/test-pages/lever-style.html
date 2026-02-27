@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Lever-Style Job Application (Simulated)</title>
+  <style>
+    body { font-family: system-ui; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    .application-field { margin-bottom: 1.5rem; }
+    .application-label { display: block; font-weight: 500; margin-bottom: 0.5rem; }
+    input, select, textarea { width: 100%; padding: 8px; }
+    .custom-question-field { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h1>Apply: Senior Product Manager (Lever-style)</h1>
+  <form class="application-form" action="#" method="post">
+    <div class="application-field">
+      <label class="application-label" for="name">Name *</label>
+      <input type="text" id="name" name="name" required>
+    </div>
+    <div class="application-field">
+      <label class="application-label" for="email">Email *</label>
+      <input type="email" id="email" name="email" required>
+    </div>
+    <div class="application-field">
+      <label class="application-label" for="phone">Phone</label>
+      <input type="tel" id="phone" name="phone">
+    </div>
+    <div class="application-field">
+      <label class="application-label" for="org">Current Company</label>
+      <input type="text" id="org" name="org">
+    </div>
+    <div class="application-field">
+      <label class="application-label" for="resume">Resume *</label>
+      <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx" required>
+    </div>
+    <div class="application-field">
+      <label class="application-label" for="comments">Additional Comments</label>
+      <textarea id="comments" name="comments" rows="4"></textarea>
+    </div>
+    <div class="application-field custom-question-field">
+      <label class="application-label">What interests you about this role?</label>
+      <textarea name="custom_question_1" rows="3"></textarea>
+    </div>
+    <div class="application-field custom-question-field">
+      <label class="application-label">Salary expectations (optional)</label>
+      <input type="text" name="custom_question_2" placeholder="e.g. $120k - $150k">
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>
+  <script>
+    window.runScraperTest = function() {
+      return new Promise(function(resolve) {
+        document.addEventListener("scraper-test-response", function onResp(e) {
+          document.removeEventListener("scraper-test-response", onResp);
+          resolve(e.detail);
+        }, { once: true });
+        document.dispatchEvent(new CustomEvent("scraper-test-request"));
+      });
+    };
+  </script>
+</body>
+</html>

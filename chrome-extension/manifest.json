@@ -7,6 +7,6 @@
   "host_permissions": ["<all_urls>"],
   "web_accessible_resources": [{"resources": ["logo.png"], "matches": ["<all_urls>"]}],
   "action": {"default_title": "Open Auto-Fill Assistant", "default_popup": "popup.html"},
-  "content_scripts": [{"matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_idle", "all_frames": true}],
+  "content_scripts": [{"matches": ["<all_urls>"], "js": ["content-script/fieldScraper.js","content-script/humanFiller.js","content.js"], "run_at": "document_idle", "all_frames": true}],
   "background": {"service_worker": "background.js"}
 }

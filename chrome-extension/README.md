@@ -59,6 +59,10 @@ Chrome extension that fills job application forms with your profile and resume. 
 
 Matching is by **normalized label**: lowercase, trimmed, single spaces. So "Why do you want to join?" and "why do you want to join this company" are different keys; use the exact phrasing you see on forms for best results, or add multiple variants in Saved answers if needed.
 
+## Technical documentation
+
+For end-to-end flows, scraping/filling techniques, Chrome APIs, and fallbacks, see **[EXTENSION_FLOW_DOCUMENTATION.md](./EXTENSION_FLOW_DOCUMENTATION.md)**.
+
 ## Project layout
 
 ```

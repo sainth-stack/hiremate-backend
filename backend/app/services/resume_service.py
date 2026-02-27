@@ -1,6 +1,6 @@
 """
 Resume service - single source of truth for resume list and storage operations.
-Used by GET /api/resume, chrome-extension, and autofill.
+Used by GET /api/resume/workspace, chrome-extension, and autofill.
 """
 from pathlib import Path
 

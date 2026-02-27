@@ -33,14 +33,12 @@ router = APIRouter(prefix="/chrome-extension", tags=["chrome-extension"])
 
 
 # --- Schemas ---
-class AutofillDataOut(BaseModel):
+class AutofillContextOut(BaseModel):
     profile: dict[str, Any]
-    custom_answers: dict[str, str]
     resume_text: str
-    resume_name: str | None = None  # Display name (same as /resumes, /resume)
-    resume_file_name: str | None = None  # Actual filename for fetch URL
     resume_url: str | None = None
-    profile_detail: dict[str, Any] | None = None
+    resume_name: str | None = None
+    custom_answers: dict[str, str]
 
 
 class FormFieldMapIn(BaseModel):
@@ -128,14 +126,6 @@ class TailorContextIn(BaseModel):
     page_html: str | None = None  # fallback: parse JD from page if job_description empty
 
 
-class AutofillTrackIn(BaseModel):
-    """Track when user uses autofill on a career/job page."""
-    page_url: str
-    company_name: str | None = None
-    job_url: str | None = None
-    job_title: str | None = None
-
-
 def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
     """Convert ProfilePayload to a UI-friendly profile dict.
     Returns both legacy flat text fields and structured lists for improved UI rendering.
@@ -218,12 +208,27 @@ def _build_resume_text(payload: ProfilePayload) -> str:
     return build_resume_text_from_payload(payload)
 
 
-@router.get("/autofill/data", response_model=AutofillDataOut)
-def get_autofill_data(
+@router.get("/autofill/context", response_model=AutofillContextOut)
+async def get_autofill_context(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> AutofillDataOut:
-    """Load autofill data from user's profile in DB."""
+) -> AutofillContextOut:
+    """
+    Merged autofill: profile + resume text + resume URL.
+    Cached 300s per user. resume_url points to /autofill/resume/{filename} for PDF fetch.
+    """
+    from backend.app.utils import cache
+
+    user_id = current_user.id
+    cache_key = f"autofill_ctx:{user_id}"
+
+    try:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return AutofillContextOut(**cached)
+    except Exception:
+        pass
+
     try:
         profile = ProfileService.get_or_create_profile(db, current_user)
         payload = profile_model_to_payload(profile)
@@ -233,35 +238,38 @@ def get_autofill_data(
 
     autofill_profile = _profile_to_autofill_format(payload)
 
-    # Resume from single source - same as GET /api/resume
     from backend.app.services.resume_service import list_resumes as list_resumes_svc
 
     resumes = list_resumes_svc(db, current_user)
     default_resume = resumes[0] if resumes else {}
-    resume_name = default_resume.get("resume_name")
-    resume_url = default_resume.get("resume_url") or payload.resumeUrl
     resume_text = default_resume.get("resume_text") or _build_resume_text(payload)
-    resume_file_name: str | None = None
+    resume_url: str | None = default_resume.get("resume_url") or payload.resumeUrl
+    resume_name: str | None = default_resume.get("resume_name")
+    # Resolve backend proxy URL for extension (avoids S3 CORS). Always use /autofill/resume/{filename}.
     if resume_url:
-        resume_file_name = (resume_url or "").split("/")[-1].split("?")[0] or None
+        fn = (resume_url or "").split("/")[-1].split("?")[0] or "resume.pdf"
+        resume_url = f"/api/chrome-extension/autofill/resume/{fn}"
+
+    out = AutofillContextOut(
+        profile=autofill_profile,
+        resume_text=resume_text,
+        resume_url=resume_url,
+        resume_name=resume_name,
+        custom_answers={},
+    )
+
+    try:
+        await cache.set(cache_key, out.model_dump(), ttl=settings.autofill_context_cache_ttl)
+    except Exception:
+        pass
 
     logger.info(
-        "Autofill data loaded user_id=%s profile_keys=%d resume_text_len=%d resume=%s",
+        "Autofill context loaded user_id=%s profile_keys=%d resume_text_len=%d",
         current_user.id,
         len(autofill_profile),
         len(resume_text),
-        resume_file_name or resume_url,
     )
-
-    return AutofillDataOut(
-        profile=autofill_profile,
-        custom_answers={},
-        resume_text=resume_text,
-        resume_name=resume_name,
-        resume_file_name=resume_file_name,
-        resume_url=resume_url,
-        profile_detail=payload.model_dump() if payload is not None else None,
-    )
+    return out
 
 
 def _guess_media_type(filename: str) -> str:
@@ -275,49 +283,6 @@ def _guess_media_type(filename: str) -> str:
         ".rtf": "application/rtf",
     }
     return mime.get(ext, "application/pdf")
-
-
-@router.get("/autofill/resume")
-def get_resume_file(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Serve the current user's resume file from DB (S3 or local uploads). Proxies S3 URLs to avoid CORS."""
-    try:
-        profile = ProfileService.get_or_create_profile(db, current_user)
-        resume_url = profile.resume_url
-        if not resume_url:
-            raise HTTPException(status_code=404, detail="No resume uploaded")
-
-        # S3 / HTTP URL: proxy through backend to avoid CORS when extension fetches from job sites
-        if resume_url.startswith("http://") or resume_url.startswith("https://"):
-            try:
-                with urlopen(resume_url, timeout=30) as resp:
-                    data = resp.read()
-                filename = resume_url.split("/")[-1].split("?")[0] or "resume.pdf"
-                media_type = _guess_media_type(filename)
-                logger.info("Proxied resume from S3 user_id=%s bytes=%d", current_user.id, len(data))
-                return Response(content=data, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{filename}"'})
-            except Exception as exc:
-                logger.exception("Failed to proxy resume from %s", resume_url)
-                raise HTTPException(status_code=502, detail=f"Failed to fetch resume: {exc}") from exc
-
-        # Local path: /uploads/resumes/filename.pdf
-        safe_name = Path(resume_url).name
-        # Resolve upload dir - main.py uses Path(settings.upload_dir)
-        upload_base = Path(settings.upload_dir)
-        if not upload_base.is_absolute():
-            upload_base = Path.cwd() / upload_base
-        resume_path = upload_base / safe_name
-        if not resume_path.exists():
-            raise HTTPException(status_code=404, detail="Resume file not found")
-        logger.info("Serving resume file user_id=%s file=%s", current_user.id, safe_name)
-        return FileResponse(resume_path, media_type="application/pdf", filename=safe_name)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Failed to serve resume file")
-        raise HTTPException(status_code=500, detail=f"Failed to load resume: {exc}") from exc
 
 
 @router.get("/autofill/resume/{file_name}")
@@ -339,7 +304,7 @@ def get_resume_file_by_name(
 
         if resume_url.startswith("http"):
             try:
-                with urlopen(resume_url, timeout=30) as resp:
+                with urlopen(resume_url, timeout=settings.http_request_timeout) as resp:
                     data = resp.read()
                 media_type = _guess_media_type(safe_name)
                 return Response(content=data, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{safe_name}"'})
@@ -361,48 +326,6 @@ def get_resume_file_by_name(
     except Exception as exc:
         logger.exception("Failed to serve resume file")
         raise HTTPException(status_code=500, detail=f"Failed to load resume: {exc}") from exc
-
-
-@router.post("/autofill/track")
-def track_autofill(
-    payload: AutofillTrackIn,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    """Track when user clicks autofill on a career/job page."""
-    visit = CareerPageVisit(
-        user_id=current_user.id,
-        page_url=payload.page_url,
-        company_name=payload.company_name,
-        job_url=payload.job_url,
-        job_title=payload.job_title,
-        action_type="autofill_used",
-    )
-    db.add(visit)
-    db.commit()
-    logger.info("Autofill tracked user_id=%s page_url=%s", current_user.id, payload.page_url[:80])
-    return {"ok": True}
-
-
-@router.post("/career-page/view")
-def track_career_page_view(
-    payload: AutofillTrackIn,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    """Track when user opens/views a career page."""
-    visit = CareerPageVisit(
-        user_id=current_user.id,
-        page_url=payload.page_url,
-        company_name=payload.company_name,
-        job_url=payload.job_url,
-        job_title=payload.job_title,
-        action_type="page_view",
-    )
-    db.add(visit)
-    db.commit()
-    logger.info("Career page view tracked user_id=%s page_url=%s", current_user.id, payload.page_url[:80])
-    return {"ok": True}
 
 
 @router.post("/form-fields/map", response_model=FormFieldMapOut)
@@ -467,18 +390,6 @@ def map_fields(
     return FormFieldMapOut(mappings=out_mappings)
 
 
-@router.get("/resumes", response_model=list[ResumeItem])
-def list_user_resumes(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> list[ResumeItem]:
-    """List resumes - delegates to shared resume service (GET /api/resume is preferred)."""
-    from backend.app.services.resume_service import list_resumes as list_resumes_svc
-
-    items = list_resumes_svc(db, current_user)
-    return [ResumeItem(**it) for it in items]
-
-
 def _extract_company_from_url(url: str | None) -> str:
     """Extract company name from known ATS URL patterns (Greenhouse, Lever, etc.)."""
     if not url or not url.strip():
@@ -541,7 +452,7 @@ def _extract_location_from_text(text: str | None) -> str:
 
 
 @router.post("/jobs")
-def save_job(
+async def save_job(
     payload: JobSaveIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -596,6 +507,9 @@ def save_job(
     db.add(visit)
     db.commit()
     db.refresh(job)
+
+    from backend.app.utils import cache
+    await cache.delete(f"dashboard_summary:{current_user.id}")
 
     logger.info("Job saved user_id=%s job_id=%s company=%s", current_user.id, job.id, job.company)
     return {"id": job.id, "message": "Job saved successfully"}
@@ -718,55 +632,52 @@ def save_tailor_context(
 
 
 # --- Cover Letter ---
-class CoverLetterGenerateIn(BaseModel):
-    job_description: str = ""
-    job_title: str = ""
+class CoverLetterUpsertIn(BaseModel):
+    job_url: str = ""
+    page_html: str = ""
+    job_title: str | None = None
 
 
-@router.get("/cover-letter")
-def get_cover_letter(
+@router.post("/cover-letter/upsert")
+def cover_letter_upsert(
+    payload: CoverLetterUpsertIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Get stored cover letter from profile preferences."""
-    profile = ProfileService.get_or_create_profile(db, current_user)
-    prefs = profile.preferences or {}
-    cl = prefs.get("cover_letter") or {}
-    if isinstance(cl, dict):
-        return {
-            "content": cl.get("content") or "",
-            "job_title": cl.get("job_title") or "",
-            "job_url": cl.get("job_url") or "",
-        }
-    return {"content": "", "job_title": "", "job_url": ""}
-
-
-@router.post("/cover-letter/generate")
-def generate_cover_letter_endpoint(
-    payload: CoverLetterGenerateIn,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    """Generate cover letter from profile + JD, store in preferences, return content."""
+    """
+    Upsert cover letter: if existing one matches job_url, return it.
+    Else generate via LLM, store, return. Same shape as old /generate.
+    """
     from backend.app.services.cover_letter_service import generate_cover_letter as gen_cover
 
     profile = ProfileService.get_or_create_profile(db, current_user)
-    pl = profile_model_to_payload(profile)
-    content = gen_cover(
-        pl,
-        job_title=payload.job_title or "",
-        job_description=payload.job_description or "",
-    )
     prefs = dict(profile.preferences or {})
+    cl = prefs.get("cover_letter") or {}
+    if isinstance(cl, dict):
+        stored_url = (cl.get("job_url") or "").strip()
+        incoming_url = (payload.job_url or "").strip()
+        if stored_url and incoming_url and stored_url == incoming_url:
+            return {
+                "content": cl.get("content") or "",
+                "job_title": cl.get("job_title") or "",
+            }
+
+    job_title = (payload.job_title or "").strip()
+    job_description = ""
+    if payload.page_html and len(payload.page_html.strip()) > 100:
+        job_description = parse_job_description_from_html(payload.page_html) or ""
+    job_description = (job_description or "").strip()
+
+    pl = profile_model_to_payload(profile)
+    content = gen_cover(pl, job_title=job_title, job_description=job_description)
+
     prefs["cover_letter"] = {
         "content": content or "",
-        "job_title": (payload.job_title or "").strip(),
-        "job_description": (payload.job_description or "")[:500],
+        "job_title": job_title,
+        "job_description": job_description[:500],
+        "job_url": (payload.job_url or "").strip(),
         "updated_at": None,
     }
     profile.preferences = prefs
     db.commit()
-    return {
-        "content": content or "",
-        "job_title": (payload.job_title or "").strip(),
-    }
+    return {"content": content or "", "job_title": job_title}

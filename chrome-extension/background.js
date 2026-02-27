@@ -216,6 +216,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         const scope = msg.scope || "all";
+        const preExpandEmployment = Math.max(0, msg.preExpandEmployment ?? 0);
+        const preExpandEducation = Math.max(0, msg.preExpandEducation ?? 0);
+        const payload = { scope, preExpandEmployment, preExpandEducation };
         let frameIds = [0];
         try {
           const frames = await chrome.webNavigation.getAllFrames({ tabId });
@@ -227,13 +230,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const results = [];
         for (const frameId of frameIds) {
           try {
-            let res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload: { scope } }, { frameId });
+            let res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload }, { frameId });
             results.push({ frameId, ok: true, res });
           } catch (e) {
             if (e?.message?.includes("Receiving end does not exist")) {
               try {
                 await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content.js"] });
-                const res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload: { scope } }, { frameId });
+                const res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload }, { frameId });
                 results.push({ frameId, ok: true, res });
               } catch (e2) {
                 results.push({ frameId, ok: false, err: String(e2) });
@@ -265,7 +268,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "FILL_ALL_FRAMES") {
     (async () => {
       try {
-        const { tabId: msgTabId, valuesByFrame, resumeData } = msg.payload || {};
+        const { tabId: msgTabId, valuesByFrame, fieldsByFrame, resumeData } = msg.payload || {};
         const tabId = msgTabId ?? sender?.tab?.id;
         if (!tabId || !valuesByFrame) {
           sendResponse({ ok: false, totalFilled: 0, totalResumes: 0, error: "Missing tabId or valuesByFrame" });
@@ -286,9 +289,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         for (const fid of frameIds) {
           try {
             const vals = valuesByFrame[fid] || {};
+            const fieldsForFrame = (fieldsByFrame && fieldsByFrame[fid]) || [];
             let res = await chrome.tabs.sendMessage(tabId, {
               type: "FILL_WITH_VALUES",
-              payload: { values: vals, resumeData, scope: "current_document" }
+              payload: { values: vals, fieldsForFrame, resumeData, scope: "current_document" }
             }, { frameId: parseInt(fid, 10) || 0 });
             if (res?.ok) {
               totalFilled += res.filledCount || 0;
@@ -298,9 +302,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (e?.message?.includes("Receiving end does not exist")) {
               try {
                 await chrome.scripting.executeScript({ target: { tabId, frameIds: [parseInt(fid, 10) || 0] }, files: ["content.js"] });
+                const fieldsForFrame = (fieldsByFrame && fieldsByFrame[fid]) || [];
                 const res = await chrome.tabs.sendMessage(tabId, {
                   type: "FILL_WITH_VALUES",
-                  payload: { values: valuesByFrame[fid] || {}, resumeData, scope: "current_document" }
+                  payload: { values: valuesByFrame[fid] || {}, fieldsForFrame, resumeData, scope: "current_document" }
                 }, { frameId: parseInt(fid, 10) || 0 });
                 if (res?.ok) {
                   totalFilled += res.filledCount || 0;

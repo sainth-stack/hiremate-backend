@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from backend.app.api.v1.activity import router as activity_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.chrome_extension.routes import router as chrome_extension_router
 from backend.app.api.v1.dashboard import router as dashboard_router
@@ -46,6 +47,7 @@ app.include_router(resume_router, prefix="/api/resume", tags=["resume"])
 app.include_router(profile_router, prefix="/api/profile", tags=["profile"])
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(chrome_extension_router, prefix="/api")
+app.include_router(activity_router, prefix="/api")
 
 # Serve uploaded resumes (create dir if missing)
 upload_path = Path(settings.upload_dir)
@@ -54,8 +56,8 @@ app.mount(f"/{settings.upload_dir}", StaticFiles(directory=settings.upload_dir),
 
 
 @app.on_event("startup")
-def verify_db_connection():
-    """Verify database connection on startup. Fail fast if credentials are wrong."""
+async def on_startup():
+    """Verify database connection and connect Redis cache on startup."""
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -65,6 +67,9 @@ def verify_db_connection():
         raise RuntimeError(
             f"Database connection failed. Check DATABASE_URL in .env. Error: {e}"
         ) from e
+
+    from backend.app.utils import cache
+    await cache.connect()
 
 
 @app.get("/")
@@ -81,4 +86,4 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5432)
+    uvicorn.run(app, host="0.0.0.0", port=settings.port)

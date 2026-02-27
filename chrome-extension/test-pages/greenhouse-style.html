@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Greenhouse-Style Job Application (Simulated)</title>
+  <style>
+    body { font-family: system-ui; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    .application-question { margin-bottom: 1.5rem; }
+    .question-text { display: block; font-weight: 500; margin-bottom: 0.5rem; }
+    input, select, textarea { width: 100%; padding: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Apply to: Software Engineer (Greenhouse-style)</h1>
+  <form id="job_application" action="#" method="post">
+    <div class="application-question">
+      <span class="question-text">First Name *</span>
+      <input type="text" name="job_application[first_name]" id="job_application_first_name" required>
+    </div>
+    <div class="application-question">
+      <span class="question-text">Last Name *</span>
+      <input type="text" name="job_application[last_name]" id="job_application_last_name" required>
+    </div>
+    <div class="application-question">
+      <span class="question-text">Email *</span>
+      <input type="email" name="job_application[email]" id="job_application_email" required>
+    </div>
+    <div class="application-question">
+      <span class="question-text">Phone</span>
+      <input type="tel" name="job_application[phone]" id="job_application_phone">
+    </div>
+    <div class="application-question">
+      <span class="question-text">Resume *</span>
+      <input type="file" name="resume" id="job_application_resume" accept=".pdf,.doc,.docx" required>
+    </div>
+    <div class="application-question">
+      <span class="question-text">Cover Letter</span>
+      <textarea name="job_application[cover_letter]" id="job_application_cover_letter" rows="4"></textarea>
+    </div>
+    <div class="application-question">
+      <span class="question-text">LinkedIn URL</span>
+      <input type="url" name="job_application[answers][custom_field_1]" id="linkedin_url">
+    </div>
+    <div class="application-question">
+      <span class="question-text">How many years of experience do you have?</span>
+      <select name="job_application[answers][custom_question_1]" data-provides="select">
+        <option value="">Select...</option>
+        <option value="0-1">0-1 years</option>
+        <option value="1-3">1-3 years</option>
+        <option value="3-5">3-5 years</option>
+        <option value="5+">5+ years</option>
+      </select>
+    </div>
+    <div class="application-question">
+      <span class="question-text">Will you require visa sponsorship?</span>
+      <select name="job_application[answers][custom_question_2]" data-provides="typeahead">
+        <option value="">Select...</option>
+        <option value="no">No</option>
+        <option value="yes">Yes</option>
+      </select>
+    </div>
+    <button type="submit">Submit Application</button>
+  </form>
+  <script>
+    window.runScraperTest = function() {
+      return new Promise(function(resolve) {
+        document.addEventListener("scraper-test-response", function onResp(e) {
+          document.removeEventListener("scraper-test-response", onResp);
+          resolve(e.detail);
+        }, { once: true });
+        document.dispatchEvent(new CustomEvent("scraper-test-request"));
+      });
+    };
+  </script>
+</body>
+</html>

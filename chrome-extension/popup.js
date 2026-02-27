@@ -122,6 +122,9 @@ async function fetchWithAuthRetry(url, options = {}) {
         }
       } catch (_) {}
     }
+    if (!newToken) {
+      await chrome.storage.local.remove([AUTOFILL_CTX_KEY]);
+    }
     if (newToken) {
       const base = toPlainHeaders(options.headers);
       res = await fetch(url, { ...options, headers: { ...base, Authorization: `Bearer ${newToken}` } });
@@ -229,7 +232,7 @@ async function handleSignup(e) {
 
 async function handleLogout() {
   ACCESS_TOKEN = null;
-  await chrome.storage.local.remove(["accessToken"]);
+  await chrome.storage.local.remove(["accessToken", AUTOFILL_CTX_KEY]);
   showLogin();
 }
 
@@ -256,17 +259,23 @@ function buildResumeTextFromProfile(profile) {
   return sections.join("\n\n");
 }
 
+const AUTOFILL_CTX_KEY = "hm_autofill_ctx";
+const AUTOFILL_CTX_TTL = 10 * 60 * 1000;
+
 let DATA_LOADED = false;
 
 async function loadAndCacheAutofillData() {
   if (DATA_LOADED) {
-    const cached = await chrome.storage.local.get(["profile", "customAnswers", "resumeText"]);
+    const cached = await chrome.storage.local.get([AUTOFILL_CTX_KEY, "profile", "customAnswers", "resumeText"]);
+    const ctx = cached[AUTOFILL_CTX_KEY]?.data;
     if (cached.profile && cached.customAnswers) {
       logInfo("Using cached autofill data");
       return {
         profile: cached.profile,
         customAnswers: cached.customAnswers,
-        resumeText: cached.resumeText || ""
+        resumeText: cached.resumeText || "",
+        resumeName: ctx?.resume_name || null,
+        resumeUrl: ctx?.resume_url || null,
       };
     }
   }
@@ -274,55 +283,60 @@ async function loadAndCacheAutofillData() {
   try {
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
-    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/data`, { headers });
-    
-    if (!res.ok) {
-      logWarn("Failed to fetch autofill data from API", { status: res.status });
-      return { profile: {}, customAnswers: {}, resumeText: "" };
+    const _stored = await chrome.storage.local.get(AUTOFILL_CTX_KEY);
+    const _cached = _stored[AUTOFILL_CTX_KEY];
+    let autofillCtx;
+    if (_cached && (Date.now() - _cached.ts) < AUTOFILL_CTX_TTL) {
+      autofillCtx = _cached.data;
+    } else {
+      const _res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/context`, { headers });
+      if (!_res.ok) {
+        logWarn("Failed to fetch autofill context from API", { status: _res.status });
+        return { profile: {}, customAnswers: {}, resumeText: "" };
+      }
+      autofillCtx = await _res.json();
+      await chrome.storage.local.set({ [AUTOFILL_CTX_KEY]: { data: autofillCtx, ts: Date.now() } });
     }
-    
-    const data = await res.json();
-    const profile = data.profile || {};
-    const customAnswers = data.custom_answers || {};
-    const resumeText = (data.resume_text || "").trim();
-    const resumeFileName = data.resume_file_name;
-    const resumeUrl = data.resume_url;
-    
-    // Cache data in storage
+    const profile = autofillCtx.profile || {};
+    const customAnswers = autofillCtx.custom_answers || {};
+    const resumeText = (autofillCtx.resume_text || "").trim();
+    const resumeUrl = autofillCtx.resume_url;
+
     await chrome.storage.local.set({ profile, customAnswers, resumeText });
-    
-    // Load and upload resume file via backend (backend proxies S3 to avoid CORS)
-    if (resumeFileName || resumeUrl) {
+
+    const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
+    if (resumeFilename) {
       try {
-        const path = resumeFileName ? `/chrome-extension/autofill/resume/${resumeFileName.split("/").pop()}` : "/chrome-extension/autofill/resume";
-        const resumeRes = await fetchWithAuthRetry(`${apiBase}${path}`, { headers });
+        const resumeRes = await fetchWithAuthRetry(
+          `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
+          { headers }
+        );
         if (resumeRes.ok) {
           const resumeBuffer = await resumeRes.arrayBuffer();
-          const fileName = resumeFileName?.split("/").pop()?.split("?")[0] || resumeUrl?.split("/").pop()?.split("?")[0] || "resume.pdf";
           await chrome.runtime.sendMessage({
             type: "SAVE_RESUME",
-            payload: {
-              buffer: Array.from(new Uint8Array(resumeBuffer)),
-              name: fileName
-            }
+            payload: { buffer: Array.from(new Uint8Array(resumeBuffer)), name: resumeFilename }
           });
-          logInfo("Resume uploaded to IndexedDB from API", { fileName });
+          logInfo("Resume uploaded to IndexedDB from API", { fileName: resumeFilename });
         }
       } catch (resumeErr) {
         logWarn("Failed to upload resume from API", { error: String(resumeErr) });
       }
     }
-    
+
     logInfo("Loaded autofill data from API", {
       profileKeys: Object.keys(profile).length,
-      profileKeysPreview: Object.keys(profile).slice(0, 10),
       customAnswerKeys: Object.keys(customAnswers).length,
       resumeTextLen: resumeText.length,
-      resumeFile: resumeFileName
     });
-    
     DATA_LOADED = true;
-    return { profile, customAnswers, resumeText };
+    return {
+      profile,
+      customAnswers,
+      resumeText,
+      resumeName: autofillCtx.resume_name || null,
+      resumeUrl: resumeUrl || null,
+    };
   } catch (err) {
     logWarn("Failed to load autofill data from API", { error: String(err) });
     return { profile: {}, customAnswers: {}, resumeText: "" };
@@ -367,22 +381,32 @@ function showMappingProgress(fields, mappings) {
   const list = document.createElement("div");
   list.className = "mapping-list";
   
-  fields.forEach((field, idx) => {
-    const mapData = mappings[String(field.index)] || mappings[field.index];
+  const fillableTags = new Set(["input", "select", "textarea"]);
+  const nonFillableTags = new Set(["div", "span", "ul", "li"]);
+  
+  fields.forEach((field) => {
+    const mapData = mappings[String(field.index)] ?? mappings[field.index];
     if (!mapData) return;
+    
+    const tag = (field.tag || field.tagName || field.type || "").toLowerCase();
+    const isFillable = fillableTags.has(tag) || (tag === "input" && (field.type || "text") !== "hidden");
+    const hasValue = mapData.value != null && mapData.value !== "";
+    
+    if (nonFillableTags.has(tag) && !hasValue) return;
     
     const div = document.createElement("div");
     div.className = "mapping-row";
     
     const confidence = mapData.confidence || 0;
     const confidenceClass = confidence > 0.9 ? "high" : confidence > 0.7 ? "medium" : "low";
+    const displayValue = hasValue ? String(mapData.value).slice(0, 80) + (String(mapData.value).length > 80 ? "…" : "") : "(empty)";
     
     div.innerHTML = `
       <div class="mapping-row-top">
-        <span class="mapping-label">${field.label || field.name || "Field " + field.index}</span>
+        <span class="mapping-label">${(field.label || field.name || "Field " + field.index || "").toString().slice(0, 50)}</span>
         <span class="mapping-confidence ${confidenceClass}">${Math.round(confidence * 100)}%</span>
       </div>
-      <div class="mapping-value">${mapData.value || "(empty)"}</div>
+      <div class="mapping-value">${displayValue}</div>
     `;
     list.appendChild(div);
   });
@@ -488,28 +512,64 @@ function buildValuesByFrame(fields, mappings) {
   return valuesByFrame;
 }
 
-async function fillMappedValuesForTab(tabId, fields, mappings) {
+/** Build field metadata per frame for selector-based element resolution during fill */
+function buildFieldsByFrame(fields) {
+  const fieldsByFrame = {};
+  for (const field of fields) {
+    const frameId = String(field.frameId ?? 0);
+    if (!fieldsByFrame[frameId]) fieldsByFrame[frameId] = [];
+    const localKey = String(field.frameLocalIndex ?? field.index);
+    fieldsByFrame[frameId].push({
+      index: localKey,
+      frameLocalIndex: field.frameLocalIndex ?? field.index,
+      selector: field.selector || null,
+      id: field.domId || field.id || null,
+      domId: field.domId || field.id || null,
+      label: field.label || null,
+      type: field.type || null,
+      tag: field.tag || null,
+      atsFieldType: field.atsFieldType || null,
+      options: field.options || [],
+    });
+  }
+  return fieldsByFrame;
+}
+
+function sanitizeResumeFilename(displayName) {
+  if (!displayName || typeof displayName !== "string") return null;
+  const s = displayName.replace(/\s*\(default\)\s*/gi, "").replace(/\s+/g, "_").replace(/[^\w\-_.]/g, "");
+  return s ? (s.endsWith(".pdf") ? s : s + ".pdf") : null;
+}
+
+async function fillMappedValuesForTab(tabId, fields, mappings, context = null) {
   const resumeRes = await chrome.runtime.sendMessage({ type: "GET_RESUME" });
-  const resumeData = resumeRes?.ok ? resumeRes.data || null : null;
+  let resumeData = resumeRes?.ok ? resumeRes.data || null : null;
+  if (resumeData && context?.resumeName) {
+    const displayName = sanitizeResumeFilename(context.resumeName);
+    if (displayName) resumeData = { ...resumeData, name: displayName };
+  }
   const valuesByFrame = buildValuesByFrame(fields, mappings);
+  const fieldsByFrame = buildFieldsByFrame(fields);
   const totalValues = Object.values(valuesByFrame).reduce(
     (sum, frameVals) => sum + Object.keys(frameVals).length,
     0
   );
-  logInfo("Auto-filling mapped values", {
+  logInfo("Fill: dispatching to frames", {
     frames: Object.keys(valuesByFrame).length,
     totalValues,
     hasResume: !!resumeData,
-    valuesByFramePreview: Object.entries(valuesByFrame).map(([fid, vals]) => ({
+    perFrame: Object.entries(valuesByFrame).map(([fid, vals]) => ({
       frameId: fid,
-      valueCount: Object.keys(vals).length
-    }))
+      count: Object.keys(vals).length,
+      indices: Object.keys(vals).slice(0, 8),
+    })),
   });
 
   const fillResponses = await sendMessageToAllFrames(tabId, (frameId) => ({
     type: "FILL_WITH_VALUES",
     payload: {
       values: valuesByFrame[String(frameId)] || {},
+      fieldsForFrame: fieldsByFrame[String(frameId)] || [],
       resumeData,
       scope: "current_document"
     }
@@ -533,23 +593,18 @@ async function fillMappedValuesForTab(tabId, fields, mappings) {
   return { totalFilled, totalResumes };
 }
 
-async function trackAutofillUsed(pageUrl) {
-  try {
-    const apiBase = await getApiBase();
-    const headers = await getAuthHeaders();
-    await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/track`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({
-        page_url: pageUrl || "",
-        company_name: null,
-        job_url: pageUrl || null,
-        job_title: null,
-      }),
-    });
-  } catch (e) {
-    logWarn("Failed to track autofill", { error: String(e) });
-  }
+function trackAutofillUsed(pageUrl) {
+  const url = pageUrl || "";
+  getApiBase().then((apiBase) =>
+    getAuthHeaders().then((headers) => {
+      if (!headers?.Authorization) return;
+      fetch(`${apiBase}/activity/track`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ event_type: "autofill_used", page_url: url }),
+      }).catch((e) => logWarn("Failed to track autofill", { error: String(e) }));
+    })
+  );
 }
 
 document.getElementById("process-and-fill").addEventListener("click", async () => {
@@ -566,17 +621,29 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
 
     trackAutofillUsed(tab.url || "");
 
-    // Kick off context loading in parallel with DOM scraping for lower end-to-end latency.
-    const contextPromise = getLLMMappingContext();
+    // Load context first (needed for pre-expand count and mapping)
+    showStatus("Loading profile data from API...", "loading");
+    showProgress("Loading profile", "Fetching candidate profile and saved answers...", true);
+    const context = await getLLMMappingContext();
+    const experiences = context?.profile?.experiences || [];
+    const educations = context?.profile?.educations || [];
+    const preExpandEmployment = Math.max(0, experiences.length - 1);
+    const preExpandEducation = Math.max(0, educations.length - 1);
 
-    // 1. Scrape all frames and merge (retry for JS-rendered forms).
+    // 1. Scrape all frames and merge (with Add another expansion + dropdown options)
     let fields = [];
     for (let attempt = 0; attempt < 3; attempt++) {
       showProgress("Scanning fields", attempt > 0 ? `Waiting for form... (attempt ${attempt + 1}/3)` : "Collecting input fields across all frames...", true);
       if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 + attempt * 800));
+      const scrapePayload = {
+        scope: "all",
+        expandSelectOptions: true,
+        preExpandEmployment,
+        preExpandEducation,
+      };
       const scrapeResponses = await sendMessageToAllFrames(tab.id, () => ({
         type: "SCRAPE_FIELDS",
-        payload: { scope: "all" }
+        payload: scrapePayload,
       }));
       const mergedFields = [];
       let globalIndex = 0;
@@ -598,20 +665,23 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
       if (fields.length > 0) break;
     }
     if (fields.length === 0) throw new Error("No form fields found. Click \"Apply\" on a job to open the application form, then try again.");
-    logInfo("DOM scrape response received", {
+    logInfo("Scrape complete: fields received", {
       fieldCount: fields.length,
       requiredFields: fields.filter((f) => !!f.required).length,
       framesScanned: scrapeResponses.length,
       framesWithFields: scrapeResponses.filter((r) => r.ok && r.res?.ok && (r.res.fields || []).length > 0).length,
     });
+    logInfo("Scraped fields (index | label | type | required)", {
+      fields: fields.slice(0, 25).map((f) => ({
+        i: f.index,
+        label: (f.label || f.name || f.id || "?").toString().slice(0, 50),
+        type: f.type || f.tag,
+        req: !!f.required,
+      })),
+    });
 
     CURRENT_FIELDS = fields;
-    
-    // 2. Load context from API
-    showStatus("Loading profile data from API...", "loading");
-    showProgress("Loading profile", "Fetching candidate profile and saved answers...", true);
-    const context = await contextPromise;
-    
+
     if (Object.keys(context.profile || {}).length === 0 && Object.keys(context.customAnswers || {}).length === 0) {
       showProgress("Profile unavailable", "Unable to fetch profile/custom answers from API.", false);
       showStatus("⚠ Failed to load profile data from API.", "error");
@@ -657,13 +727,16 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
       mappings = data.mappings || {};
       setCachedMapping(cacheKey, mappings);
     }
-    logInfo("Mapping API response", {
+    logInfo("Mapping complete: API response received", {
       mappedFields: Object.keys(mappings).length,
-      mappingsSample: Object.entries(mappings).slice(0, 5).map(([k, v]) => ({
-        key: k,
-        value: v?.value,
-        confidence: v?.confidence
-      }))
+    });
+    logInfo("Mapping results (index | value | confidence | reason)", {
+      mappings: Object.entries(mappings).slice(0, 20).map(([k, v]) => ({
+        idx: k,
+        value: v?.value != null ? String(v.value).slice(0, 40) : null,
+        conf: v?.confidence,
+        reason: (v?.reason || "").slice(0, 50),
+      })),
     });
 
     if (Object.keys(mappings).length === 0) {
@@ -677,11 +750,23 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
     // 3. Auto-fill directly (LLM-only flow)
     showProgress("Filling form", "Applying mapped values to detected inputs...", true);
     showStatus("Filling form...", "loading");
-    const fillResult = await fillMappedValuesForTab(tab.id, CURRENT_FIELDS, mappings);
+    const valuesByFramePreview = CURRENT_FIELDS.reduce((acc, f) => {
+      const fid = String(f.frameId ?? 0);
+      acc[fid] = (acc[fid] || 0) + 1;
+      return acc;
+    }, {});
+    logInfo("Filling: sending to content script", {
+      fieldsToFill: CURRENT_FIELDS.length,
+      valuesByFrame: valuesByFramePreview,
+    });
+    const fillResult = await fillMappedValuesForTab(tab.id, CURRENT_FIELDS, mappings, context);
     showProgress("Completed", `Filled ${fillResult.totalFilled} fields successfully.`, false);
     showStatus(`✓ Filled ${fillResult.totalFilled} fields${fillResult.totalResumes > 0 ? " + uploaded resume" : ""}!`, "success");
     btn.disabled = false;
-    logInfo("Fill completed successfully", fillResult);
+    logInfo("Fill completed", {
+      totalFilled: fillResult.totalFilled,
+      resumeUploads: fillResult.totalResumes,
+    });
 
   } catch (err) {
     showProgress("Failed", "Please retry after checking page access/API.", false);

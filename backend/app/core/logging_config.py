@@ -4,11 +4,14 @@ Logging configuration for the application.
 import logging
 import sys
 
+from backend.app.core.config import settings
 
-def setup_logging(level: str = "INFO") -> logging.Logger:
+
+def setup_logging(level: str | None = None) -> logging.Logger:
     """Configure application logging. Returns root logger."""
+    level_val = level or settings.log_level
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
+        level=getattr(logging, level_val.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
