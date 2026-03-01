@@ -1,7 +1,7 @@
 let ACCESS_TOKEN = null;
 const DEFAULT_API_BASE = "http://localhost:8000/api";
 const DEFAULT_LOGIN_PAGE_URL = "http://localhost:5173/login";
-const LOG_PREFIX = "[JobAutofill][popup]";
+const LOG_PREFIX = "[Autofill][popup]";
 const MAPPING_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAPPING_CACHE = new Map();
 
@@ -59,7 +59,11 @@ async function refreshTokenViaApi() {
             const newToken = json.access_token || json.accessToken;
             if (newToken) {
               ACCESS_TOKEN = newToken;
-              await chrome.storage.local.set({ accessToken: newToken });
+              if (window.__SECURITY_MANAGER__?.storeToken) {
+                await window.__SECURITY_MANAGER__.storeToken(newToken);
+              } else {
+                await chrome.storage.local.set({ accessToken: newToken });
+              }
               try {
                 await chrome.runtime.sendMessage({ type: "SYNC_TOKEN_TO_HIREMATE_TAB", token: newToken });
               } catch (_) {}
@@ -91,10 +95,18 @@ async function getAuthHeaders() {
     const syncRes = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
     if (syncRes?.ok && syncRes?.token) {
       ACCESS_TOKEN = syncRes.token;
-      await chrome.storage.local.set({ accessToken: syncRes.token });
+      if (window.__SECURITY_MANAGER__?.storeToken) {
+        await window.__SECURITY_MANAGER__.storeToken(syncRes.token);
+      } else {
+        await chrome.storage.local.set({ accessToken: syncRes.token });
+      }
     }
   } catch (_) {}
-  let token = ACCESS_TOKEN || (await chrome.storage.local.get(["accessToken"])).accessToken;
+  let token = ACCESS_TOKEN;
+  if (!token && window.__SECURITY_MANAGER__?.getToken) {
+    try { token = await window.__SECURITY_MANAGER__.getToken(); } catch (_) {}
+  }
+  if (!token) token = (await chrome.storage.local.get(["accessToken"])).accessToken;
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
@@ -118,7 +130,11 @@ async function fetchWithAuthRetry(url, options = {}) {
         if (syncRes?.ok && syncRes?.token) {
           newToken = syncRes.token;
           ACCESS_TOKEN = newToken;
-          await chrome.storage.local.set({ accessToken: newToken });
+          if (window.__SECURITY_MANAGER__?.storeToken) {
+            await window.__SECURITY_MANAGER__.storeToken(newToken);
+          } else {
+            await chrome.storage.local.set({ accessToken: newToken });
+          }
         }
       } catch (_) {}
     }
@@ -181,7 +197,11 @@ async function handleLogin(e) {
 
     const data = await res.json();
     ACCESS_TOKEN = data.access_token;
-    await chrome.storage.local.set({ accessToken: ACCESS_TOKEN });
+    if (window.__SECURITY_MANAGER__?.storeToken) {
+      await window.__SECURITY_MANAGER__.storeToken(ACCESS_TOKEN);
+    } else {
+      await chrome.storage.local.set({ accessToken: ACCESS_TOKEN });
+    }
 
     showApp();
   } catch (err) {
@@ -220,7 +240,11 @@ async function handleSignup(e) {
 
     const data = await res.json();
     ACCESS_TOKEN = data.access_token;
-    await chrome.storage.local.set({ accessToken: ACCESS_TOKEN });
+    if (window.__SECURITY_MANAGER__?.storeToken) {
+      await window.__SECURITY_MANAGER__.storeToken(ACCESS_TOKEN);
+    } else {
+      await chrome.storage.local.set({ accessToken: ACCESS_TOKEN });
+    }
 
     showApp();
   } catch (err) {
@@ -261,15 +285,18 @@ function buildResumeTextFromProfile(profile) {
 
 const AUTOFILL_CTX_KEY = "hm_autofill_ctx";
 const AUTOFILL_CTX_TTL = 10 * 60 * 1000;
+const FIELD_MAPPINGS_TTL = 7 * 86400 * 1000; // 7 days
 
 let DATA_LOADED = false;
 
 async function loadAndCacheAutofillData() {
+  const tLoad = Date.now();
+  logInfo("loadAndCacheAutofillData: entry");
   if (DATA_LOADED) {
     const cached = await chrome.storage.local.get([AUTOFILL_CTX_KEY, "profile", "customAnswers", "resumeText"]);
     const ctx = cached[AUTOFILL_CTX_KEY]?.data;
     if (cached.profile && cached.customAnswers) {
-      logInfo("Using cached autofill data");
+      logInfo("loadAndCacheAutofillData: using cached data", { ms: Date.now() - tLoad });
       return {
         profile: cached.profile,
         customAnswers: cached.customAnswers,
@@ -281,15 +308,20 @@ async function loadAndCacheAutofillData() {
   }
 
   try {
+    logInfo("loadAndCacheAutofillData: fetching apiBase + headers");
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
+    logInfo("loadAndCacheAutofillData: got apiBase", { apiBase, hasAuth: !!headers?.Authorization });
     const _stored = await chrome.storage.local.get(AUTOFILL_CTX_KEY);
     const _cached = _stored[AUTOFILL_CTX_KEY];
     let autofillCtx;
     if (_cached && (Date.now() - _cached.ts) < AUTOFILL_CTX_TTL) {
+      logInfo("loadAndCacheAutofillData: using IndexedDB cache", { ms: Date.now() - tLoad });
       autofillCtx = _cached.data;
     } else {
+      logInfo("loadAndCacheAutofillData: fetching /autofill/context");
       const _res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/context`, { headers });
+      logInfo("loadAndCacheAutofillData: context response", { status: _res?.status, ok: _res?.ok, ms: Date.now() - tLoad });
       if (!_res.ok) {
         logWarn("Failed to fetch autofill context from API", { status: _res.status });
         return { profile: {}, customAnswers: {}, resumeText: "" };
@@ -306,22 +338,22 @@ async function loadAndCacheAutofillData() {
 
     const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
     if (resumeFilename) {
-      try {
-        const resumeRes = await fetchWithAuthRetry(
-          `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
-          { headers }
-        );
-        if (resumeRes.ok) {
-          const resumeBuffer = await resumeRes.arrayBuffer();
-          await chrome.runtime.sendMessage({
+      // Don't block: fetch resume in background so "Loading profile..." doesn't hang on large PDFs
+      fetchWithAuthRetry(
+        `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
+        { headers }
+      ).then((resumeRes) => {
+        if (resumeRes.ok) return resumeRes.arrayBuffer();
+        return null;
+      }).then((buf) => {
+        if (buf) {
+          chrome.runtime.sendMessage({
             type: "SAVE_RESUME",
-            payload: { buffer: Array.from(new Uint8Array(resumeBuffer)), name: resumeFilename }
+            payload: { buffer: Array.from(new Uint8Array(buf)), name: resumeFilename }
           });
           logInfo("Resume uploaded to IndexedDB from API", { fileName: resumeFilename });
         }
-      } catch (resumeErr) {
-        logWarn("Failed to upload resume from API", { error: String(resumeErr) });
-      }
+      }).catch((resumeErr) => logWarn("Failed to upload resume from API", { error: String(resumeErr) }));
     }
 
     logInfo("Loaded autofill data from API", {
@@ -360,15 +392,19 @@ function showStatus(msg, type = "info") {
   el.className = "status " + type; // "info", "error", "success"
 }
 
-function showProgress(stage, detail = "", isActive = false) {
+function showProgress(stage, detail = "", isActive = false, percent = 0) {
   const card = document.getElementById("progress-card");
   const stageEl = document.getElementById("progress-stage");
   const detailEl = document.getElementById("progress-detail");
-  if (!card || !stageEl || !detailEl) return;
+  const barEl = document.getElementById("progress-bar");
+  const percentEl = document.getElementById("progress-percent");
+  if (!card || !stageEl) return;
   card.classList.remove("hidden");
   card.classList.toggle("active", !!isActive);
   stageEl.textContent = stage;
-  detailEl.textContent = detail;
+  if (detailEl) detailEl.textContent = detail;
+  if (barEl) barEl.style.width = Math.min(100, Math.max(0, percent)) + "%";
+  if (percentEl) percentEl.textContent = Math.round(percent) + "%";
 }
 
 function showMappingProgress(fields, mappings) {
@@ -385,7 +421,7 @@ function showMappingProgress(fields, mappings) {
   const nonFillableTags = new Set(["div", "span", "ul", "li"]);
   
   fields.forEach((field) => {
-    const mapData = mappings[String(field.index)] ?? mappings[field.index];
+    const mapData = mappings[field.fingerprint] ?? mappings[String(field.index)] ?? mappings[field.index];
     if (!mapData) return;
     
     const tag = (field.tag || field.tagName || field.type || "").toLowerCase();
@@ -417,6 +453,27 @@ function showMappingProgress(fields, mappings) {
 function hideMappingProgress() {
   const container = document.getElementById("mapping-progress");
   if (container) container.classList.add("hidden");
+}
+
+function showProfileGapTip(missingLabels) {
+  const top = [...new Set(missingLabels)].slice(0, 3);
+  if (!top.length) return;
+  document.getElementById("opsbrain-gap-tip")?.remove();
+  const tip = document.createElement("div");
+  tip.id = "opsbrain-gap-tip";
+  tip.style.cssText = "background:#FFF8E7;border:1px solid #F5A623;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:12px;color:#7A5200;line-height:1.4;";
+  const fieldList = top.map((f) => `<strong>${escapeHtml(f)}</strong>`).join(", ");
+  tip.innerHTML = `💡 Add ${fieldList} to your profile to autofill ${top.length} more field${top.length > 1 ? "s" : ""} next time. <a href="#" id="opsbrain-gap-tip-open" style="margin-left:6px;color:#F5A623;text-decoration:underline;">Update Profile</a> <span id="opsbrain-gap-tip-dismiss" style="float:right;cursor:pointer;font-weight:bold;">✕</span>`;
+  const container = document.querySelector(".process-section") || document.getElementById("app-section") || document.body;
+  container.prepend(tip);
+  document.getElementById("opsbrain-gap-tip-dismiss")?.addEventListener("click", () => tip.remove());
+  document.getElementById("opsbrain-gap-tip-open")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    getApiBase().then((apiBase) => {
+      const base = apiBase.replace(/\/api\/?$/, "") || "http://localhost:5173";
+      chrome.tabs.create({ url: `${base}/profile` });
+    });
+  });
 }
 
 function getMappingCacheKey(fields, context) {
@@ -454,6 +511,50 @@ function setCachedMapping(cacheKey, mappings) {
   MAPPING_CACHE.set(cacheKey, { ts: Date.now(), mappings });
 }
 
+// Layer 1: Per-fingerprint cache in chrome.storage.local
+async function getCachedMappingsByFp(fps) {
+  if (!fps?.length) return {};
+  try {
+    const key = "hm_field_mappings";
+    const stored = await chrome.storage.local.get([key]);
+    const all = stored[key] || {};
+    const now = Date.now();
+    const out = {};
+    for (const fp of fps) {
+      const rec = all[fp];
+      if (rec && rec.cached_at && (now - rec.cached_at) < FIELD_MAPPINGS_TTL) {
+        out[fp] = rec.mapping;
+      }
+    }
+    return out;
+  } catch (_) {
+    return {};
+  }
+}
+
+async function setCachedMappingsByFp(mappingsByFp) {
+  if (!mappingsByFp || Object.keys(mappingsByFp).length === 0) return;
+  try {
+    const key = "hm_field_mappings";
+    const stored = await chrome.storage.local.get([key]);
+    const all = stored[key] || {};
+    const now = Date.now();
+    for (const [fp, mapping] of Object.entries(mappingsByFp)) {
+      if (mapping && mapping.value !== undefined) {
+        all[fp] = { mapping, cached_at: now };
+      }
+    }
+    const keys = Object.keys(all);
+    if (keys.length > 500) {
+      const sorted = keys.map((k) => ({ k, t: all[k].cached_at })).sort((a, b) => a.t - b.t);
+      for (let i = 0; i < sorted.length - 400; i++) {
+        delete all[sorted[i].k];
+      }
+    }
+    await chrome.storage.local.set({ [key]: all });
+  } catch (_) {}
+}
+
 let CURRENT_FIELDS = [];
 
 // -- Core Logic --
@@ -461,11 +562,17 @@ let CURRENT_FIELDS = [];
 /** Send message to a specific frame; inject content script in that frame and retry once if needed. */
 async function sendMessageToFrame(tabId, frameId, message) {
   try {
-    return await chrome.tabs.sendMessage(tabId, message, { frameId });
+    const res = await chrome.tabs.sendMessage(tabId, message, { frameId });
+    logInfo("sendMessageToFrame: ok", { tabId, frameId, type: message?.type });
+    return res;
   } catch (e) {
+    logInfo("sendMessageToFrame: first attempt failed", { tabId, frameId, error: e?.message?.slice(0, 80) });
     if (!e?.message?.includes("Receiving end does not exist")) throw e;
-    await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content.js"] });
-    return await chrome.tabs.sendMessage(tabId, message, { frameId });
+    logInfo("sendMessageToFrame: injecting and retrying", { tabId, frameId });
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["config.js", "security-manager.js", "content-script/requestManager.js", "content-script/cacheManager.js", "content-script/error-handler.js", "content-script/pageDetector.js", "content-script/formWatcher.js", "content-script/selectorResolver.js", "content-script/professionalWidget.js", "content-script/fieldScraper.js", "content-script/humanFiller.js", "content.js"] });
+    const res = await chrome.tabs.sendMessage(tabId, message, { frameId });
+    logInfo("sendMessageToFrame: retry ok", { tabId, frameId });
+    return res;
   }
 }
 
@@ -482,6 +589,7 @@ async function getAllFrameIds(tabId) {
 
 async function sendMessageToAllFrames(tabId, messageBuilder) {
   const frameIds = await getAllFrameIds(tabId);
+  logInfo("sendMessageToAllFrames: frameIds", { tabId, frameIds });
   const promises = frameIds.map(async (frameId) => {
     try {
       const message = typeof messageBuilder === "function" ? messageBuilder(frameId) : messageBuilder;
@@ -494,15 +602,31 @@ async function sendMessageToAllFrames(tabId, messageBuilder) {
   return Promise.all(promises);
 }
 
-function buildValuesByFrame(fields, mappings) {
+const EDUCATION_ATS = new Set(["school", "degree", "major", "graduation_year"]);
+const EMPLOYMENT_ATS = new Set(["company", "job_title", "start_date", "end_date"]);
+
+function buildValuesByFrame(fields, mappings, limits = {}) {
+  const maxEducationBlocks = limits.maxEducationBlocks ?? 999;
+  const maxEmploymentBlocks = limits.maxEmploymentBlocks ?? 999;
+  const occurrenceByFp = {};
+
   const valuesByFrame = {};
   for (const field of fields) {
-    const mapData = mappings[String(field.index)] || mappings[field.index];
+    const mapData = mappings[field.fingerprint] ?? mappings[String(field.index)] ?? mappings[field.index];
     let value = mapData?.value;
 
     // Always attempt resume upload for file fields.
     if ((field.type || "").toLowerCase() === "file" && !value) value = "RESUME_FILE";
     if (value === undefined || value === null || value === "") continue;
+
+    const ats = (field.atsFieldType || "").toLowerCase();
+    const fp = field.fingerprint;
+    if (fp && (EDUCATION_ATS.has(ats) || EMPLOYMENT_ATS.has(ats))) {
+      const seen = occurrenceByFp[fp] ?? 0;
+      occurrenceByFp[fp] = seen + 1;
+      const maxBlocks = EDUCATION_ATS.has(ats) ? maxEducationBlocks : maxEmploymentBlocks;
+      if (seen >= maxBlocks) continue;
+    }
 
     const frameId = String(field.frameId ?? 0);
     const localKey = String(field.frameLocalIndex ?? field.index);
@@ -530,6 +654,7 @@ function buildFieldsByFrame(fields) {
       tag: field.tag || null,
       atsFieldType: field.atsFieldType || null,
       options: field.options || [],
+      fingerprint: field.fingerprint,
     });
   }
   return fieldsByFrame;
@@ -548,7 +673,13 @@ async function fillMappedValuesForTab(tabId, fields, mappings, context = null) {
     const displayName = sanitizeResumeFilename(context.resumeName);
     if (displayName) resumeData = { ...resumeData, name: displayName };
   }
-  const valuesByFrame = buildValuesByFrame(fields, mappings);
+  const educations = context?.profile?.educations || [];
+  const experiences = context?.profile?.experiences || [];
+  const limits = {
+    maxEducationBlocks: educations.length > 0 ? educations.length : 999,
+    maxEmploymentBlocks: experiences.length > 0 ? experiences.length : 999,
+  };
+  const valuesByFrame = buildValuesByFrame(fields, mappings, limits);
   const fieldsByFrame = buildFieldsByFrame(fields);
   const totalValues = Object.values(valuesByFrame).reduce(
     (sum, frameVals) => sum + Object.keys(frameVals).length,
@@ -565,13 +696,15 @@ async function fillMappedValuesForTab(tabId, fields, mappings, context = null) {
     })),
   });
 
+  const lastFill = { fields, mappings };
   const fillResponses = await sendMessageToAllFrames(tabId, (frameId) => ({
     type: "FILL_WITH_VALUES",
     payload: {
       values: valuesByFrame[String(frameId)] || {},
       fieldsForFrame: fieldsByFrame[String(frameId)] || [],
       resumeData,
-      scope: "current_document"
+      scope: "current_document",
+      lastFill,
     }
   }));
   
@@ -611,20 +744,26 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
   const btn = document.getElementById("process-and-fill");
   btn.disabled = true;
   hideMappingProgress();
+  const t0 = Date.now();
+  logInfo("STEP 0: Autofill started", { ts: t0 });
+
   showProgress("Preparing scan", "Connecting to active tab...", true);
   showStatus("Scraping page...", "loading");
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error("No active tab");
-    logInfo("Starting scrape + map flow", { tabId: tab.id, url: tab.url || "" });
+    logInfo("STEP 1: Active tab obtained", { tabId: tab.id, url: tab.url || "", ms: Date.now() - t0 });
 
     trackAutofillUsed(tab.url || "");
 
-    // Load context first (needed for pre-expand count and mapping)
     showStatus("Loading profile data from API...", "loading");
-    showProgress("Loading profile", "Fetching candidate profile and saved answers...", true);
+    showProgress("Loading profile", "Fetching candidate profile and saved answers...", true, 10);
+    logInfo("STEP 2: Starting token refresh + context load", { ms: Date.now() - t0 });
+    try { await refreshTokenViaApi(); } catch (_) {}
+    logInfo("STEP 2a: Token refresh done", { ms: Date.now() - t0 });
     const context = await getLLMMappingContext();
+    logInfo("STEP 2b: Context loaded", { profileKeys: Object.keys(context?.profile || {}).length, ms: Date.now() - t0 });
     const experiences = context?.profile?.experiences || [];
     const educations = context?.profile?.educations || [];
     const preExpandEmployment = Math.max(0, experiences.length - 1);
@@ -632,19 +771,24 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
 
     // 1. Scrape all frames and merge (with Add another expansion + dropdown options)
     let fields = [];
+    logInfo("STEP 3: Starting scrape (sendMessageToAllFrames)", { preExpandEmployment, preExpandEducation, ms: Date.now() - t0 });
     for (let attempt = 0; attempt < 3; attempt++) {
-      showProgress("Scanning fields", attempt > 0 ? `Waiting for form... (attempt ${attempt + 1}/3)` : "Collecting input fields across all frames...", true);
+      showProgress("Scanning fields", attempt > 0 ? `Waiting for form... (attempt ${attempt + 1}/3)` : "Collecting input fields across all frames...", true, 25);
       if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 + attempt * 800));
       const scrapePayload = {
         scope: "all",
         expandSelectOptions: true,
         preExpandEmployment,
         preExpandEducation,
+        maxEducationBlocks: educations.length || 999,
+        maxEmploymentBlocks: experiences.length || 999,
       };
+      logInfo("STEP 3a: Sending SCRAPE_FIELDS to all frames", { attempt: attempt + 1, ms: Date.now() - t0 });
       const scrapeResponses = await sendMessageToAllFrames(tab.id, () => ({
         type: "SCRAPE_FIELDS",
         payload: scrapePayload,
       }));
+      logInfo("STEP 3b: Scrape responses received", { responseCount: scrapeResponses?.length, okCount: scrapeResponses?.filter((r) => r.ok).length, ms: Date.now() - t0 });
       const mergedFields = [];
       let globalIndex = 0;
       for (const item of scrapeResponses) {
@@ -691,42 +835,46 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
     }
     
     showStatus("Analyzing with AI...", "loading");
-    showProgress("AI mapping", `Analyzing ${fields.length} fields with optimized routing...`, true);
-    logInfo("Sending mapping request", {
-      fieldCount: fields.length,
-      profileKeys: Object.keys(context.profile || {}).length,
-      customAnswers: Object.keys(context.customAnswers || {}).length,
-      resumeTextLength: (context.resumeText || "").length
-    });
-    const cacheKey = getMappingCacheKey(fields, context);
-    let mappings = getCachedMapping(cacheKey);
-    if (mappings) {
-      logInfo("Using cached mapping result", { fieldCount: Object.keys(mappings).length });
-      showStatus("Using recent mapping result...");
-    } else {
+    showProgress("AI mapping", `Analyzing ${fields.length} fields with optimized routing...`, true, 50);
+    const fps = fields.map((f) => f.fingerprint).filter(Boolean);
+    const cachedByFp = await getCachedMappingsByFp(fps);
+    const missFields = fields.filter((f) => cachedByFp[f.fingerprint] === undefined);
+    logInfo("Layer 1 cache", { fps: fps.length, hits: Object.keys(cachedByFp).length, misses: missFields.length });
+
+    let serverMappings = {};
+    if (missFields.length > 0) {
       const apiBase = await getApiBase();
       const headers = await getAuthHeaders();
       const mapRes = await fetchWithAuthRetry(`${apiBase}/chrome-extension/form-fields/map`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          fields: fields.map((field) => ({
-            ...field,
-            id: null
-          })),
+          fields: missFields.map((field) => ({ ...field, id: null })),
           profile: context.profile,
           custom_answers: context.customAnswers,
           resume_text: context.resumeText
         }),
       });
-
       if (!mapRes.ok) {
         throw new Error(`LLM mapping failed (${mapRes.status}).`);
       }
       const data = await mapRes.json();
-      mappings = data.mappings || {};
-      setCachedMapping(cacheKey, mappings);
+      serverMappings = data.mappings || {};
+      const toCache = {};
+      for (const f of missFields) {
+        const m = serverMappings[f.fingerprint] ?? serverMappings[String(f.index)];
+        if (m && m.value !== undefined) {
+          toCache[f.fingerprint] = m;
+        }
+      }
+      await setCachedMappingsByFp(toCache);
+      if (data.unfilled_profile_keys?.length > 0) {
+        showProfileGapTip(data.unfilled_profile_keys);
+      }
+    } else {
+      logInfo("Layer 1 full hit - no server call");
     }
+    const mappings = { ...cachedByFp, ...serverMappings };
     logInfo("Mapping complete: API response received", {
       mappedFields: Object.keys(mappings).length,
     });
@@ -747,8 +895,7 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
     showMappingProgress(CURRENT_FIELDS, mappings);
     showStatus("Mapping complete. Filling form...", "info");
 
-    // 3. Auto-fill directly (LLM-only flow)
-    showProgress("Filling form", "Applying mapped values to detected inputs...", true);
+    showProgress("Filling form", "Applying mapped values to detected inputs...", true, 75);
     showStatus("Filling form...", "loading");
     const valuesByFramePreview = CURRENT_FIELDS.reduce((acc, f) => {
       const fid = String(f.frameId ?? 0);
@@ -760,7 +907,7 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
       valuesByFrame: valuesByFramePreview,
     });
     const fillResult = await fillMappedValuesForTab(tab.id, CURRENT_FIELDS, mappings, context);
-    showProgress("Completed", `Filled ${fillResult.totalFilled} fields successfully.`, false);
+    showProgress("Completed", `Filled ${fillResult.totalFilled} fields successfully.`, false, 100);
     showStatus(`✓ Filled ${fillResult.totalFilled} fields${fillResult.totalResumes > 0 ? " + uploaded resume" : ""}!`, "success");
     btn.disabled = false;
     logInfo("Fill completed", {
@@ -769,7 +916,9 @@ document.getElementById("process-and-fill").addEventListener("click", async () =
     });
 
   } catch (err) {
-    showProgress("Failed", "Please retry after checking page access/API.", false);
+    const barEl = document.getElementById("progress-bar");
+    if (barEl) barEl.classList.add("error");
+    showProgress("Failed", "Please retry after checking page access/API.", false, 0);
     showStatus(err.message || "Failed to map/fill with LLM.", "error");
     logWarn("Scan and fill failed", { error: String(err) });
     btn.disabled = false;

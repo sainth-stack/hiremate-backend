@@ -42,7 +42,13 @@
       <button type="button" id="process-and-fill" class="process-btn">Scan &amp; Auto-Fill</button>
       <p class="hint">Scrape → LLM maps &amp; generates answers → Auto-fill</p>
       <div id="progress-card" class="progress-card hidden">
-        <div id="progress-stage" class="progress-stage">Ready</div>
+        <div class="progress-bar-wrapper">
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <div class="progress-info">
+          <span id="progress-stage" class="progress-stage">Ready</span>
+          <span id="progress-percent">0%</span>
+        </div>
         <div id="progress-detail" class="progress-detail"></div>
       </div>
       <p id="process-status" class="status"></p>
@@ -53,6 +59,7 @@
       <p class="safety">We never auto-submit. You review and submit.</p>
     </footer>
   </div>
+  <script src="security-manager.js"></script>
   <script src="popup.js"></script>
 </body>
 

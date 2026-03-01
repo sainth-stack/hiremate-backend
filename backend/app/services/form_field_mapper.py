@@ -123,6 +123,75 @@ Resume text (possibly partial):
 {resume_text}
 """
 
+# Learning prompt - returns field_fp and profile_key for shared learning
+FIELD_MAP_LEARNING_PROMPT = """You are filling a job application form. Given the form fields and the user's profile, return the value to fill for each field.
+
+Return ONLY valid JSON, no markdown, no explanation.
+
+Format:
+{{
+  "fields": [
+    {{
+      "field_fp": "<the field_fp you were given>",
+      "value": "<value to fill, or empty string if not applicable>",
+      "profile_key": "<which profile key you used: first_name|last_name|email|phone|linkedin_url|portfolio_url|address|city|state|zip|country|years_experience|current_title|current_company|salary_expectation|start_date|visa_status|gender|ethnicity|veteran_status|disability_status|cover_letter|null>",
+      "confidence": <0.0 to 1.0>
+    }}
+  ]
+}}
+
+Rules:
+- If you cannot determine a value from the profile, return value="" and profile_key=null
+- For dropdowns (options provided), value MUST be one of the provided options or ""
+- EXCEPTION: For School/University/College/Institution fields, if profile.educations[0].institution is not in options, return the institution name anyway (the client uses it for Other+specify flow)
+- For Company/Employer dropdowns, if profile.experiences[0].companyName is not in options, return the company name anyway (same fallback)
+- For yes/no fields, return "Yes" or "No"
+- Never invent values not present in the profile or resume
+- You MUST echo back the exact field_fp for each field you were given
+- Use the same field-specific rules as the main mapping (First Name, Last Name, School, Degree, etc.)
+
+GENERATE SENSIBLE DEFAULTS for required fields when profile has no explicit value:
+- Salary/compensation/target pay: Use profile.expectedSalary if present, else "Open to discussion based on market rate and role scope"
+- "Are you currently a [company] employee?": "No" unless current company matches
+- "Have you previously worked at [company]?": "No" unless resume mentions that company
+- "Are you related to anyone at [company]?": "No" or "None"
+- Contractor/agency details (when answer to "previously worked" would be No): "N/A" or "Not applicable"
+- Resume/CV file fields: return RESUME_FILE (exact string)
+- Cover letter file when no cover letter: return RESUME_FILE or leave ""
+
+User Profile:
+{profile_json}
+
+Resume Text:
+{resume_text}
+
+Custom Answers:
+{custom_answers_json}
+
+Form Fields (each has field_fp - echo it back):
+{fields_json}
+"""
+
+# Map profile_key from LLM to actual profile dict keys
+PROFILE_KEY_TO_FIELD: dict[str, str] = {
+    "first_name": "firstName",
+    "last_name": "lastName",
+    "email": "email",
+    "phone": "phone",
+    "linkedin_url": "linkedin",
+    "portfolio_url": "portfolio",
+    "address": "location",
+    "city": "city",
+    "country": "country",
+    "state": "state",
+    "zip": "location",
+    "years_experience": "experience",
+    "current_title": "title",
+    "current_company": "company",
+    "salary_expectation": "expectedSalary",
+    "cover_letter": "professionalSummary",
+}
+
 
 def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", str(value or "").lower())).strip()
@@ -554,7 +623,7 @@ def _clean_field_value(
                     "confidence": 0.9,
                     "reason": f"Country fallback (options truncated): {constructed}",
                 }
-        # School/Institution/College: when value not in closed list, try "Other"/"Not listed" (generic across forms)
+        # School/Institution/College: when value not in closed list, try "Other"/"Not listed" or return raw value
         if any(kw in field_lower for kw in ("school", "university", "college", "institution")):
             other_opts = [
                 o for o in options
@@ -584,6 +653,27 @@ def _clean_field_value(
                         "confidence": 0.7,
                         "reason": f"Partial word match: {best}",
                     }
+            # No match and no "Other": return raw institution so client can use for Other+specify flow
+            if value_str and len(value_str) > 2:
+                return {
+                    "value": value_str,
+                    "confidence": 0.7,
+                    "reason": "Institution not in dropdown; returning raw value for Other/specify flow",
+                }
+        # Company/Employer: same fallback when value not in options
+        if any(kw in field_lower for kw in ("company", "employer", "organization")):
+            other_opts = [
+                o for o in options
+                if re.search(r"\bother\b|not\s*listed|specify|please\s*enter|company\s*name|employer", str(o).lower())
+            ]
+            if other_opts:
+                return {"value": other_opts[0], "confidence": 0.75, "reason": "Company not in dropdown; selected Other"}
+            if value_str and len(value_str) > 2:
+                return {
+                    "value": value_str,
+                    "confidence": 0.7,
+                    "reason": "Company not in dropdown; returning raw value for Other/specify flow",
+                }
         # No option matches the LLM value — nullify so the field is skipped/highlighted
         return {
             "value": None,
@@ -716,3 +806,80 @@ def map_form_fields(
     )
     _cache_put(cache_key, merged)
     return merged
+
+
+def map_form_fields_llm_for_misses(
+    fields_with_fp: list[dict[str, Any]],
+    profile: dict[str, Any],
+    custom_answers: dict[str, str] | None = None,
+    resume_text: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """
+    LLM mapping for learning flow - returns results keyed by field_fp.
+    Each field in fields_with_fp must have "_fp" set.
+    """
+    if not fields_with_fp or not settings.openai_api_key:
+        return {}
+
+    custom_answers = custom_answers or {}
+    resume_text = (resume_text or "").strip()[:4000]
+    client = _get_openai_client()
+
+    llm_fields = []
+    for f in fields_with_fp:
+        fp = f.get("_fp", "")
+        if not fp:
+            continue
+        llm_fields.append({
+            "field_fp": fp,
+            "label": (f.get("label") or f.get("name") or "")[:80],
+            "type": f.get("type"),
+            "options": (f.get("options") or [])[:30],
+        })
+
+    if not llm_fields:
+        return {}
+
+    prompt = FIELD_MAP_LEARNING_PROMPT.format(
+        profile_json=json.dumps(profile or {}, separators=(",", ":")),
+        resume_text=resume_text or "No resume text provided.",
+        custom_answers_json=json.dumps(custom_answers, separators=(",", ":")),
+        fields_json=json.dumps(llm_fields, separators=(",", ":")),
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": "Map these form fields."},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_tokens=2048,
+        )
+        content = response.choices[0].message.content or "{}"
+        payload = json.loads(content)
+        raw_fields = payload.get("fields", [])
+
+        result: dict[str, dict[str, Any]] = {}
+        fp_to_field = {f["_fp"]: f for f in fields_with_fp if f.get("_fp")}
+        for item in raw_fields:
+            fp = item.get("field_fp")
+            if not fp or fp not in fp_to_field:
+                continue
+            field = fp_to_field[fp]
+            value = item.get("value")
+            profile_key = item.get("profile_key")
+            confidence = float(item.get("confidence", 0.8))
+            cleaned = _clean_field_value(field, {"value": value, "confidence": confidence}, profile)
+            result[fp] = {
+                "value": cleaned.get("value"),
+                "confidence": cleaned.get("confidence", 0.8),
+                "profile_key": profile_key,
+                "reason": cleaned.get("reason", ""),
+            }
+        return result
+    except Exception as e:
+        logger.warning("LLM learning mapping failed: %s", e)
+        return {}

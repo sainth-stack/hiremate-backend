@@ -387,8 +387,27 @@
   }
 
   // ─── FIELD FINGERPRINT ────────────────────────────────────────
+  // Legacy: for SPA rematch (atsType|fieldType|label)
   function makeFingerprint(label, atsType, fieldType, formIdx, fieldIdx) {
     return `${atsType}|${fieldType}|${label.slice(0,30).toLowerCase().replace(/\s+/g,"_")}|f${formIdx}|i${fieldIdx}`;
+  }
+
+  // Production: SHA-256 fingerprint - MUST match Python's compute_field_fingerprint (alphabetical key order)
+  function normalizeLabelForFp(text) {
+    return (text || "").toLowerCase().trim()
+      .replace(/[^a-z0-9 ]/g, " ")
+      .replace(/\s+/g, " ").trim();
+  }
+
+  async function computeFieldFingerprint(field) {
+    const label = normalizeLabelForFp(field.label || field.placeholder || field.name || "");
+    const ftype = (field.type || "").toLowerCase().trim();
+    const options = (field.options || []).map(normalizeLabelForFp).sort();
+    // CRITICAL: key order alphabetical to match Python sort_keys=True -> {label, options, type}
+    const payload = JSON.stringify({ label, options, type: ftype });
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
   }
 
   // ─── AUXILIARY FILTER ─────────────────────────────────────────
@@ -558,7 +577,7 @@
           selectors: selectorBundle,
           selector: selectorBundle[0]?.selector||"",
           alternativeSelectors: selectorBundle.slice(1).map(s=>s.selector),
-          fingerprint: makeFingerprint(label, atsType, fieldType, formIndex, fieldIndexInForm),
+          _selectorHint: makeFingerprint(label, atsType, fieldType, formIndex, fieldIndexInForm),
         });
       } catch(err) { log("warn","Error processing element",{error:String(err)}); }
     }
@@ -657,6 +676,17 @@
           if (addRx.test(text) && text.length<=120) {
             if (sectionHint==="employment" && /education|degree|school/i.test(text)) { node=walker.nextNode(); continue; }
             if (sectionHint==="education" && /experience|employment|job/i.test(text) && !/education/i.test(text)) { node=walker.nextNode(); continue; }
+            let el = node.parentElement;
+            let linkSection = null;
+            while (el && el !== doc.body) {
+              const hasEdu = el.querySelector && el.querySelector("[id^='school--'], [id^='degree--']");
+              const hasEmp = el.querySelector && el.querySelector("[id^='company--'], [id^='job_title--'], [id^='employer--']");
+              if (hasEdu && !hasEmp) { linkSection = "education"; break; }
+              if (hasEmp && !hasEdu) { linkSection = "employment"; break; }
+              el = el.parentElement;
+            }
+            if (sectionHint==="employment" && linkSection==="education") { node=walker.nextNode(); continue; }
+            if (sectionHint==="education" && linkSection==="employment") { node=walker.nextNode(); continue; }
             if (!seen.has(node)) { seen.add(node); out.push(node); }
           }
         }
@@ -698,7 +728,10 @@
 
   async function getScrapedFieldsWithExpandedOptions(options = {}) {
     const result = getScrapedFields(options);
-    if (options.expandSelectOptions === false) return result;
+    if (options.expandSelectOptions === false) {
+      await attachShaFingerprints(result.fields);
+      return result;
+    }
     const selectFields = result.fields.filter(f=>(f.type==="select")&&(!f.options||!f.options.length)&&f._canonical);
     if (!selectFields.length) return result;
     selectFields.sort((a,b)=>{
@@ -714,7 +747,16 @@
         await new Promise(r=>setTimeout(r,80));
       } catch(_) {}
     }
+    await attachShaFingerprints(result.fields);
     return result;
+  }
+
+  async function attachShaFingerprints(fields) {
+    for (const f of fields || []) {
+      try {
+        f.fingerprint = await computeFieldFingerprint(f);
+      } catch (_) {}
+    }
   }
 
   // ─── SERIALIZE / RESOLVE ─────────────────────────────────────
@@ -731,8 +773,9 @@
     if (field.selector) { try { const el=doc.querySelector(field.selector); if (el?.isConnected) return el; } catch(_) {} }
     if (field.id) { const el=doc.getElementById(field.id); if (el?.isConnected) return el; }
     // Fingerprint-based scan as last resort
-    if (field.fingerprint) {
-      const [atsType,,labelSlug] = field.fingerprint.split("|");
+    const hint = field._selectorHint || field.fingerprint;
+    if (hint && hint.includes("|")) {
+      const [atsType,,labelSlug] = hint.split("|");
       try {
         const cands = doc.querySelectorAll('input,select,textarea,[contenteditable="true"],[role="combobox"]');
         for (const el of cands) {
@@ -749,7 +792,7 @@
 
   // ─── EXPORTS ──────────────────────────────────────────────────
   window.__OPSBRAIN_SCRAPER__ = {
-    getScrapedFields, getScrapedFieldsWithExpandedOptions,
+    getScrapedFields, getScrapedFieldsWithExpandedOptions, attachShaFingerprints,
     serializeFields, resolveElementFromField,
     findAddAnotherLinks, expandDropdownForOptions,
     detectPlatform, getSmartLabel, isVisible, resolveCanonical,

@@ -636,6 +636,10 @@
     for (const s of (fieldMeta.alternativeSelectors || [])) {
       try { const el=doc.querySelector(s); if (el?.isConnected) return el; } catch(_) {}
     }
+    if (window.__SELECTOR_RESOLVER__) {
+      const el = window.__SELECTOR_RESOLVER__.resolve(fieldMeta, doc);
+      if (el?.isConnected) return el;
+    }
     return null;
   }
 

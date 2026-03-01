@@ -12,7 +12,7 @@ const HIREMATE_ORIGINS = [
 ];
 const DB_VERSION = 1;
 const STORE_NAME = "resume";
-const LOG_PREFIX = "[JobAutofill][background]";
+const LOG_PREFIX = "[Autofill][background]";
 
 function logInfo(message, meta) {
   if (meta !== undefined) console.info(LOG_PREFIX, message, meta);
@@ -84,6 +84,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "OPEN_LOGIN_TAB") {
     const url = msg.url || "http://localhost:5173/login";
     chrome.tabs.create({ url }).then(() => sendResponse({ ok: true })).catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
+  if (msg.type === "OPEN_RESUME_TAILOR") {
+    (async () => {
+      try {
+        const { loginPageUrl } = await chrome.storage.local.get(["loginPageUrl"]);
+        const base = loginPageUrl ? new URL(loginPageUrl).origin : "http://localhost:5173";
+        const url = `${base}/resume-generator?tailor=1`;
+        await chrome.tabs.create({ url });
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
     return true;
   }
 
@@ -209,16 +224,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "SCRAPE_ALL_FRAMES") {
     (async () => {
+      const t0 = Date.now();
+      logInfo("SCRAPE_ALL_FRAMES received");
       try {
         const tabId = msg.tabId ?? sender.tab?.id;
         if (!tabId) {
+          logInfo("SCRAPE_ALL_FRAMES: no tabId");
           sendResponse({ ok: false, fields: [], error: "No tab" });
           return;
         }
+        logInfo("SCRAPE_ALL_FRAMES: tabId", { tabId, ms: Date.now() - t0 });
         const scope = msg.scope || "all";
         const preExpandEmployment = Math.max(0, msg.preExpandEmployment ?? 0);
         const preExpandEducation = Math.max(0, msg.preExpandEducation ?? 0);
-        const payload = { scope, preExpandEmployment, preExpandEducation };
+        const maxEducationBlocks = Math.max(1, msg.maxEducationBlocks ?? 999);
+        const maxEmploymentBlocks = Math.max(1, msg.maxEmploymentBlocks ?? 999);
+        const payload = { scope, preExpandEmployment, preExpandEducation, maxEducationBlocks, maxEmploymentBlocks };
         let frameIds = [0];
         try {
           const frames = await chrome.webNavigation.getAllFrames({ tabId });
@@ -228,9 +249,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch (_) {}
 
         const results = [];
+        logInfo("SCRAPE_ALL_FRAMES: sending to frames", { frameCount: frameIds.length, frameIds });
         for (const frameId of frameIds) {
           try {
             let res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload }, { frameId });
+            logInfo("SCRAPE_ALL_FRAMES: frame response", { frameId, fieldCount: res?.fields?.length ?? 0 });
             results.push({ frameId, ok: true, res });
           } catch (e) {
             if (e?.message?.includes("Receiving end does not exist")) {
@@ -256,19 +279,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             idx += 1;
           }
         }
+        logInfo("SCRAPE_ALL_FRAMES: done", { totalFields: mergedFields.length, ms: Date.now() - t0 });
         sendResponse({ ok: true, fields: mergedFields });
       } catch (err) {
-        logInfo("SCRAPE_ALL_FRAMES error", err);
+        logInfo("SCRAPE_ALL_FRAMES error", { error: String(err), ms: Date.now() - t0 });
         sendResponse({ ok: false, fields: [], error: String(err) });
       }
     })();
     return true;
   }
 
+  if (msg.type === "INVALIDATE_MAPPING_CACHE") {
+    chrome.storage.local.remove("hm_field_mappings")
+      .then(() => { logInfo("Mapping cache invalidated after submit-feedback"); })
+      .catch((e) => logInfo("Could not invalidate mapping cache", { error: String(e) }));
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (msg.type === "FILL_ALL_FRAMES") {
     (async () => {
       try {
-        const { tabId: msgTabId, valuesByFrame, fieldsByFrame, resumeData } = msg.payload || {};
+        const { tabId: msgTabId, valuesByFrame, fieldsByFrame, resumeData, lastFill } = msg.payload || {};
         const tabId = msgTabId ?? sender?.tab?.id;
         if (!tabId || !valuesByFrame) {
           sendResponse({ ok: false, totalFilled: 0, totalResumes: 0, error: "Missing tabId or valuesByFrame" });
@@ -292,7 +324,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             const fieldsForFrame = (fieldsByFrame && fieldsByFrame[fid]) || [];
             let res = await chrome.tabs.sendMessage(tabId, {
               type: "FILL_WITH_VALUES",
-              payload: { values: vals, fieldsForFrame, resumeData, scope: "current_document" }
+              payload: { values: vals, fieldsForFrame, resumeData, lastFill, scope: "current_document" }
             }, { frameId: parseInt(fid, 10) || 0 });
             if (res?.ok) {
               totalFilled += res.filledCount || 0;
@@ -305,7 +337,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 const fieldsForFrame = (fieldsByFrame && fieldsByFrame[fid]) || [];
                 const res = await chrome.tabs.sendMessage(tabId, {
                   type: "FILL_WITH_VALUES",
-                  payload: { values: valuesByFrame[fid] || {}, fieldsForFrame, resumeData, scope: "current_document" }
+                  payload: { values: valuesByFrame[fid] || {}, fieldsForFrame, resumeData, lastFill, scope: "current_document" }
                 }, { frameId: parseInt(fid, 10) || 0 });
                 if (res?.ok) {
                   totalFilled += res.filledCount || 0;

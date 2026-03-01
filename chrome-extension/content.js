@@ -45,7 +45,7 @@ const FIELD_SELECTOR = [
   ".ql-editor",
 ].join(",");
 
-const LOG_PREFIX = "[JobAutofill][content]";
+const LOG_PREFIX = "[Autofill][content]";
 const INPAGE_ROOT_ID = "job-autofill-inpage-root";
 const _visitedUrls = new Set();
 const LOGIN_PAGE_ORIGINS = [
@@ -803,6 +803,26 @@ function highlightFailedField(field) {
   openDropdownForSelection(field);
 }
 
+function highlightUnfilledRequiredFields(includeNestedDocuments = true) {
+  const fillable = getFillableFields(includeNestedDocuments, true);
+  if (fillable.length === 0) return;
+  let highlighted = 0;
+  for (const field of fillable) {
+    const meta = getFieldMeta(field);
+    if (!meta.required) continue;
+    const tag = (field.tagName || "").toLowerCase();
+    const type = (field.type || "").toLowerCase();
+    const isEmpty = tag === "select"
+      ? !field.value || field.value === ""
+      : (field.value ?? field.textContent ?? "").toString().trim() === "";
+    if (isEmpty && field.isConnected && !field.disabled) {
+      highlightFailedField(field);
+      highlighted++;
+    }
+  }
+  if (highlighted > 0) logInfo("Highlighted unfilled required fields", { count: highlighted });
+}
+
 const SCROLL_DURATION_MS = 200;
 const SCROLL_WAIT_AFTER_MS = 50;
 
@@ -878,16 +898,206 @@ function findContinueButton(doc = document) {
   return null;
 }
 
+/**
+ * Fetch server's best-known selectors for fingerprints; prepend to each field's selector bundle.
+ */
+async function enrichFieldsWithLearnedSelectors(fields, atsPlatform) {
+  const t0 = Date.now();
+  if (!fields?.length) return fields;
+  const fps = fields.map((f) => f.fingerprint).filter(Boolean);
+  if (!fps.length) return fields;
+  logInfo("enrichFieldsWithLearnedSelectors: calling best-batch", { fieldCount: fields.length });
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    if (!headers?.Authorization) return fields;
+    const res = await fetch(`${apiBase}/chrome-extension/selectors/best-batch`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ fps, ats_platform: atsPlatform || "unknown" }),
+    });
+    if (!res.ok) return fields;
+    const { selectors } = await res.json();
+    logInfo("enrichFieldsWithLearnedSelectors: done", { learnedCount: Object.keys(selectors || {}).length, ms: Date.now() - t0 });
+    return fields.map((f) => {
+      const learned = (selectors[f.fingerprint] || []).map((s) => ({
+        ...s,
+        priority: 0,
+        source: "learned",
+      }));
+      return {
+        ...f,
+        selectors: [...learned, ...(f.selectors || [])],
+        selector: learned[0]?.selector || f.selector,
+      };
+    });
+  } catch (e) {
+    logWarn("enrichFieldsWithLearnedSelectors failed", { error: String(e) });
+    return fields;
+  }
+}
+
+/**
+ * Check IndexedDB formStructures cache first, then server.
+ */
+async function getKnownFormStructure(domain, url) {
+  const t0 = Date.now();
+  const cacheManager = window.__CACHE_MANAGER__;
+  logInfo("getKnownFormStructure: entry", { domain, hasCacheManager: !!cacheManager });
+  try {
+    if (cacheManager?.getCachedFormStructure) {
+      logInfo("getKnownFormStructure: checking IndexedDB cache");
+      const cached = await cacheManager.getCachedFormStructure(domain);
+      if (cached) {
+        logInfo("getKnownFormStructure: cache hit", { domain, ms: Date.now() - t0 });
+        return cached;
+      }
+    }
+  } catch (_) {}
+  try {
+    logInfo("getKnownFormStructure: fetching from server", { domain });
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const res = await fetch(
+      `${apiBase}/chrome-extension/form-structure/check?domain=${encodeURIComponent(domain)}&url=${encodeURIComponent(url || "")}`,
+      { headers }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    logInfo("getKnownFormStructure: server response", { found: data?.found, ms: Date.now() - t0 });
+    if (!data.found) return null;
+    if (cacheManager?.setCachedFormStructure) {
+      await cacheManager.setCachedFormStructure(domain, data);
+    }
+    return data;
+  } catch (e) {
+    logWarn("getKnownFormStructure: failed", { error: String(e) });
+    return null;
+  }
+}
+
+/**
+ * Fast scrape using known field fingerprints + best selectors. Returns null if <50% found.
+ */
+async function fastScrapeWithKnownStructure(knownStructure) {
+  const expectedFps = knownStructure.field_fps || [];
+  const bestSelectors = knownStructure.best_selectors || {};
+  const results = [];
+  for (const fp of expectedFps) {
+    const best = bestSelectors[fp];
+    if (!best?.selector) continue;
+    const el = document.querySelector(best.selector);
+    if (!el) continue;
+    const label =
+      el.getAttribute("aria-label") ||
+      (el.labels?.[0]?.textContent?.trim()) ||
+      el.getAttribute("placeholder") ||
+      el.getAttribute("name") ||
+      "";
+    results.push({
+      fingerprint: fp,
+      label,
+      type: (el.type || el.tagName || "").toLowerCase(),
+      selector: best.selector,
+      selectors: [{ selector: best.selector, type: best.type || "css", priority: 0, source: "learned" }],
+      options: el.tagName === "SELECT" ? Array.from(el.options || []).map((o) => (o.text || "").trim()).filter(Boolean) : [],
+      source: "fast_scrape",
+    });
+  }
+  if (results.length < expectedFps.length * 0.5) {
+    logInfo("Fast scrape found only", results.length, "/", expectedFps.length, "— falling back");
+    return null;
+  }
+  logInfo("Fast scrape — known structure, confidence:", knownStructure.confidence);
+  return results;
+}
+
+/**
+ * Smart scrape: fast path if known form, full DOM scan otherwise.
+ */
+async function scrapeWithLearning(options) {
+  const t0 = Date.now();
+  const domain = location.hostname;
+  const url = location.href;
+  logInfo("scrapeWithLearning: start", { domain });
+
+  const TIMEOUT_MS = 4000;
+  let knownStructure = null;
+  try {
+    knownStructure = await Promise.race([
+      getKnownFormStructure(domain, url),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), TIMEOUT_MS)),
+    ]);
+  } catch (e) {
+    logWarn("scrapeWithLearning: getKnownFormStructure failed or timed out", { error: String(e), ms: Date.now() - t0 });
+  }
+
+  if (knownStructure && knownStructure.confidence > 0.85) {
+    const fastResult = await fastScrapeWithKnownStructure(knownStructure);
+    if (fastResult && fastResult.length > 0) {
+      const ats = window.__OPSBRAIN_ATS__ || (window.__HIREMATE_FIELD_SCRAPER__?.detectPlatform?.(document) || "unknown");
+      return await enrichFieldsWithLearnedSelectors(fastResult, ats);
+    }
+  }
+  logInfo("scrapeWithLearning: full DOM path (no fast path)", { ms: Date.now() - t0 });
+  return null;
+}
+
 async function scrapeFields(options = {}) {
+  const t0 = Date.now();
   const includeNestedDocuments = options.scope !== "current_document";
   const expandSelectOptions = options.expandSelectOptions !== false;
   const preExpandEmployment = Math.max(0, options.preExpandEmployment || 0);
   const preExpandEducation = Math.max(0, options.preExpandEducation || 0);
-  logInfo("Scrape: starting", { scope: options.scope, expandSelectOptions, preExpandEmployment, preExpandEducation });
+  logInfo("scrapeFields: start", { scope: options.scope, expandSelectOptions, preExpandEmployment, preExpandEducation });
 
   const scraper = typeof window !== "undefined" && window.__HIREMATE_FIELD_SCRAPER__;
+  logInfo("scrapeFields: scraper check", { hasScraper: !!scraper });
+
+  const atsPlatform = window.__OPSBRAIN_ATS__ || (scraper?.detectPlatform?.(document) || "unknown");
+  if (scraper?.detectPlatform && !window.__OPSBRAIN_ATS__) {
+    window.__OPSBRAIN_ATS__ = atsPlatform;
+  }
+
+  const doc = document;
+  const maxEducationBlocks = Math.max(1, options.maxEducationBlocks ?? 999);
+  const maxEmploymentBlocks = Math.max(1, options.maxEmploymentBlocks ?? 999);
+  function findRemoveBtn(container) {
+    if (!container) return null;
+    const text = (n) => (n?.textContent || n?.getAttribute?.("aria-label") || n?.getAttribute?.("title") || "").toLowerCase();
+    for (const el of container.querySelectorAll("button, a[href='#'], [role='button']")) {
+      if (/\b(remove|delete|clear)\b/.test(text(el))) return el;
+      const svg = el.querySelector("svg");
+      if (svg) return el;
+    }
+    return null;
+  }
+  for (let round = 0; round < 2; round++) {
+    const maxBlocks = round === 0 ? maxEmploymentBlocks : maxEducationBlocks;
+    const ids = round === 0 ? ["company", "job_title", "employer"] : ["school", "degree"];
+    const anchors = doc.querySelectorAll(ids.map((p) => `[id^="${p}--"]`).join(", "));
+    const indices = [...new Set(Array.from(anchors).map((el) => {
+      const m = (el.id || "").match(/(\d+)$/);
+      return m ? parseInt(m[1], 10) : -1;
+    }).filter((n) => n >= 0))].sort((a, b) => b - a);
+    for (const idx of indices) {
+      if (idx >= maxBlocks) {
+        const anchor = ids.reduce((a, p) => a || doc.getElementById(`${p}--${idx}`), null);
+        if (anchor) {
+          const block = anchor.closest("[class*='field'],[class*='block'],[class*='question'],fieldset") || anchor.parentElement?.parentElement;
+          const btn = block && findRemoveBtn(block);
+          if (btn) {
+            btn.click();
+            await new Promise((r) => setTimeout(r, 500));
+            logInfo("Removed extra block", { round: round ? "education" : "employment", index: idx });
+          }
+        }
+      }
+    }
+  }
+
+  // Expand "Add another" (employment/education) at start of initial scrape so both fast path and full scrape see extended form
   if (scraper?.findAddAnotherLinks) {
-    const doc = document;
     for (let round = 0; round < 2; round++) {
       const hint = round === 0 ? "employment" : "education";
       const count = round === 0 ? preExpandEmployment : preExpandEducation;
@@ -910,7 +1120,33 @@ async function scrapeFields(options = {}) {
     }
   }
 
+  logInfo("scrapeFields: calling scrapeWithLearning", { ms: Date.now() - t0 });
+  const fastResult = await scrapeWithLearning(options);
+  logInfo("scrapeFields: scrapeWithLearning returned", { fastPath: !!fastResult?.length, count: fastResult?.length || 0, ms: Date.now() - t0 });
+  if (fastResult && fastResult.length > 0) {
+    const fields = fastResult.map((f, index) => ({
+      index,
+      label: f.label || null,
+      name: f.name || null,
+      id: f.id || null,
+      placeholder: f.placeholder || null,
+      required: f.required || false,
+      type: f.type || null,
+      tag: f.tag || f.type || null,
+      role: null,
+      options: f.options || null,
+      selector: f.selector,
+      selectors: f.selectors,
+      atsFieldType: f.atsFieldType || null,
+      isStandardField: f.isStandardField || false,
+      fingerprint: f.fingerprint,
+    }));
+    logInfo("Scrape: fast path completed", { totalFields: fields.length });
+    return { fields };
+  }
+
   if (scraper) {
+    logInfo("scrapeFields: full DOM scrape via scraper", { ms: Date.now() - t0 });
     try {
       const scrapeOpts = {
         scope: includeNestedDocuments ? "all" : "current_document",
@@ -921,6 +1157,9 @@ async function scrapeFields(options = {}) {
       let result = expandSelectOptions && scraper.getScrapedFieldsWithExpandedOptions
         ? await scraper.getScrapedFieldsWithExpandedOptions(scrapeOpts)
         : scraper.getScrapedFields(scrapeOpts);
+      if (scraper.attachShaFingerprints && result.fields?.length > 0) {
+        await scraper.attachShaFingerprints(result.fields);
+      }
       if (result.fields.length === 0) {
         result = scraper.getScrapedFields({
           scope: includeNestedDocuments ? "all" : "current_document",
@@ -928,8 +1167,12 @@ async function scrapeFields(options = {}) {
           excludePredicate: isInsideExtensionWidget,
           expandSelectOptions: false,
         });
+        if (scraper.attachShaFingerprints && result.fields?.length > 0) {
+          await scraper.attachShaFingerprints(result.fields);
+        }
       }
       if (result.fields.length > 0) {
+        result.fields = await enrichFieldsWithLearnedSelectors(result.fields, atsPlatform);
         const fields = result.fields.map((f, index) => ({
           index,
           label: f.label || null,
@@ -938,12 +1181,14 @@ async function scrapeFields(options = {}) {
           placeholder: f.placeholder || null,
           required: f.required,
           type: f.type || null,
-          tag: f.tagName || null,
+          tag: f.tagName || f.tag || null,
           role: f.element?.getAttribute?.("role") || null,
           options: f.options || null,
           selector: f.selector,
+          selectors: f.selectors,
           atsFieldType: f.atsFieldType,
           isStandardField: f.isStandardField,
+          fingerprint: f.fingerprint,
         }));
         const preview = fields.slice(0, 15).map((f) => ({
           index: f.index,
@@ -963,6 +1208,8 @@ async function scrapeFields(options = {}) {
     } catch (e) {
       logWarn("Enhanced field scraper failed, falling back", { error: String(e) });
     }
+  } else {
+    logInfo("scrapeFields: no scraper, using legacy getFillableFields", { ms: Date.now() - t0 });
   }
   let fillable = getFillableFields(includeNestedDocuments || true, true);
   if (fillable.length === 0) {
@@ -1124,6 +1371,7 @@ async function fillWithValues(payload) {
         resumes: result.resumeUploadCount,
         failed: result.failedCount,
       });
+      highlightUnfilledRequiredFields(includeNestedDocuments);
       return result;
     } catch (e) {
       logWarn("Human filler failed, falling back to legacy", { error: String(e) });
@@ -1236,6 +1484,7 @@ async function fillWithValues(payload) {
     resumes: resumeUploadCount,
     failed: failedCount,
   });
+  highlightUnfilledRequiredFields(includeNestedDocuments);
   return { filledCount, resumeUploadCount, failedCount, failedFields };
 }
 
@@ -1468,52 +1717,67 @@ async function fetchJobDescriptionFromKeywordsApi(url) {
 }
 
 async function runKeywordAnalysisAndMaybeShowWidget() {
-  if (document.getElementById(KEYWORD_MATCH_ROOT_ID)) return;
+  if (window.self !== window.top) return;
+  if (document.getElementById(KEYWORD_MATCH_ROOT_ID) || document.getElementById("opsbrain-match-widget")) return;
 
   const url = window.location.href;
   const urlSuggestsJob = isCareerPage(url);
   if (!urlSuggestsJob) {
+    if (window.__PAGE_DETECTOR__ && !window.__PAGE_DETECTOR__.shouldShowWidget()) return;
     const snippet = (document.body?.innerText || document.body?.textContent || "").replace(/\s+/g, " ").slice(0, 800);
     const llmSaysJob = await isJobPageViaLLM(url, document.title, snippet);
     if (llmSaysJob !== true) return;
   }
 
   setTimeout(async () => {
-    const _jdSample = (document.documentElement.innerText || "").slice(100, 600);
-    let _jdKey = "hm_kw_fallback";
-    try {
-      _jdKey = "hm_kw_" + btoa(unescape(encodeURIComponent(_jdSample))).replace(/\W/g, "").slice(0, 40);
-    } catch (_) {}
-    const KW_TTL = 30 * 60 * 1000;
+    const cacheKey = `keyword_analysis:${url}`;
+    const requestManager = window.__REQUEST_MANAGER__;
+    const cacheManager = window.__CACHE_MANAGER__;
 
-    const _kwStored = await chrome.storage.local.get(_jdKey);
-    const _kwCached = _kwStored[_jdKey];
-    if (_kwCached && Date.now() - _kwCached.ts < KW_TTL) {
-      mountKeywordMatchWidgetWithData(_kwCached.result);
-      return;
-    }
-
-    try {
+    const fetchAndShow = async () => {
       const pageHtml = await getPageHtmlForKeywordsApi();
       const apiBase = await getApiBase();
       const headers = await getAuthHeaders();
-      const body = { url, page_html: pageHtml || undefined };
+      const body = { url, page_html: (pageHtml || "").slice(0, 50000) };
       const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/keywords/analyze`, {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) return;
-
+      if (!res.ok) return null;
       const data = await res.json();
-      const matched = data.matched_count || 0;
-      const total = data.total_keywords || 0;
-      if (total === 0) return;
+      if ((data.total_keywords || 0) === 0) return null;
+      if (cacheManager) {
+        try { await cacheManager.set("keywordAnalysis", { url, result: data }); } catch (_) {}
+      }
+      return data;
+    };
 
-      const percent = data.percent || 0;
-      const result = { matched, total, percent };
-      await chrome.storage.local.set({ [_jdKey]: { result, ts: Date.now() } });
-      mountKeywordMatchWidgetWithData(result);
+    try {
+      let data = null;
+      if (cacheManager) {
+        try {
+          const cached = await cacheManager.get("keywordAnalysis", url);
+          const CACHE_TTL = (window.__CONFIG__?.get?.("cacheTTL")?.keywordAnalysis) || 30 * 60 * 1000;
+          if (cached?.result && cached?.timestamp && Date.now() - cached.timestamp < CACHE_TTL) {
+            if (window.__CONFIG__?.log) window.__CONFIG__.log("[Keyword] Cache hit");
+            data = cached.result;
+          }
+        } catch (_) {}
+      }
+      if (!data) {
+        data = requestManager?.dedupedRequest
+          ? await requestManager.dedupedRequest(cacheKey, fetchAndShow, 30 * 60 * 1000)
+          : await fetchAndShow();
+      }
+      if (!data || (data.percent || 0) < 60) return;
+      if (window.__PROFESSIONAL_WIDGET__) {
+        const Widget = window.__PROFESSIONAL_WIDGET__;
+        const widget = new Widget();
+        widget.create(data);
+      } else {
+        mountKeywordMatchWidgetWithData({ matched: data.matched_count, total: data.total_keywords, percent: data.percent });
+      }
     } catch (_) {}
   }, 2000);
 }
@@ -1609,6 +1873,7 @@ function mountKeywordMatchWidgetWithData({ matched, total, percent }) {
 }
 
 async function getApiBase() {
+  if (window.__CONFIG__?.getApiBase) return window.__CONFIG__.getApiBase();
   try {
     const data = await chrome.storage.local.get(["apiBase"]);
     return data.apiBase || "http://localhost:8000/api";
@@ -1724,8 +1989,14 @@ async function getAuthHeaders() {
       await chrome.storage.local.set({ accessToken: syncRes.token });
     }
   } catch (_) {}
-  const data = await chrome.storage.local.get(["accessToken"]);
-  const token = data.accessToken || null;
+  let token = null;
+  if (window.__SECURITY_MANAGER__?.getToken) {
+    try { token = await window.__SECURITY_MANAGER__.getToken(); } catch (_) {}
+  }
+  if (!token) {
+    const data = await chrome.storage.local.get(["accessToken"]);
+    token = data.accessToken || null;
+  }
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
@@ -1740,9 +2011,11 @@ function toPlainHeaders(headers) {
 
 /** Fetch interceptor: on 401 → refresh token, persist to chrome.storage + HireMate localStorage, retry once with new token. */
 async function fetchWithAuthRetry(url, options = {}) {
+  const t0 = Date.now();
   let res = await fetch(url, options);
+  logInfo("fetchWithAuthRetry: first attempt", { path: url?.split("/").slice(-2).join("/"), status: res.status, ms: Date.now() - t0 });
   if (res.status === 401) {
-    logInfo("401 received, attempting token refresh", { url });
+    logInfo("401 received, attempting token refresh", { url: url?.slice(-50) });
     let newToken = null;
     newToken = await refreshTokenViaApi();
     if (!newToken) {
@@ -1761,6 +2034,7 @@ async function fetchWithAuthRetry(url, options = {}) {
       const base = toPlainHeaders(options.headers);
       const retryOptions = { ...options, headers: { ...base, Authorization: `Bearer ${newToken}` } };
       res = await fetch(url, retryOptions);
+      logInfo("fetchWithAuthRetry: retry result", { status: res.status, ms: Date.now() - t0 });
       if (res.status === 401) {
         logWarn("Retry still returned 401 after refresh");
       }
@@ -2381,6 +2655,33 @@ function trackAutofillUsed() {
       }).catch((e) => logWarn("Failed to track autofill", { error: String(e) }));
     })
   );
+}
+
+const EDUCATION_ATS = new Set(["school", "degree", "major", "graduation_year"]);
+const EMPLOYMENT_ATS = new Set(["company", "job_title", "start_date", "end_date"]);
+
+function buildValuesByFrameWithLimits(fields, mappings, maxEducationBlocks, maxEmploymentBlocks) {
+  const occurrenceByFp = {};
+  const valuesByFrame = {};
+  for (const field of fields) {
+    const mapData = mappings[String(field.index)] || mappings[field.index] || mappings[field.fingerprint];
+    let val = mapData?.value;
+    if ((field.type || "").toLowerCase() === "file" && !val) val = "RESUME_FILE";
+    if (val === undefined || val === null || val === "") continue;
+    const ats = (field.atsFieldType || "").toLowerCase();
+    const fp = field.fingerprint;
+    if (fp && (EDUCATION_ATS.has(ats) || EMPLOYMENT_ATS.has(ats))) {
+      const seen = occurrenceByFp[fp] ?? 0;
+      occurrenceByFp[fp] = seen + 1;
+      const maxBlocks = EDUCATION_ATS.has(ats) ? maxEducationBlocks : maxEmploymentBlocks;
+      if (seen >= maxBlocks) continue;
+    }
+    const fid = String(field.frameId ?? 0);
+    const localKey = String(field.frameLocalIndex ?? field.index);
+    if (!valuesByFrame[fid]) valuesByFrame[fid] = {};
+    valuesByFrame[fid][localKey] = val;
+  }
+  return valuesByFrame;
 }
 
 /** Build field metadata per frame for selector-based element resolution during fill */
@@ -3652,9 +3953,19 @@ function mountInPageUI() {
   let skipToNextRequested = false;
 
   const runOneStep = async (stepNum = 1) => {
+    const t0 = Date.now();
+    logInfo("runOneStep: start", { stepNum });
     setStatus(stepNum > 1 ? `Step ${stepNum} — Extracting fields...` : "Extracting form fields...", "loading");
     setProgress(5);
+    setStatus("Loading profile...", "loading");
+    try {
+      logInfo("runOneStep: refreshTokenViaApi");
+      await refreshTokenViaApi();
+      logInfo("runOneStep: refreshToken done", { ms: Date.now() - t0 });
+    } catch (_) {}
+    logInfo("runOneStep: getAutofillContextFromApi");
     const context = await getAutofillContextFromApi();
+    logInfo("runOneStep: context loaded", { profileKeys: Object.keys(context?.profile || {}).length, ms: Date.now() - t0 });
     const experiences = context?.profile?.experiences || [];
     const educations = context?.profile?.educations || [];
     const preExpandEmployment = Math.max(0, experiences.length - 1);
@@ -3665,12 +3976,16 @@ function mountInPageUI() {
         setStatus(`Waiting for form to load... (attempt ${attempt + 1}/3)`, "loading");
         await new Promise((r) => setTimeout(r, 1500 + attempt * 1000));
       }
+      logInfo("runOneStep: sending SCRAPE_ALL_FRAMES", { attempt: attempt + 1 });
       const scrapeRes = await chrome.runtime.sendMessage({
         type: "SCRAPE_ALL_FRAMES",
         scope: "all",
         preExpandEmployment,
         preExpandEducation,
+        maxEducationBlocks: educations.length || 999,
+        maxEmploymentBlocks: experiences.length || 999,
       });
+      logInfo("runOneStep: SCRAPE_ALL_FRAMES response", { ok: scrapeRes?.ok, fieldCount: scrapeRes?.fields?.length ?? 0 });
       if (scrapeRes?.ok && scrapeRes.fields?.length) {
         fields = scrapeRes.fields;
         break;
@@ -3698,22 +4013,15 @@ function mountInPageUI() {
     setStatus("Preparing to fill...", "loading");
     setProgress(50);
 
-    const valuesByFrame = {};
-    for (const field of fields) {
-      const mapData = mappings[String(field.index)] || mappings[field.index];
-      let val = mapData?.value;
-      if ((field.type || "").toLowerCase() === "file" && !val) val = "RESUME_FILE";
-      if (val === undefined || val === null || val === "") continue;
-      const fid = String(field.frameId ?? 0);
-      const localKey = String(field.frameLocalIndex ?? field.index);
-      if (!valuesByFrame[fid]) valuesByFrame[fid] = {};
-      valuesByFrame[fid][localKey] = val;
-    }
+    const maxEdu = educations.length > 0 ? educations.length : 999;
+    const maxEmp = experiences.length > 0 ? experiences.length : 999;
+    const valuesByFrame = buildValuesByFrameWithLimits(fields, mappings, maxEdu, maxEmp);
     const fieldsByFrame = buildFieldsByFrame(fields);
+    const lastFill = { fields, mappings };
 
     const fillRes = await chrome.runtime.sendMessage({
       type: "FILL_ALL_FRAMES",
-      payload: { valuesByFrame, fieldsByFrame, resumeData },
+      payload: { valuesByFrame, fieldsByFrame, resumeData, lastFill },
     });
 
     if (!fillRes?.ok) throw new Error(fillRes?.error || "Fill failed");
@@ -3967,14 +4275,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   
   if (msg.type === "SCRAPE_FIELDS") {
     const payload = msg.payload || {};
-    logInfo("Scrape: received SCRAPE_FIELDS", { scope: payload.scope });
+    const tScrape = Date.now();
+    logInfo("SCRAPE_FIELDS received", { scope: payload.scope, frameId: typeof window !== "undefined" ? "(content)" : "?", url: location?.href?.slice(0, 60) });
     scrapeFields(payload)
       .then((result) => {
-        logInfo("Scrape: responding", { fieldCount: result?.fields?.length || 0 });
+        logInfo("SCRAPE_FIELDS done", { fieldCount: result?.fields?.length || 0, ms: Date.now() - tScrape });
         sendResponse({ ok: true, ...result });
       })
       .catch((e) => {
-        logWarn("Scrape: failed", { error: String(e) });
+        logWarn("SCRAPE_FIELDS failed", { error: String(e), ms: Date.now() - tScrape });
         sendResponse({ ok: false, error: String(e) });
       });
     return true;
@@ -3982,6 +4291,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === "FILL_WITH_VALUES") {
     const p = msg.payload || {};
+    if (p.lastFill) {
+      window.__OPSBRAIN_LAST_FILL__ = p.lastFill;
+    }
     logInfo("Fill: received FILL_WITH_VALUES", {
       valueCount: Object.keys(p.values || {}).length,
       hasResume: !!p.resumeData,
@@ -4047,10 +4359,147 @@ function isJobFormPage() {
   return isJobDetailPage() && hasSubstantialContent;
 }
 
+function isIntermediateStep() {
+  const bodyText = (document.body?.innerText || "").toLowerCase();
+  const confirmSignals = [
+    "application submitted",
+    "thank you for applying",
+    "application received",
+    "successfully submitted",
+    "we have received your application",
+    "application complete",
+  ];
+  if (confirmSignals.some((s) => bodyText.includes(s))) return false;
+  const nextButtonExists = !!document.querySelector(
+    'button[type="submit"][data-automation-id*="next"], ' +
+      'button[aria-label*="Next"], ' +
+      'button[aria-label*="Continue"], ' +
+      ".next-button, #nextButton, [data-testid='next-btn']"
+  );
+  const hasStepIndicator = !!document.querySelector(
+    ".progress-steps, .step-indicator, [aria-label*='Step '], " +
+      ".wday-wizard-step, [data-automation-id*='progress']"
+  );
+  return nextButtonExists || hasStepIndicator;
+}
+
+function mergePendingFields(existing, incoming) {
+  const map = {};
+  [...(existing || []), ...(incoming || [])].forEach((f) => {
+    if (f.fingerprint) map[f.fingerprint] = f;
+  });
+  return Object.values(map);
+}
+
+let _submitFeedbackAttached = false;
+function attachSubmitFeedbackListener() {
+  if (_submitFeedbackAttached) return;
+  _submitFeedbackAttached = true;
+  document.addEventListener("submit", handleFormSubmitForFeedback, true);
+}
+
+async function handleFormSubmitForFeedback(e) {
+  const lastFill = window.__OPSBRAIN_LAST_FILL__;
+  if (!lastFill?.fields?.length || !lastFill?.mappings) return;
+  await new Promise((r) => setTimeout(r, 0));
+  let overlappingCount = 0;
+  for (const f of lastFill.fields) {
+    try {
+      const sel = f.selector || (f.selectors?.[0]?.selector);
+      if (sel && document.querySelector(sel)) overlappingCount++;
+    } catch (_) {}
+  }
+  if (overlappingCount < 2) return;
+  const currentPageFields = lastFill.fields.map((f) => {
+    let el = null;
+    try {
+      const sel = f.selector || (f.selectors?.[0]?.selector);
+      if (sel) el = document.querySelector(sel);
+    } catch (_) {}
+    const domValue = el ? (el.value ?? el.textContent ?? "").trim() : null;
+    const autofillVal = lastFill.mappings[f.fingerprint]?.value ?? lastFill.mappings[String(f.index)]?.value;
+    return {
+      fingerprint: f.fingerprint,
+      label: f.label,
+      type: f.type,
+      options: f.options || [],
+      ats_platform: window.__OPSBRAIN_ATS__ || window.__PAGE_DETECTOR__?.platform || "unknown",
+      selector_used: f.selector || (f.selectors?.[0]?.selector),
+      selector_type: (f.selectors?.[0]?.type) || "id",
+      autofill_value: autofillVal,
+      submitted_value: domValue,
+      was_edited: domValue != null && domValue !== autofillVal,
+    };
+  });
+  const cacheManager = window.__CACHE_MANAGER__;
+  const pending = cacheManager ? await cacheManager.getPendingSubmission().catch(() => null) : null;
+  const allFields = mergePendingFields(pending?.fields, currentPageFields);
+
+  if (isIntermediateStep()) {
+    if (cacheManager) await cacheManager.setPendingSubmission({ url: location.href, fields: allFields });
+    logInfo("Intermediate step — accumulated", allFields.length, "fields");
+    return;
+  }
+
+  logInfo("Final submit — sending", allFields.length, "fields");
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    if (!headers?.Authorization) return;
+    const res = await fetch(`${apiBase}/chrome-extension/form-fields/submit-feedback`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: location.href,
+        domain: location.hostname,
+        ats: window.__OPSBRAIN_ATS__ || window.__PAGE_DETECTOR__?.platform || "unknown",
+        fields: allFields,
+      }),
+    });
+    if (cacheManager) await cacheManager.clearPendingSubmission();
+    window.__OPSBRAIN_LAST_FILL__ = null;
+    if (res.ok) {
+      chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
+    }
+  } catch (err) {
+    if (cacheManager) await cacheManager.setPendingSubmission({ url: location.href, fields: allFields });
+    logWarn("Submit feedback failed, will retry", { error: String(err) });
+  }
+}
+
+async function retryPendingSubmission() {
+  const cacheManager = window.__CACHE_MANAGER__;
+  if (!cacheManager) return;
+  const pending = await cacheManager.getPendingSubmission().catch(() => null);
+  if (!pending?.fields?.length) return;
+  if (pending.timestamp && Date.now() - pending.timestamp < 30000) return;
+  logInfo("Retrying pending submission", pending.fields.length, "fields");
+  try {
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    if (!headers?.Authorization) return;
+    const res = await fetch(`${apiBase}/chrome-extension/form-fields/submit-feedback`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: pending.url || location.href,
+        domain: pending.url ? new URL(pending.url).hostname : location.hostname,
+        ats: "unknown",
+        fields: pending.fields,
+      }),
+    });
+    await cacheManager.clearPendingSubmission();
+    if (res.ok) chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
+  } catch (_) {}
+}
+
 function tryAutoOpenPopup() {
   if (window.self !== window.top) return;
+  if (window.__PAGE_DETECTOR__ && !window.__PAGE_DETECTOR__.shouldShowWidget()) return;
   if (!isJobFormPage()) return;
   mountInPageUI();
+  if (window.__FORM_WATCHER__) window.__FORM_WATCHER__.start();
+  attachSubmitFeedbackListener();
   const widget = document.getElementById(INPAGE_ROOT_ID);
   if (widget) {
     const card = widget.querySelector(".ja-card");
@@ -4063,7 +4512,24 @@ const initAutoOpen = () => {
   tryAutoOpenPopup();
   setTimeout(tryAutoOpenPopup, 1500);
   setTimeout(tryAutoOpenPopup, 4000);
+  retryPendingSubmission();
 };
+
+document.addEventListener("opsbrain-form-changed", () => {
+  if (window.__REQUEST_MANAGER__) window.__REQUEST_MANAGER__.clearCache("form_fields:" + location.href);
+});
+
+let _lastUrl = location.href;
+const _urlObserver = new MutationObserver(() => {
+  const current = location.href;
+  if (current !== _lastUrl) {
+    _lastUrl = current;
+    if (window.__PAGE_DETECTOR__) window.__PAGE_DETECTOR__.reset();
+    tryAutoOpenPopup();
+  }
+});
+if (document.body) _urlObserver.observe(document.body, { childList: true, subtree: true });
+
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => setTimeout(initAutoOpen, 500));
 } else {

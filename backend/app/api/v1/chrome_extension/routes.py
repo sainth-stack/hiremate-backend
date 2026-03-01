@@ -5,6 +5,7 @@ All endpoints require authentication.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
@@ -21,8 +22,16 @@ from backend.app.models.user import User
 from backend.app.models.user_resume import UserResume
 from backend.app.models.user_job import UserJob
 from backend.app.models.career_page_visit import CareerPageVisit
+from backend.app.models.form_field_learning import (
+    UserFieldAnswer,
+    SharedFieldProfileKey,
+    SharedSelectorPerformance,
+    SharedFormStructure,
+    UserSubmissionHistory,
+)
 from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
-from backend.app.services.form_field_mapper import map_form_fields
+from backend.app.services.form_field_mapper import map_form_fields, map_form_fields_llm_for_misses
+from backend.app.utils.fingerprint import compute_field_fingerprint, normalize_label
 from backend.app.services.job_description_scraper import parse_job_description_from_html
 from backend.app.services.keyword_analyzer import analyze_keywords
 from backend.app.services.tailor_context_store import set_tailor_context
@@ -50,6 +59,32 @@ class FormFieldMapIn(BaseModel):
 
 class FormFieldMapOut(BaseModel):
     mappings: dict[str, dict[str, Any]]
+    unfilled_profile_keys: list[str] | None = None
+
+
+class SubmitFeedbackFieldIn(BaseModel):
+    fingerprint: str
+    label: str | None = None
+    type: str | None = None
+    options: list[str] | None = None
+    ats_platform: str | None = None
+    selector_used: str | None = None
+    selector_type: str | None = None
+    autofill_value: str | None = None
+    submitted_value: str | None = None
+    was_edited: bool = False
+
+
+class SubmitFeedbackIn(BaseModel):
+    url: str = ""
+    domain: str = ""
+    ats: str | None = None
+    fields: list[SubmitFeedbackFieldIn] = []
+
+
+class SelectorBatchIn(BaseModel):
+    fps: list[str] = []
+    ats_platform: str | None = None
 
 
 class KeywordsAnalyzeIn(BaseModel):
@@ -124,6 +159,22 @@ class TailorContextIn(BaseModel):
     job_title: str = ""
     url: str = ""
     page_html: str | None = None  # fallback: parse JD from page if job_description empty
+
+
+class ExtensionErrorIn(BaseModel):
+    """Extension error report for monitoring/analytics."""
+    type: str = ""
+    message: str = ""
+    context: str | None = None
+    stack: str | None = None
+    source: str | None = None
+    line: int | None = None
+    column: int | None = None
+    extensionVersion: str | None = None
+    userAgent: str | None = None
+    url: str | None = None
+    environment: str | None = None
+    timestamp: int | None = None
 
 
 def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
@@ -328,66 +379,388 @@ def get_resume_file_by_name(
         raise HTTPException(status_code=500, detail=f"Failed to load resume: {exc}") from exc
 
 
+def _get_profile_for_map(payload: FormFieldMapIn, db: Session, current_user: User) -> tuple[dict[str, Any], str]:
+    """Get profile dict and resume_text for form mapping."""
+    profile = payload.profile or {}
+    resume_text = payload.resume_text or ""
+    if not profile and not payload.custom_answers:
+        profile_obj = ProfileService.get_or_create_profile(db, current_user)
+        pl = profile_model_to_payload(profile_obj)
+        profile = _profile_to_autofill_format(pl)
+        resume_text = resume_text or _build_resume_text(pl)
+    return profile, resume_text
+
+
+def _persist_llm_results(
+    db: Session,
+    user_id: int,
+    fields: list[dict[str, Any]],
+    llm_results: dict[str, dict[str, Any]],
+    profile: dict[str, Any],
+    ats_platform: str = "unknown",
+) -> None:
+    """Persist LLM results to user_field_answers and shared_field_profile_keys. Keyed by field_fp."""
+    from sqlalchemy import func
+
+    # Dedupe by field_fp: repeated form fields (e.g. Degree x3) share same fp; only persist once per fp
+    seen_fps: dict[str, tuple[dict, dict]] = {}
+    for field in fields:
+        fp = field.get("_fp")
+        if not fp or fp in seen_fps:
+            continue
+        res = llm_results.get(fp, {})
+        val = res.get("value")
+        if val is None or (isinstance(val, str) and not val.strip()):
+            continue
+        seen_fps[fp] = (field, res)
+
+    seen_shared_fps: set[str] = set()
+    for fp, (field, res) in seen_fps.items():
+        value = res.get("value")
+        if value is None:
+            continue
+        profile_key = res.get("profile_key")
+        confidence = float(res.get("confidence", 0.8))
+        label_norm = (normalize_label(field.get("label", "")) or "")[:255]
+
+        existing = db.query(UserFieldAnswer).filter_by(user_id=user_id, field_fp=fp).first()
+        if existing:
+            existing.value = value
+            existing.source = "llm"
+            existing.confidence = confidence
+            existing.label_norm = label_norm
+            existing.last_used = func.now()
+            existing.used_count = (existing.used_count or 0) + 1
+        else:
+            db.add(UserFieldAnswer(
+                user_id=user_id,
+                field_fp=fp,
+                label_norm=label_norm,
+                value=value,
+                source="llm",
+                confidence=confidence,
+            ))
+
+        if profile_key and profile_key != "null" and fp not in seen_shared_fps:
+            from backend.app.services.form_field_mapper import PROFILE_KEY_TO_FIELD
+            pf_key = PROFILE_KEY_TO_FIELD.get(profile_key, profile_key)
+            if pf_key in profile and profile.get(pf_key):
+                seen_shared_fps.add(fp)
+                existing_shared = db.query(SharedFieldProfileKey).filter_by(field_fp=fp).first()
+                if existing_shared:
+                    existing_shared.vote_count = (existing_shared.vote_count or 0) + 1
+                    existing_shared.confidence = max(existing_shared.confidence or 0.5, confidence)
+                else:
+                    db.add(SharedFieldProfileKey(
+                        field_fp=fp,
+                        ats_platform=ats_platform,
+                        label_norm=label_norm,
+                        profile_key=profile_key,
+                        confidence=confidence,
+                        vote_count=1,
+                    ))
+    db.commit()
+
+
+def _compute_unfilled_keys(
+    fields: list[dict[str, Any]],
+    user_map: dict[str, Any],
+) -> list[str]:
+    """Return labels of fields that weren't filled (for profile gap tooltip)."""
+    unfilled = []
+    for f in fields:
+        fp = f.get("_fp")
+        if fp and fp not in user_map:
+            unfilled.append(normalize_label(f.get("label", "")))
+    return unfilled
+
+
 @router.post("/form-fields/map", response_model=FormFieldMapOut)
 def map_fields(
     payload: FormFieldMapIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> FormFieldMapOut:
-    """Map form fields to profile values using LLM + heuristics."""
+    """Map form fields using 4-layer resolution: user cache, shared profile keys, LLM."""
     if not payload.fields:
         raise HTTPException(status_code=400, detail="fields are required")
 
-    profile = payload.profile or {}
+    profile, resume_text = _get_profile_for_map(payload, db, current_user)
     custom_answers = payload.custom_answers or {}
-    resume_text = payload.resume_text or ""
+    ats_platform = (payload.fields[0].get("platform") if payload.fields else None) or "unknown"
 
-    if not profile and not custom_answers:
-        profile_obj = ProfileService.get_or_create_profile(db, current_user)
-        pl = profile_model_to_payload(profile_obj)
-        profile = _profile_to_autofill_format(pl)
-        resume_text = resume_text or _build_resume_text(pl)
+    # Compute fingerprints for each field
+    fields_with_fp = []
+    for f in payload.fields:
+        fc = dict(f)
+        fc["_fp"] = compute_field_fingerprint(fc)
+        fields_with_fp.append(fc)
+    fps = [f["_fp"] for f in fields_with_fp]
 
-    logger.info(
-        "Form map request user_id=%s fields=%d profile_keys=%d custom_answers=%d resume_text_len=%d",
-        current_user.id,
-        len(payload.fields),
-        len(profile),
-        len(custom_answers),
-        len(resume_text),
+    # Layer 2: Per-user learned answers (DB)
+    user_rows = (
+        db.query(UserFieldAnswer)
+        .filter_by(user_id=current_user.id)
+        .filter(UserFieldAnswer.field_fp.in_(fps))
+        .all()
     )
+    user_map = {r.field_fp: r.value for r in user_rows if (r.value or "").strip()}
 
-    try:
-        mappings = map_form_fields(
-            fields=payload.fields,
-            profile=profile,
-            custom_answers=custom_answers,
-            resume_text=resume_text,
+    # Layer 3: Shared profile key lookup
+    miss_fps = [fp for fp in fps if fp not in user_map]
+    if miss_fps:
+        from backend.app.services.form_field_mapper import PROFILE_KEY_TO_FIELD
+        shared_rows = (
+            db.query(SharedFieldProfileKey)
+            .filter(SharedFieldProfileKey.field_fp.in_(miss_fps))
+            .all()
         )
-    except Exception as exc:
-        logger.exception("Failed to map form fields")
-        raise HTTPException(status_code=500, detail=f"Mapping failed: {exc}") from exc
+        for row in shared_rows:
+            pk = PROFILE_KEY_TO_FIELD.get(row.profile_key, row.profile_key)
+            if pk in profile and profile.get(pk):
+                user_map[row.field_fp] = profile.get(pk)
 
-    logger.info("Form map response mappings=%d", len(mappings))
-    # Attach field type (input/select/textarea/date) so client knows how to fill each field
+    # Layer 4: LLM for remaining misses
+    llm_fields = [f for f in fields_with_fp if f["_fp"] not in user_map]
+    llm_results: dict[str, dict[str, Any]] = {}
+    if llm_fields:
+        try:
+            llm_results = map_form_fields_llm_for_misses(
+                fields_with_fp=llm_fields,
+                profile=profile,
+                custom_answers=custom_answers,
+                resume_text=resume_text,
+            )
+            for fp, res in llm_results.items():
+                val = res.get("value")
+                if val is not None and (not isinstance(val, str) or val.strip()):
+                    user_map[fp] = val
+            _persist_llm_results(db, current_user.id, llm_fields, llm_results, profile, ats_platform)
+        except Exception as exc:
+            logger.exception("LLM mapping failed")
+            raise HTTPException(status_code=500, detail=f"Mapping failed: {exc}") from exc
+
+    unfilled_keys = _compute_unfilled_keys(fields_with_fp, user_map)
+
+    # Build response: mappings by fingerprint (primary) and by index (backward compat)
     out_mappings: dict[str, dict[str, Any]] = {}
-    for field in payload.fields or []:
+    for field in fields_with_fp:
+        fp = field["_fp"]
         idx = field.get("index")
-        key = str(idx) if (idx is not None and idx != "") else str(field.get("id") or "")
-        base = mappings.get(key, {}) or {}
+        key_idx = str(idx) if (idx is not None and idx != "") else str(field.get("id") or "")
+        value = user_map.get(fp)
         f_tag = (field.get("tag") or "").lower()
         f_type = (field.get("type") or "").lower()
         inferred = (f_tag or f_type or "input").lower()
-        entry = dict(base)
-        entry["type"] = inferred
-        out_mappings[key] = entry
-    for k, v in (mappings or {}).items():
-        if k in out_mappings:
+        entry = {"value": value, "confidence": 0.9, "reason": "", "type": inferred}
+        out_mappings[fp] = entry
+        out_mappings[key_idx] = entry
+
+    logger.info(
+        "Form map: user_id=%s fields=%d hits=%d llm=%d",
+        current_user.id,
+        len(fields_with_fp),
+        len(user_map),
+        len(llm_results),
+    )
+    return FormFieldMapOut(mappings=out_mappings, unfilled_profile_keys=unfilled_keys)
+
+
+def _update_form_structure(
+    db: Session,
+    domain: str,
+    url: str,
+    ats: str | None,
+    fields: list,
+) -> None:
+    """Upsert shared_form_structures with field fingerprints from submission."""
+    from datetime import datetime
+
+    fps = [f.fingerprint for f in fields if getattr(f, "fingerprint", None)]
+    if not fps:
+        return
+    ats = ats or "unknown"
+    url_pattern = (url or "")[:200] if url else ""
+    row = db.query(SharedFormStructure).filter_by(domain=domain).first()
+    if row:
+        row.field_fps = list(set((row.field_fps or []) + fps))
+        row.field_count = len(row.field_fps)
+        row.sample_count = (row.sample_count or 0) + 1
+        row.confidence = min((row.sample_count or 1) / 10.0, 1.0)
+        row.last_seen = datetime.utcnow()
+        row.ats_platform = ats
+    else:
+        db.add(SharedFormStructure(
+            domain=domain,
+            url_pattern=url_pattern,
+            ats_platform=ats,
+            field_count=len(fps),
+            field_fps=fps,
+            sample_count=1,
+            confidence=0.1,
+            last_seen=datetime.utcnow(),
+        ))
+    db.commit()
+
+
+@router.post("/form-fields/submit-feedback")
+def submit_feedback(
+    payload: SubmitFeedbackIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Learn from form submission - user answers, selector performance."""
+    from datetime import datetime
+    from sqlalchemy import func
+
+    submission_record = []
+    for field in payload.fields:
+        fp = field.fingerprint
+        value = field.submitted_value if field.submitted_value is not None else field.autofill_value
+        if not fp:
             continue
-        entry = dict(v or {})
-        entry["type"] = entry.get("type") or "input"
-        out_mappings[str(k)] = entry
-    return FormFieldMapOut(mappings=out_mappings)
+        if value is None:
+            continue
+        source = "form_submit"
+        conf = 1.0 if not field.was_edited else 0.95
+        if field.was_edited:
+            source = "user_edit"
+
+        existing = db.query(UserFieldAnswer).filter_by(user_id=current_user.id, field_fp=fp).first()
+        if existing:
+            existing.value = value
+            existing.source = source
+            existing.confidence = conf
+            existing.last_used = func.now()
+            existing.used_count = (existing.used_count or 0) + 1
+        else:
+            label_norm = (normalize_label(field.label or "") or "")[:255]
+            db.add(UserFieldAnswer(
+                user_id=current_user.id,
+                field_fp=fp,
+                label_norm=label_norm,
+                value=value,
+                source=source,
+                confidence=conf,
+            ))
+
+        if field.selector_used and (field.ats_platform or payload.ats):
+            ats = field.ats_platform or payload.ats or "unknown"
+            sel_type = field.selector_type or "id"
+            sel_row = (
+                db.query(SharedSelectorPerformance)
+                .filter_by(field_fp=fp, ats_platform=ats, selector_type=sel_type, selector=field.selector_used)
+                .first()
+            )
+            if sel_row:
+                sel_row.success_count = (sel_row.success_count or 0) + 1
+                sel_row.last_success = datetime.utcnow()
+            else:
+                db.add(SharedSelectorPerformance(
+                    field_fp=fp,
+                    ats_platform=ats,
+                    selector_type=sel_type,
+                    selector=field.selector_used,
+                    success_count=1,
+                    last_success=datetime.utcnow(),
+                ))
+
+        submission_record.append({
+            "field_fp": fp,
+            "label": field.label,
+            "value": value,
+            "source": source,
+            "was_edited": field.was_edited,
+        })
+
+    db.add(UserSubmissionHistory(
+        user_id=current_user.id,
+        domain=payload.domain,
+        url=payload.url,
+        ats_platform=payload.ats or "unknown",
+        field_count=len(payload.fields),
+        filled_count=len([f for f in payload.fields if f.submitted_value]),
+        submitted_fields=submission_record,
+    ))
+    _update_form_structure(db, payload.domain, payload.url, payload.ats, payload.fields)
+    db.commit()
+    return {"ok": True, "learned": len(submission_record)}
+
+
+@router.get("/form-structure/check")
+def check_form_structure(
+    domain: str = "",
+    url: str = "",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return known form structure + best selectors for fast scrape path."""
+    if not domain:
+        return {"found": False}
+    row = (
+        db.query(SharedFormStructure)
+        .filter_by(domain=domain)
+        .order_by(SharedFormStructure.sample_count.desc())
+        .first()
+    )
+    if not row:
+        return {"found": False}
+
+    fps = row.field_fps or []
+    selector_rows = (
+        db.query(SharedSelectorPerformance)
+        .filter(SharedSelectorPerformance.field_fp.in_(fps))
+        .filter_by(ats_platform=row.ats_platform or "unknown")
+        .filter(SharedSelectorPerformance.success_count >= 3)
+        .all()
+    )
+    best_selectors = {}
+    for s in selector_rows:
+        if s.field_fp not in best_selectors or (s.success_count or 0) > best_selectors[s.field_fp].get("success_count", 0):
+            best_selectors[s.field_fp] = {
+                "selector": s.selector,
+                "type": s.selector_type,
+                "success_count": s.success_count or 0,
+            }
+    confidence = min((row.sample_count or 1) / 10.0, 1.0)
+    return {
+        "found": True,
+        "field_fps": fps,
+        "ats_platform": row.ats_platform,
+        "confidence": confidence,
+        "best_selectors": best_selectors,
+        "is_multi_step": row.is_multi_step or False,
+        "step_count": row.step_count or 1,
+    }
+
+
+@router.post("/selectors/best-batch")
+def best_selectors_batch(
+    payload: SelectorBatchIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return best selectors for given fingerprints + ATS."""
+    if not payload.fps:
+        return {"selectors": {}}
+    ats = payload.ats_platform or "unknown"
+    rows = (
+        db.query(SharedSelectorPerformance)
+        .filter(SharedSelectorPerformance.field_fp.in_(payload.fps))
+        .filter_by(ats_platform=ats)
+        .filter(SharedSelectorPerformance.success_count >= 3)
+        .order_by(SharedSelectorPerformance.success_count.desc())
+        .all()
+    )
+    result: dict[str, list] = {}
+    for row in rows:
+        rate = (row.success_count or 0) / max((row.success_count or 0) + (row.fail_count or 0), 1)
+        result.setdefault(row.field_fp, []).append({
+            "selector": row.selector,
+            "type": row.selector_type,
+            "rate": round(rate, 3),
+        })
+    return {"selectors": result}
 
 
 def _extract_company_from_url(url: str | None) -> str:
@@ -519,14 +892,35 @@ async def save_job(
 APPLIED_STATUSES = frozenset({"applied", "interview", "closed"})
 
 
+def _parse_date(d: str | None):
+    """Parse YYYY-MM-DD string to datetime at midnight UTC."""
+    if not d:
+        return None
+    try:
+        return datetime.strptime(d.strip()[:10], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
 @router.get("/jobs")
 def list_user_jobs(
     status: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[dict]:
-    """List user's saved jobs. Optional ?status=applied to filter to applied/interview/closed only."""
-    q = db.query(UserJob).filter(UserJob.user_id == current_user.id).order_by(UserJob.created_at.desc())
+    """List user's saved jobs. Optional ?status=applied, ?from_date=YYYY-MM-DD, ?to_date=YYYY-MM-DD."""
+    q = db.query(UserJob).filter(UserJob.user_id == current_user.id)
+    start_dt = _parse_date(from_date)
+    end_dt = _parse_date(to_date)
+    if end_dt:
+        end_dt = datetime(end_dt.year, end_dt.month, end_dt.day, 23, 59, 59)
+    if start_dt:
+        q = q.filter(UserJob.created_at >= start_dt)
+    if end_dt:
+        q = q.filter(UserJob.created_at <= end_dt)
+    q = q.order_by(UserJob.created_at.desc())
     if status == "applied":
         # Include legacy + new statuses for backwards compat
         legacy = frozenset({"Applied", "Interviewing", "Offer", "Rejected", "Withdrawn"})
@@ -681,3 +1075,20 @@ def cover_letter_upsert(
     profile.preferences = prefs
     db.commit()
     return {"content": content or "", "job_title": job_title}
+
+
+# --- Extension Error Reporting ---
+@router.post("/errors")
+async def report_extension_error(payload: dict[str, Any]) -> dict:
+    """
+    Accept extension error reports for monitoring.
+    Auth optional - extensions may report when user is logged out.
+    """
+    logger.warning(
+        "Extension error report: type=%s msg=%s url=%s env=%s",
+        payload.get("type", "unknown"),
+        (payload.get("message") or "")[:200],
+        (payload.get("url") or "")[:100],
+        payload.get("environment"),
+    )
+    return {"ok": True}
