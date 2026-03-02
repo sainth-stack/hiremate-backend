@@ -4170,7 +4170,7 @@ function mountInPageUI() {
         position_title: position || "",
         location: location || "",
         job_posting_url: window.location.href || null,
-        application_status: "saved",
+        application_status: "applied",
       };
       const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/jobs`, {
         method: "POST",
