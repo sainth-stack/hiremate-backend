@@ -47,6 +47,8 @@ const FIELD_SELECTOR = [
 
 const LOG_PREFIX = "[Autofill][content]";
 const INPAGE_ROOT_ID = "job-autofill-inpage-root";
+const AUTOFILL_TIME_SAVED_KEY = "hm_autofill_total_fields";
+const AVG_SECONDS_PER_FIELD = 10; // ~10 sec manual typing per field on average
 const _visitedUrls = new Set();
 const LOGIN_PAGE_ORIGINS = [
   "http://localhost:5173",
@@ -168,8 +170,10 @@ async function loadResumeAccordionContent(contentEl, rootEl) {
       contentEl.querySelector(".ja-action")?.addEventListener("click", () => openResumeGeneratorUrl());
       return;
     }
+    const { hm_selected_resume_id } = await chrome.storage.local.get(["hm_selected_resume_id"]);
+    const storedId = hm_selected_resume_id != null ? parseInt(hm_selected_resume_id, 10) : null;
     const defaultResume = resumes.find((r) => r.is_default) || resumes[0];
-    const selectedId = defaultResume?.id ?? resumes[0]?.id;
+    const selectedId = (storedId && resumes.some((r) => r.id === storedId)) ? storedId : (defaultResume?.id ?? resumes[0]?.id);
     const selectId = "ja-accordion-resume-select";
     contentEl.innerHTML = `
       <div class="ja-resume-accordion-row">
@@ -276,6 +280,7 @@ async function loadQuestionsAccordionContent(id, contentEl, rootEl) {
         profile: ctx?.profile || {},
         custom_answers: ctx?.customAnswers || {},
         resume_text: ctx?.resumeText || "",
+        sync_llm: true,
       }),
     });
     if (!mapRes.ok) {
@@ -763,6 +768,48 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Record autofill usage for dynamic time-saved display (~10 sec per field) */
+async function recordAutofillFieldsFilled(count) {
+  if (!count || count < 1) return;
+  try {
+    const stored = await chrome.storage.local.get([AUTOFILL_TIME_SAVED_KEY]);
+    const prev = stored[AUTOFILL_TIME_SAVED_KEY] || 0;
+    await chrome.storage.local.set({ [AUTOFILL_TIME_SAVED_KEY]: prev + count });
+  } catch (_) {}
+}
+
+/** Get saved time text for display */
+async function getSavedTimeDisplayText() {
+  try {
+    const stored = await chrome.storage.local.get([AUTOFILL_TIME_SAVED_KEY]);
+    const total = stored[AUTOFILL_TIME_SAVED_KEY] || 0;
+    const mins = Math.round((total * AVG_SECONDS_PER_FIELD) / 60);
+    if (mins < 1) return "Start autofilling to save time 🔥";
+    const unit = mins === 1 ? "minute" : "minutes";
+    return `You have saved ${mins} ${unit} by autofilling so far 🔥`;
+  } catch (_) {
+    return "You have saved time by autofilling so far 🔥";
+  }
+}
+
+/** Update the saved-time status in the widget (call on mount / when idle) */
+async function updateSavedTimeDisplay(root) {
+  const statusEl = root?.querySelector?.("#ja-status");
+  if (!statusEl) return;
+  const text = await getSavedTimeDisplayText();
+  if (!statusAreaHasFillResults(statusEl)) {
+    statusEl.textContent = text;
+    statusEl.className = "ja-status";
+  }
+}
+
+function statusAreaHasFillResults(statusEl) {
+  if (!statusEl) return false;
+  const html = statusEl.innerHTML || "";
+  const text = (statusEl.textContent || "").trim();
+  return html.includes("ja-status-bullets") || /✓\s*Filled\s+\d+/.test(text) || /Fields need attention/.test(text);
+}
+
 const AUTOFILL_FAILED_CLASS = "ja-autofill-failed";
 function ensureFailHighlightStyle(doc = document) {
   const id = "ja-autofill-fail-style";
@@ -771,6 +818,24 @@ function ensureFailHighlightStyle(doc = document) {
   style.id = id;
   style.textContent = `.${AUTOFILL_FAILED_CLASS} { outline: 2px solid #dc2626 !important; box-shadow: 0 0 0 2px #dc2626 !important; }`;
   (doc.head || doc.documentElement).appendChild(style);
+}
+
+/** Get displayed value for any field type — used to detect if dropdown/combobox is filled */
+function getFieldDisplayValue(field) {
+  const tag = (field.tagName || "").toLowerCase();
+  const role = (field.getAttribute("role") || "").toLowerCase();
+  if (tag === "select") return (field.value || "").toString().trim();
+  if (tag === "input" || tag === "textarea") return (field.value || "").toString().trim();
+  if (tag === "div" || tag === "span") {
+    const input = field.querySelector?.('input[type="text"],input[type="search"],input:not([type])');
+    if (input) return (input.value || "").toString().trim();
+    const placeholder = (field.getAttribute("placeholder") || "").toLowerCase();
+    const singleValue = field.querySelector?.('[class*="singleValue"],[class*="single-value"],[data-value]');
+    if (singleValue) return (singleValue.textContent || singleValue.getAttribute("data-value") || "").toString().trim();
+    const text = (field.textContent || "").trim();
+    if (text && !/select\.\.\.|choose|search/i.test(text) && text.length < 200) return text;
+  }
+  return (field.value ?? field.textContent ?? "").toString().trim();
 }
 
 function openDropdownForSelection(field) {
@@ -810,11 +875,8 @@ function highlightUnfilledRequiredFields(includeNestedDocuments = true) {
   for (const field of fillable) {
     const meta = getFieldMeta(field);
     if (!meta.required) continue;
-    const tag = (field.tagName || "").toLowerCase();
-    const type = (field.type || "").toLowerCase();
-    const isEmpty = tag === "select"
-      ? !field.value || field.value === ""
-      : (field.value ?? field.textContent ?? "").toString().trim() === "";
+    const displayVal = getFieldDisplayValue(field);
+    const isEmpty = !displayVal || displayVal === "" || /^select\.\.\.|^choose\s|^search\s/i.test(displayVal);
     if (isEmpty && field.isConnected && !field.disabled) {
       highlightFailedField(field);
       highlighted++;
@@ -823,15 +885,15 @@ function highlightUnfilledRequiredFields(includeNestedDocuments = true) {
   if (highlighted > 0) logInfo("Highlighted unfilled required fields", { count: highlighted });
 }
 
-const SCROLL_DURATION_MS = 200;
-const SCROLL_WAIT_AFTER_MS = 50;
+const SCROLL_DURATION_MS = 80;
+const SCROLL_WAIT_AFTER_MS = 30;
 
 async function scrollFieldIntoView(field) {
   const rect = field.getBoundingClientRect();
   const vh = window.innerHeight;
   if (rect.top >= 0 && rect.bottom <= vh) return;
   try {
-    field.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    field.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
   } catch (_) {
     field.scrollIntoView({ block: "center" });
   }
@@ -883,10 +945,25 @@ async function fillFileInput(field, resumeData) {
 }
 
 function findContinueButton(doc = document) {
-  const sel = 'button, [role="button"], input[type="submit"], [data-automation-id="continueButton"]';
+  // Workday-first: data-automation-id is most reliable
+  const workdaySelectors = [
+    '[data-automation-id="continueButton"]',
+    '[data-automation-id="continue"]',
+    '[data-automation-id="nextButton"]',
+    '[data-automation-id*="continue"]',
+    '[data-automation-id*="next"]',
+    '[data-automation-id="submitButton"]',
+  ];
+  for (const sel of workdaySelectors) {
+    try {
+      const el = doc.querySelector(sel);
+      if (el && el.getBoundingClientRect?.().width > 0) return el;
+    } catch (_) {}
+  }
+  const sel = 'button, [role="button"], input[type="submit"]';
   for (const el of doc.querySelectorAll(sel)) {
     const text = (el.textContent || el.innerText || el.value || "").trim().toLowerCase();
-    if (text.includes("continue") || text === "next") return el;
+    if (text.includes("continue") || text === "next" || text === "submit") return el;
   }
   for (const el of doc.querySelectorAll("*")) {
     if (!el.shadowRoot) continue;
@@ -898,6 +975,8 @@ function findContinueButton(doc = document) {
   return null;
 }
 
+const ENRICH_TIMEOUT_MS = 2000; // Never block scrape for more than 2s
+
 /**
  * Fetch server's best-known selectors for fingerprints; prepend to each field's selector bundle.
  */
@@ -908,6 +987,8 @@ async function enrichFieldsWithLearnedSelectors(fields, atsPlatform) {
   if (!fps.length) return fields;
   logInfo("enrichFieldsWithLearnedSelectors: calling best-batch", { fieldCount: fields.length });
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ENRICH_TIMEOUT_MS);
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
     if (!headers?.Authorization) return fields;
@@ -915,7 +996,9 @@ async function enrichFieldsWithLearnedSelectors(fields, atsPlatform) {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ fps, ats_platform: atsPlatform || "unknown" }),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     if (!res.ok) return fields;
     const { selectors } = await res.json();
     logInfo("enrichFieldsWithLearnedSelectors: done", { learnedCount: Object.keys(selectors || {}).length, ms: Date.now() - t0 });
@@ -937,36 +1020,49 @@ async function enrichFieldsWithLearnedSelectors(fields, atsPlatform) {
   }
 }
 
+const FORM_STRUCTURE_FETCH_TIMEOUT_MS = 1500;
+
 /**
- * Check IndexedDB formStructures cache first, then server.
+ * Check IndexedDB formStructures cache first, then server. Timeout only on network fetch.
+ * Skips cache read/write when hm_cache_enabled is false in storage.
  */
 async function getKnownFormStructure(domain, url) {
   const t0 = Date.now();
-  const cacheManager = window.__CACHE_MANAGER__;
-  logInfo("getKnownFormStructure: entry", { domain, hasCacheManager: !!cacheManager });
+  let useCache = true;
   try {
-    if (cacheManager?.getCachedFormStructure) {
-      logInfo("getKnownFormStructure: checking IndexedDB cache");
-      const cached = await cacheManager.getCachedFormStructure(domain);
-      if (cached) {
-        logInfo("getKnownFormStructure: cache hit", { domain, ms: Date.now() - t0 });
-        return cached;
-      }
-    }
+    const stored = await chrome.storage.local.get(["hm_cache_enabled"]);
+    useCache = stored.hm_cache_enabled !== false;
   } catch (_) {}
+  const cacheManager = window.__CACHE_MANAGER__;
+  logInfo("getKnownFormStructure: entry", { domain, hasCacheManager: !!cacheManager, useCache });
+  if (useCache) {
+    try {
+      if (cacheManager?.getCachedFormStructure) {
+        logInfo("getKnownFormStructure: checking IndexedDB cache");
+        const cached = await cacheManager.getCachedFormStructure(domain);
+        if (cached) {
+          logInfo("getKnownFormStructure: cache hit", { domain, ms: Date.now() - t0 });
+          return cached;
+        }
+      }
+    } catch (_) {}
+  }
   try {
     logInfo("getKnownFormStructure: fetching from server", { domain });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FORM_STRUCTURE_FETCH_TIMEOUT_MS);
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
     const res = await fetch(
       `${apiBase}/chrome-extension/form-structure/check?domain=${encodeURIComponent(domain)}&url=${encodeURIComponent(url || "")}`,
-      { headers }
+      { headers, signal: controller.signal }
     );
+    clearTimeout(timer);
     if (!res.ok) return null;
     const data = await res.json();
     logInfo("getKnownFormStructure: server response", { found: data?.found, ms: Date.now() - t0 });
     if (!data.found) return null;
-    if (cacheManager?.setCachedFormStructure) {
+    if (useCache && cacheManager?.setCachedFormStructure) {
       await cacheManager.setCachedFormStructure(domain, data);
     }
     return data;
@@ -1021,15 +1117,11 @@ async function scrapeWithLearning(options) {
   const url = location.href;
   logInfo("scrapeWithLearning: start", { domain });
 
-  const TIMEOUT_MS = 4000;
   let knownStructure = null;
   try {
-    knownStructure = await Promise.race([
-      getKnownFormStructure(domain, url),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), TIMEOUT_MS)),
-    ]);
+    knownStructure = await getKnownFormStructure(domain, url);
   } catch (e) {
-    logWarn("scrapeWithLearning: getKnownFormStructure failed or timed out", { error: String(e), ms: Date.now() - t0 });
+    logWarn("scrapeWithLearning: getKnownFormStructure failed", { error: String(e), ms: Date.now() - t0 });
   }
 
   if (knownStructure && knownStructure.confidence > 0.85) {
@@ -1348,7 +1440,12 @@ async function fillWithValues(payload) {
       // Use includeHidden: true to match scrape order (avoids index mismatch)
       let fillable = getFillableFields(includeNestedDocuments, true);
       if (fillable.length === 0) fillable = getFillableFields(true, false);
-      const effectiveResumeData = resumeData || (await getResumeFromBackground()) || (await getStaticResume());
+      const resumeWithTimeout = () =>
+        Promise.race([
+          getResumeFromBackground(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("Resume timeout")), 8000)),
+        ]).catch(() => null);
+      const effectiveResumeData = resumeData || (await resumeWithTimeout()) || (await getStaticResume());
 
       const result = await humanFiller.fillWithValuesHumanLike({
         elements: fillable,
@@ -1386,7 +1483,12 @@ async function fillWithValues(payload) {
   });
   let fillable = getFillableFields(includeNestedDocuments, false);
   if (fillable.length === 0) fillable = getFillableFields(true, true);
-  const effectiveResumeData = resumeData || (await getResumeFromBackground()) || (await getStaticResume());
+  const resumeWithTimeout = () =>
+    Promise.race([
+      getResumeFromBackground(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("Resume timeout")), 8000)),
+    ]).catch(() => null);
+  const effectiveResumeData = resumeData || (await resumeWithTimeout()) || (await getStaticResume());
   const fillDelay = 60 + Math.floor(Math.random() * 60);
   let filledCount = 0;
   let resumeUploadCount = 0;
@@ -1719,6 +1821,7 @@ async function fetchJobDescriptionFromKeywordsApi(url) {
 async function runKeywordAnalysisAndMaybeShowWidget() {
   if (window.self !== window.top) return;
   if (document.getElementById(KEYWORD_MATCH_ROOT_ID) || document.getElementById("opsbrain-match-widget")) return;
+  if (/workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(window.location.href)) return;
 
   const url = window.location.href;
   const urlSuggestsJob = isCareerPage(url);
@@ -1882,14 +1985,40 @@ async function getApiBase() {
   }
 }
 
+function normalizeUrlForTailor(u) {
+  if (!u || typeof u !== "string") return "";
+  const s = u.trim();
+  if (!s) return "";
+  const withoutHash = s.split("#")[0] || s;
+  return withoutHash.replace(/\/+$/, "") || withoutHash;
+}
+
 async function openResumeGeneratorUrl() {
   const data = await chrome.storage.local.get(["loginPageUrl"]);
   const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
-  let url = `${base}/resume-generator`;
+  let url = `${base}/resume-generator/build?tailor=1`;
   try {
-    const pageHtml = await getPageHtmlForKeywordsApi();
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
+    const widget = document.getElementById(INPAGE_ROOT_ID);
+    const lastJobId = widget?.dataset?.lastJobId;
+    const lastJobUrl = widget?.dataset?.lastJobUrl;
+    const currentUrl = normalizeUrlForTailor(window.location.href);
+    const useJobId = lastJobId && lastJobUrl && currentUrl === normalizeUrlForTailor(lastJobUrl);
+
+    if (useJobId && headers?.Authorization) {
+      const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/tailor-context`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: parseInt(lastJobId, 10) }),
+      });
+      if (res.ok) {
+        url = `${base}/resume-generator/build?tailor=1&job_id=${lastJobId}`;
+        chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url });
+        return;
+      }
+    }
+    const pageHtml = await getPageHtmlForKeywordsApi();
     if (pageHtml && pageHtml.length > 100 && headers?.Authorization) {
       const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/tailor-context`, {
         method: "POST",
@@ -1900,7 +2029,11 @@ async function openResumeGeneratorUrl() {
           job_title: document.querySelector("h1, [data-automation-id='jobTitle'], .job-title, [class*='job-title']")?.textContent?.trim?.()?.slice(0, 100) || "",
         }),
       });
-      if (res.ok) url = `${base}/resume-generator?tailor=1`;
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const jobId = json?.job_id;
+        url = jobId ? `${base}/resume-generator/build?tailor=1&job_id=${jobId}` : `${base}/resume-generator/build?tailor=1`;
+      }
     }
   } catch (err) {
     logWarn("Tailor context save failed", { error: String(err) });
@@ -2444,6 +2577,8 @@ async function loadKeywordsIntoPanel(root) {
 
   container.innerHTML = "<p class=\"ja-score-text\">Loading profile...</p>";
   if (card) card.classList.add("ja-loading");
+  const keywordsListEl = root?.querySelector("#ja-keyword-keywords-list");
+  if (keywordsListEl) keywordsListEl.innerHTML = "";
 
   try {
     const resumes = await fetchResumesFromApi();
@@ -2472,7 +2607,11 @@ async function loadKeywordsIntoPanel(root) {
         }
         selectEl.appendChild(opt);
       });
-      if (prevSelection && validIds.has(prevSelection)) {
+      const { hm_selected_resume_id } = await chrome.storage.local.get(["hm_selected_resume_id"]);
+      const storedId = hm_selected_resume_id != null ? parseInt(hm_selected_resume_id, 10) : null;
+      if (storedId && validIds.has(storedId)) {
+        selectEl.value = String(storedId);
+      } else if (prevSelection && validIds.has(prevSelection)) {
         selectEl.value = String(prevSelection);
       } else if (defaultId !== null) {
         selectEl.value = String(defaultId);
@@ -2485,6 +2624,7 @@ async function loadKeywordsIntoPanel(root) {
     const resumeId = selectedId && selectedId > 0 ? selectedId : null;
 
     container.innerHTML = "<p class=\"ja-score-text\">Analyzing keywords...</p>";
+    if (keywordsListEl) keywordsListEl.innerHTML = "";
     const pageHtml = await getPageHtmlForKeywordsApi();
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
@@ -2504,6 +2644,7 @@ async function loadKeywordsIntoPanel(root) {
         if (typeof errMsg === "object" && errMsg.msg) errMsg = errMsg.msg;
       } catch (_) {}
       container.innerHTML = `<p class="ja-score-text">${escapeHtml(String(errMsg))}</p>`;
+      if (keywordsListEl) keywordsListEl.innerHTML = "";
       if (card) card.classList.remove("ja-loading");
       return;
     }
@@ -2516,33 +2657,65 @@ async function loadKeywordsIntoPanel(root) {
     const highMatched = high.filter((i) => i.matched).length;
     const lowMatched = low.filter((i) => i.matched).length;
     const statusLabel = total === 0 ? "No skills found" : percent >= 70 ? "Great match" : "Needs Work";
+    const statusClass = total === 0 ? "" : percent >= 70 ? "ja-status-great" : "ja-status-needs-work";
     const apiMessage = data.message || "";
     const renderItem = (item) =>
       `<div class="ja-kw-item"><span class="ja-kw-check ${item.matched ? "ja-matched" : "ja-unmatched"}">✓</span><span class="${item.matched ? "ja-kw-matched" : "ja-kw-unmatched"}">${escapeHtml(item.keyword)}</span></div>`;
     const highHtml = high.map(renderItem).join("");
     const lowHtml = low.map(renderItem).join("");
     container.innerHTML = `
-      <h4>Keyword Match – ${statusLabel}</h4>
-      ${total === 0 ? `<p class="ja-score-text">${escapeHtml(apiMessage || "No technical skills found in the job description. Scroll down for the full requirements section.")}</p>` : `<p class="ja-score-text"><strong>${percent}%</strong> match – Your resume has <strong>${matched} of ${total}</strong> keywords from the job description.</p>`}
-      ${total > 0 ? `<p style="font-size:11px;background:#fef9c3;padding:6px 8px;border-radius:6px;margin:0 0 12px 0;">Try to get your score above <strong>70%</strong> to increase your chances!</p>` : ""}
+      <div class="ja-kw-match-header">
+        <div class="ja-kw-match-title-row">
+          <h4 class="ja-kw-match-title">Keyword Match – <span class="ja-kw-status-label ${statusClass}">${statusLabel}</span></h4>
+        </div>
+        ${total === 0 ? `<p class="ja-score-text">${escapeHtml(apiMessage || "No technical skills found in the job description. Scroll down for the full requirements section.")}</p>` : `
+        <div class="ja-kw-score-row">
+          <div class="ja-kw-score-text-wrap">
+            <p class="ja-score-text">Your resume has <strong>${matched} out of ${total}</strong> keywords that appear in the job description.</p>
+          </div>
+          <div class="ja-kw-gauge-wrap">
+            <svg class="ja-kw-gauge" viewBox="0 0 100 55" preserveAspectRatio="xMidYMid meet">
+              <path class="ja-kw-gauge-bg" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke-width="14" stroke-linecap="round"/>
+              <path class="ja-kw-gauge-fill" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke-width="14" stroke-linecap="round" stroke-dasharray="125.6" style="stroke-dashoffset: ${125.6 * (1 - Math.min(100, percent) / 100)}"/>
+            </svg>
+            <div class="ja-kw-gauge-value">${Math.round(percent)}%</div>
+          </div>
+        </div>
+        <div class="ja-kw-tip-card">
+          <span class="ja-kw-tip-icon">💡</span>
+          <span>Try to get your score above <strong>70%</strong> to increase your chances!</span>
+        </div>`}
+      </div>
+    `;
+    if (keywordsListEl) {
+      keywordsListEl.innerHTML = high.length || low.length ? `
       ${high.length ? `<div class="ja-kw-priority-section">
         <div class="ja-kw-priority-header">
           <span class="ja-kw-priority-title">High Priority Keywords</span>
-          <span class="ja-kw-priority-count">${highMatched}/${high.length}</span>
+          <span class="ja-kw-priority-count"><span class="ja-kw-check-icon">✓</span> ${highMatched}/${high.length}</span>
         </div>
         <div class="ja-kw-grid">${highHtml}</div>
       </div>` : ""}
       ${low.length ? `<div class="ja-kw-priority-section">
         <div class="ja-kw-priority-header">
           <span class="ja-kw-priority-title">Low Priority Keywords</span>
-          <span class="ja-kw-priority-count">${lowMatched}/${low.length}</span>
+          <span class="ja-kw-priority-count"><span class="ja-kw-check-icon">✓</span> ${lowMatched}/${low.length}</span>
         </div>
         <div class="ja-kw-grid">${lowHtml}</div>
       </div>` : ""}
-    `;
+      ` : "";
+    }
+    if (root && data.job_id != null) {
+      root.dataset.lastJobId = String(data.job_id);
+      root.dataset.lastJobUrl = window.location.href;
+    }
   } catch (err) {
     logWarn("Keyword analysis failed", { error: String(err) });
     container.innerHTML = "<p class=\"ja-score-text\">Unable to analyze. Please try again.</p>";
+    if (root) {
+      const kwList = root.querySelector("#ja-keyword-keywords-list");
+      if (kwList) kwList.innerHTML = "";
+    }
   } finally {
     if (card) card.classList.remove("ja-loading");
   }
@@ -2560,7 +2733,7 @@ async function getAutofillContextFromApi() {
   if (_cached && (Date.now() - _cached.ts) < AUTOFILL_CTX_TTL) {
     autofillCtx = _cached.data;
   } else {
-    const _res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/context`, { headers });
+    const _res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/autofill/context?nocache=1`, { headers });
     if (!_res.ok) throw new Error(`Profile load failed (${_res.status})`);
     autofillCtx = await _res.json();
     await chrome.storage.local.set({ [AUTOFILL_CTX_KEY]: { data: autofillCtx, ts: Date.now() } });
@@ -2590,6 +2763,9 @@ async function fetchResumeFromContext(context) {
   const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
   if (!resumeFilename) return null;
   try {
+    const existing = await chrome.runtime.sendMessage({ type: "GET_RESUME" }).then((r) => (r?.ok ? r.data : null)).catch(() => null);
+    const existingHash = existing?.hash;
+
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
     const resumeRes = await fetchWithAuthRetry(
@@ -2599,14 +2775,24 @@ async function fetchResumeFromContext(context) {
     if (!resumeRes.ok) return null;
     const resumeBuffer = await resumeRes.arrayBuffer();
     const buffer = Array.from(new Uint8Array(resumeBuffer));
+
+    const hashInput = buffer.slice(0, 512).join(",");
+    const hash = btoa(hashInput).slice(0, 32);
+
+    if (existingHash && existingHash === hash && existing?.buffer?.length === buffer.length) {
+      logInfo("Resume unchanged, using cached version", { fileName: resumeFilename });
+      const displayName = context?.resumeName ? sanitizeResumeFilename(context.resumeName) : null;
+      return { buffer: existing.buffer, name: displayName || resumeFilename, hash };
+    }
+
     await chrome.runtime.sendMessage({
       type: "SAVE_RESUME",
-      payload: { buffer, name: resumeFilename },
+      payload: { buffer, name: resumeFilename, hash },
     });
     const displayName = context?.resumeName ? sanitizeResumeFilename(context.resumeName) : null;
     const fillName = displayName || resumeFilename;
     logInfo("Resume fetched and saved from context", { fileName: fillName, bytes: buffer.length });
-    return { buffer, name: fillName };
+    return { buffer, name: fillName, hash };
   } catch (e) {
     logWarn("Failed to fetch resume from context", e);
     return null;
@@ -2660,6 +2846,53 @@ function trackAutofillUsed() {
 const EDUCATION_ATS = new Set(["school", "degree", "major", "graduation_year"]);
 const EMPLOYMENT_ATS = new Set(["company", "job_title", "start_date", "end_date"]);
 
+/** Build flat profileValues for Workday step manager from context. Keys match atsFieldType (first_name, email, etc.). */
+function buildProfileValuesForWorkday(context) {
+  const p = context?.profile || {};
+  const custom = context?.customAnswers || {};
+  const exp0 = p.experiences?.[0] || {};
+  const edu0 = p.educations?.[0] || {};
+  const values = {
+    first_name: p.firstName || "",
+    last_name: p.lastName || "",
+    full_name: (p.firstName && p.lastName ? `${p.firstName} ${p.lastName}` : p.name || "").trim(),
+    email: p.email || "",
+    phone: p.phone || "",
+    linkedin: p.linkedin || "",
+    portfolio: p.portfolio || "",
+    github: p.github || "",
+    address: p.location || p.address || "",
+    city: p.city || "",
+    state: p.state || "",
+    country: p.country || "",
+    postal_code: p.postalCode || p.zip || "",
+    work_authorization: p.workAuthorization || p.work_authorization || "Yes",
+    sponsorship: p.sponsorship || "No",
+    school: edu0.institution || p.school || "",
+    degree: edu0.degree || p.degree || "",
+    major: edu0.fieldOfStudy || p.major || p.fieldOfStudy || "",
+    graduation_year: String(edu0.endYear || edu0.graduationYear || p.graduationYear || ""),
+    company: exp0.companyName || p.company || "",
+    job_title: exp0.jobTitle || p.title || p.jobTitle || "",
+    years_experience: p.yearsExperience || p.experience || "",
+    salary: p.expectedSalary || p.salary || "",
+    notice_period: p.noticePeriod || p.availability || "",
+    referral_source: p.referralSource || "LinkedIn",
+    gender: p.gender || "",
+    ethnicity: p.ethnicity || p.race || "",
+    veteran_status: p.veteranStatus || "I am not a protected veteran",
+    disability_status: p.disabilityStatus || "I don't wish to answer",
+  };
+  // Merge custom answers (normalized keys)
+  for (const [k, v] of Object.entries(custom)) {
+    if (v != null && String(v).trim() !== "") {
+      const norm = String(k).toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+      if (norm) values[norm] = String(v).trim();
+    }
+  }
+  return values;
+}
+
 function buildValuesByFrameWithLimits(fields, mappings, maxEducationBlocks, maxEmploymentBlocks) {
   const occurrenceByFp = {};
   const valuesByFrame = {};
@@ -2670,9 +2903,14 @@ function buildValuesByFrameWithLimits(fields, mappings, maxEducationBlocks, maxE
     if (val === undefined || val === null || val === "") continue;
     const ats = (field.atsFieldType || "").toLowerCase();
     const fp = field.fingerprint;
-    if (fp && (EDUCATION_ATS.has(ats) || EMPLOYMENT_ATS.has(ats))) {
-      const seen = occurrenceByFp[fp] ?? 0;
-      occurrenceByFp[fp] = seen + 1;
+    // Use real fingerprint when available; for null-fp, build synthetic key from atsFieldType + label
+    // so the same logical block still gets capped correctly (per flow doc §3.4).
+    if (EDUCATION_ATS.has(ats) || EMPLOYMENT_ATS.has(ats)) {
+      const capKey =
+        fp ||
+        `__synthetic__${ats}_${(field.label || "").slice(0, 20).toLowerCase().replace(/\s+/g, "_")}`;
+      const seen = occurrenceByFp[capKey] ?? 0;
+      occurrenceByFp[capKey] = seen + 1;
       const maxBlocks = EDUCATION_ATS.has(ats) ? maxEducationBlocks : maxEmploymentBlocks;
       if (seen >= maxBlocks) continue;
     }
@@ -2718,6 +2956,7 @@ async function fetchMappingsFromApi(fields, context) {
       profile: context.profile,
       custom_answers: context.customAnswers,
       resume_text: context.resumeText,
+      sync_llm: true, // Run LLM synchronously so dropdowns get values on first fill
     }),
   });
   if (!mapRes.ok) {
@@ -2726,6 +2965,7 @@ async function fetchMappingsFromApi(fields, context) {
   const mapData = await mapRes.json();
   return mapData.mappings || {};
 }
+if (typeof window !== "undefined") window.__FETCH_MAPPINGS_FROM_API__ = fetchMappingsFromApi;
 
 async function updateWidgetAuthUI(root) {
   let data = {};
@@ -2807,6 +3047,7 @@ function mountInPageUI() {
     existing.classList.remove("collapsed");
     updateWidgetAuthUI(existing);
     if (isCareerPage()) trackCareerPageView();
+    updateSavedTimeDisplay(existing);
     return;
   }
   
@@ -2820,7 +3061,8 @@ function mountInPageUI() {
         right: 20px;
         top: 80px;
         width: 380px;
-        max-height: 560px;
+        max-width: min(380px, 100vw - 40px);
+        max-height: calc(100vh - 100px);
         z-index: 2147483647;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: #1a1a1a;
@@ -2832,10 +3074,10 @@ function mountInPageUI() {
         border: 1px solid #e5e7eb;
         border-radius: 12px;
         box-shadow: 0 10px 40px rgba(0,0,0,0.12);
-        overflow-y: scroll;
+        overflow-y: auto;
         display: flex;
         flex-direction: column;
-        max-height: 520px;
+        max-height: calc(100vh - 140px);
       }
       #${INPAGE_ROOT_ID} .ja-head {
         display: flex;
@@ -3021,6 +3263,8 @@ function mountInPageUI() {
       #${INPAGE_ROOT_ID} .ja-continue-fill:hover { background: #15803d; }
       #${INPAGE_ROOT_ID} .ja-auto-advance { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: rgba(255,255,255,0.9); cursor: pointer; }
       #${INPAGE_ROOT_ID} .ja-auto-advance input { cursor: pointer; }
+      #${INPAGE_ROOT_ID} .ja-cache-enable { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.9); cursor: pointer; }
+      #${INPAGE_ROOT_ID} .ja-cache-enable input { cursor: pointer; }
       #${INPAGE_ROOT_ID} .ja-footer-links {
         display: flex;
         justify-content: space-between;
@@ -3248,21 +3492,40 @@ function mountInPageUI() {
         gap: 6px;
       }
       #${INPAGE_ROOT_ID} .ja-keyword-card .ja-score-text { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+      #${INPAGE_ROOT_ID} .ja-kw-match-header { margin-bottom: 14px; }
+      #${INPAGE_ROOT_ID} .ja-kw-match-title-row { margin-bottom: 10px; }
+      #${INPAGE_ROOT_ID} .ja-kw-match-title { margin: 0; font-size: 14px; font-weight: 700; color: #0f172a; }
+      #${INPAGE_ROOT_ID} .ja-kw-status-label.ja-status-needs-work { color: #d97706; font-weight: 700; }
+      #${INPAGE_ROOT_ID} .ja-kw-status-label.ja-status-great { color: #16a34a; font-weight: 700; }
+      #${INPAGE_ROOT_ID} .ja-kw-score-row { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 10px; }
+      #${INPAGE_ROOT_ID} .ja-kw-score-text-wrap { flex: 1; min-width: 0; }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge-wrap { position: relative; flex-shrink: 0; width: 90px; height: 50px; }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge { width: 90px; height: 48px; display: block; }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge-bg { stroke: #e5e7eb; }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge-fill { stroke: #2563eb; transition: stroke-dashoffset 0.4s ease; }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge-value { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); font-size: 15px; font-weight: 700; color: #1e40af; }
+      #${INPAGE_ROOT_ID} .ja-keyword-keywords-list { margin-top: 16px; }
+      #${INPAGE_ROOT_ID} .ja-kw-progress-bar { height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin: 10px 0 0 0; }
+      #${INPAGE_ROOT_ID} .ja-kw-progress-fill { height: 100%; background: #2563eb; border-radius: 4px; transition: width 0.4s ease; }
+      #${INPAGE_ROOT_ID} .ja-kw-tip-card { display: flex; align-items: flex-start; gap: 8px; width: 100%; margin-top: 0; padding: 10px 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; font-size: 12px; color: #1e40af; }
+      #${INPAGE_ROOT_ID} .ja-kw-tip-icon { font-size: 16px; flex-shrink: 0; }
+      #${INPAGE_ROOT_ID} .ja-kw-priority-count .ja-kw-check-icon { color: #2563eb; font-weight: 700; margin-right: 2px; }
       #${INPAGE_ROOT_ID} .ja-keyword-list {
         display: flex;
         flex-wrap: wrap;
         gap: 6px 10px;
         font-size: 12px;
       }
-      #${INPAGE_ROOT_ID} .ja-kw-matched { color: #2563eb; }
+      #${INPAGE_ROOT_ID} .ja-kw-matched { color: #2563eb; font-weight: 500; }
       #${INPAGE_ROOT_ID} .ja-kw-unmatched { color: #6b7280; }
-      /* High/Low Priority sections - light blue bg (OpsBrain theme) */
+      /* High/Low Priority sections - professional card style */
       #${INPAGE_ROOT_ID} .ja-kw-priority-section {
         margin-bottom: 14px;
-        background: rgba(96, 165, 250, 0.04);
-        border: 1px solid #C5CAD1;
+        background: #fff;
+        border: 1px solid #e5e7eb;
         border-radius: 10px;
         overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
       }
       #${INPAGE_ROOT_ID} .ja-kw-priority-section:last-child { margin-bottom: 0; }
       #${INPAGE_ROOT_ID} .ja-kw-priority-header {
@@ -3270,8 +3533,8 @@ function mountInPageUI() {
         align-items: center;
         justify-content: space-between;
         padding: 10px 14px;
-        background: rgba(96, 165, 250, 0.08);
-        border-bottom: 1px solid #C5CAD1;
+        background: #f8fafc;
+        border-bottom: 1px solid #e5e7eb;
       }
       #${INPAGE_ROOT_ID} .ja-kw-priority-title {
         font-size: 13px;
@@ -3629,6 +3892,9 @@ function mountInPageUI() {
             <div class="ja-action-row">
               <button type="button" class="ja-action" id="ja-run">Autofill this page</button>
             </div>
+            <label class="ja-cache-enable" id="ja-cache-enable-wrap">
+              <input type="checkbox" id="ja-cache-enable" checked /> Use cache for faster fills
+            </label>
             <div class="ja-quick-save-row" id="ja-quick-save-row" style="display:none;margin-top:10px;">
               <button type="button" class="ja-action ja-save-applied" id="ja-save-applied">Save & Mark Applied</button>
             </div>
@@ -3671,6 +3937,7 @@ function mountInPageUI() {
               <p class="ja-score-text">Loading keyword analysis...</p>
             </div>
           </div>
+          <div id="ja-keyword-keywords-list" class="ja-keyword-keywords-list"></div>
           <button type="button" class="ja-update-jd-btn" id="ja-update-jd-btn">Update Job Description</button>
           </div>
           <div class="ja-job-form-panel" id="ja-job-form-panel" style="display:none">
@@ -3795,6 +4062,7 @@ function mountInPageUI() {
 
   updateWidgetAuthUI(root);
   if (isCareerPage()) trackCareerPageView();
+  updateSavedTimeDisplay(root);
 
   // Render autofill accordions (Resume, Cover Letter, Unique Questions, Common Questions)
   const accordionsContainer = root.querySelector("#ja-autofill-accordions");
@@ -3822,8 +4090,23 @@ function mountInPageUI() {
 
   const autoAdvanceWrap = root.querySelector("#ja-auto-advance-wrap");
   if (autoAdvanceWrap) {
-    const isWorkday = /workday\.com|myworkdayjobs\.com/i.test(window.location.href);
+    const isWorkday = /workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(window.location.href);
     autoAdvanceWrap.style.display = isWorkday ? "flex" : "none";
+    const autoAdvanceCheck = autoAdvanceWrap?.querySelector('input[type="checkbox"]');
+    if (isWorkday && autoAdvanceCheck) autoAdvanceCheck.checked = true;
+  }
+
+  const CACHE_ENABLED_KEY = "hm_cache_enabled";
+  const cacheEnableWrap = root.querySelector("#ja-cache-enable-wrap");
+  const cacheEnableCheck = root.querySelector("#ja-cache-enable");
+  if (cacheEnableWrap && cacheEnableCheck) {
+    chrome.storage.local.get([CACHE_ENABLED_KEY]).then((stored) => {
+      const enabled = stored[CACHE_ENABLED_KEY] !== false;
+      cacheEnableCheck.checked = enabled;
+    });
+    cacheEnableCheck.addEventListener("change", () => {
+      chrome.storage.local.set({ [CACHE_ENABLED_KEY]: cacheEnableCheck.checked });
+    });
   }
 
   const statusEl = root.querySelector("#ja-status");
@@ -4007,7 +4290,39 @@ function mountInPageUI() {
 
     setStatus("Mapping fields with AI...", "loading");
     setProgress(35);
-    const mappings = await fetchMappingsFromApi(fields, context);
+    const domain = location.hostname;
+    const fps = fields.map((f) => f.fingerprint).filter(Boolean);
+    const useCache = root.querySelector("#ja-cache-enable")?.checked !== false;
+    let cachedByFp = {};
+    if (useCache) {
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "GET_CACHED_MAPPINGS_BY_FP", payload: { fps, domain } });
+        if (res?.ok && res.data) cachedByFp = res.data;
+      } catch (_) {}
+    }
+    const missFields = fields.filter((f) => !cachedByFp[f.fingerprint]);
+    let mappings = {};
+    for (const f of fields) {
+      const m = cachedByFp[f.fingerprint];
+      if (m) {
+        mappings[f.fingerprint] = m;
+        mappings[String(f.index)] = m;
+      }
+    }
+    if (missFields.length > 0) {
+      const apiMappings = await fetchMappingsFromApi(missFields, context);
+      Object.assign(mappings, apiMappings);
+      if (useCache) {
+        const toCache = {};
+        for (const f of missFields) {
+          const m = apiMappings[f.fingerprint] ?? apiMappings[String(f.index)];
+          if (m && m.value !== undefined) toCache[f.fingerprint] = m;
+        }
+        if (Object.keys(toCache).length > 0) {
+          chrome.runtime.sendMessage({ type: "SET_CACHED_MAPPINGS_BY_FP", payload: { mappingsByFp: toCache, domain } }).catch(() => {});
+        }
+      }
+    }
     if (!Object.keys(mappings).length) throw new Error("No mapping returned");
 
     setStatus("Preparing to fill...", "loading");
@@ -4036,6 +4351,8 @@ function mountInPageUI() {
       if (btn) break;
     }
     if (btn) {
+      // Capture user-filled values before advancing (Workday multi-step: store for learning)
+      await captureAndStoreCurrentStepFeedback();
       btn.click();
       await delay(3500);
       return true;
@@ -4053,6 +4370,8 @@ function mountInPageUI() {
 
   const runFlow = async (isContinueFromErrors = false) => {
     if (!runBtn) return;
+    const SESSION_ID = crypto.randomUUID();
+    window.__OPSBRAIN_SESSION_ID__ = SESSION_ID;
     runBtn.disabled = true;
     runBtn.style.display = "none";
     fillControls?.classList.add("visible");
@@ -4067,8 +4386,63 @@ function mountInPageUI() {
 
     trackAutofillUsed();
 
+    const scraper = window.__OPSBRAIN_SCRAPER__ || window.__HIREMATE_FIELD_SCRAPER__;
+    const platform = scraper?.detectPlatform?.(document) || "unknown";
+    const isWorkday = platform === "workday";
+
+    // Workday: use step manager (multi-step SPA wizard)
+    if (isWorkday) {
+      const stepManager = window.__OPSBRAIN_WORKDAY_STEPS__;
+      if (!stepManager) {
+        setStatus("Workday step manager not loaded. Reload the page.", "error");
+        runBtn.disabled = false;
+        runBtn.style.display = "";
+        fillControls?.classList.remove("visible");
+        return;
+      }
+      try {
+        setStatus("Loading profile & resume for Workday...", "loading");
+        setProgress(15);
+        await refreshTokenViaApi();
+        const context = await getAutofillContextFromApi();
+        let resumeData = await getResumeFromBackground();
+        if (!resumeData && (context.resumeUrl || context.resumeFileName)) {
+          resumeData = await fetchResumeFromContext(context);
+        }
+        if (!resumeData) resumeData = await getStaticResume();
+        if (resumeData && context?.resumeName) {
+          const displayName = sanitizeResumeFilename(context.resumeName);
+          if (displayName) resumeData = { ...resumeData, name: displayName };
+        }
+        const profileValues = buildProfileValuesForWorkday(context);
+        const autoContinue = root.querySelector("#ja-auto-advance")?.checked ?? false;
+        setStatus("Starting Workday autofill...", "loading");
+        setProgress(50);
+        const profileData = {
+          values: profileValues,
+          resumeData,
+          autoContinue,
+          context: { profile: context.profile, customAnswers: context.customAnswers || {}, resumeText: context.resumeText || "" },
+        };
+        await chrome.runtime.sendMessage({
+          type: "START_WORKDAY_AUTOFILL",
+          payload: { profileData },
+        });
+        setProgress(100);
+        setStatus("Workday autofill started. Fill steps as they appear.", "success");
+      } catch (err) {
+        setProgress(0);
+        setStatus(err?.message || "Workday autofill failed", "error");
+        logWarn("Workday autofill failed", { error: String(err) });
+      } finally {
+        runBtn.disabled = false;
+        runBtn.style.display = "";
+        fillControls?.classList.remove("visible");
+      }
+      return;
+    }
+
     const autoAdvance = root.querySelector("#ja-auto-advance")?.checked;
-    const isWorkday = /workday\.com|myworkdayjobs\.com/i.test(window.location.href);
     const maxSteps = 8;
     let totalFilled = 0;
     let totalResumes = 0;
@@ -4222,6 +4596,8 @@ function mountInPageUI() {
 
   stopBtn?.addEventListener("click", () => {
     abortRequested = true;
+    chrome.runtime.sendMessage({ type: "STOP_WORKDAY_AUTOFILL" }).catch(() => {});
+    window.__OPSBRAIN_WORKDAY_STEPS__?.stopWatching();
   });
 
   skipNextBtn?.addEventListener("click", () => {
@@ -4263,7 +4639,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   
   if (msg.type === "SHOW_WIDGET") {
     mountInPageUI();
-    if (isCareerPage()) runKeywordAnalysisAndMaybeShowWidget();
+    if (isCareerPage() && !/workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(window.location.href)) {
+      runKeywordAnalysisAndMaybeShowWidget();
+    }
     const widget = document.getElementById(INPAGE_ROOT_ID);
     if (widget) {
       const card = widget.querySelector(".ja-card");
@@ -4273,6 +4651,35 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   
+  if (msg.type === "STOP_WORKDAY_AUTOFILL") {
+    window.__OPSBRAIN_WORKDAY_STEPS__?.stopWatching();
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.type === "START_WORKDAY_AUTOFILL") {
+    const profileData = msg.payload?.profileData;
+    if (!profileData) {
+      sendResponse({ ok: false, error: "Missing profileData" });
+      return true;
+    }
+    const url = (typeof location !== "undefined" && location?.href) || "";
+    const isWorkdayFrame = /workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(url);
+    // Only run in the frame that has the form — avoids duplicate runs across iframes that trigger definition API bursts
+    const hasForm = document.body && (
+      document.querySelector('[id*="primaryQuestionnaire"]') ||
+      document.querySelector('[data-automation-id*="formField"]') ||
+      document.querySelector('[data-automation-id*="textInput"]')
+    );
+    const stepManager = window.__OPSBRAIN_WORKDAY_STEPS__;
+    if (stepManager && isWorkdayFrame && hasForm) {
+      stepManager.startWorkdayAutofill(profileData).then(() => sendResponse({ ok: true })).catch((e) => sendResponse({ ok: false, error: String(e) }));
+    } else {
+      sendResponse({ ok: true });
+    }
+    return true;
+  }
+
   if (msg.type === "SCRAPE_FIELDS") {
     const payload = msg.payload || {};
     const tScrape = Date.now();
@@ -4299,20 +4706,67 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       hasResume: !!p.resumeData,
       scope: p.scope,
     });
-    fillWithValues(p)
-      .then((result) => sendResponse({ ok: true, ...result }))
+    const FILL_TIMEOUT_MS = 90000; // 90s max - prevents indefinite hang
+    const startFill = Date.now();
+    const payloadWithAbort = {
+      ...p,
+      shouldAbort: p.shouldAbort
+        ? () => p.shouldAbort() || Date.now() - startFill > FILL_TIMEOUT_MS - 5000
+        : () => Date.now() - startFill > FILL_TIMEOUT_MS - 5000,
+    };
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Fill timed out after 90s — try fewer fields or refresh")), FILL_TIMEOUT_MS)
+    );
+    Promise.race([fillWithValues(payloadWithAbort), timeoutPromise])
+      .then((result) => {
+        if (result?.filledCount > 0) recordAutofillFieldsFilled(result.filledCount);
+        sendResponse({ ok: true, ...result });
+      })
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
   }
 
   if (msg.type === "FILL_FORM") {
     fillFormRuleBased(msg.payload || {})
-      .then((result) => sendResponse({ ok: true, ...result }))
+      .then((result) => {
+        if (result?.filledCount > 0) recordAutofillFieldsFilled(result.filledCount);
+        sendResponse({ ok: true, ...result });
+      })
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
   }
 
   return false;
+});
+
+// Workday step updates from step manager (can come from iframe via postMessage)
+window.addEventListener("message", (e) => {
+  if (e?.data?.type !== "OPSBRAIN_WORKDAY_STEP") return;
+  const root = document.getElementById(INPAGE_ROOT_ID);
+  if (!root) return;
+  // Keep Autofill tab active during Workday autofill — prevent switching to Keywords/Profile
+  const autofillTab = root.querySelector('[data-tab="autofill"]');
+  const autofillPanel = root.querySelector("#ja-panel-autofill");
+  if (autofillTab && autofillPanel && !autofillTab.classList.contains("active")) {
+    root.querySelectorAll(".ja-tab").forEach((t) => t.classList.remove("active"));
+    root.querySelectorAll(".ja-panel").forEach((p) => p.classList.remove("active"));
+    autofillTab.classList.add("active");
+    autofillPanel.classList.add("active");
+  }
+  const statusEl = root.querySelector("#ja-status");
+  const statusArea = root.querySelector("#ja-status-area");
+  if (!statusEl) return;
+  const { stepName, phase, fieldCount, filledCount, error } = e.data;
+  let text = stepName || "Workday";
+  if (phase === "starting") text = `Step: ${text} — starting...`;
+  else if (phase === "filling") text = `Step: ${text} — filling ${fieldCount || 0} fields`;
+  else if (phase === "filled") text = `✓ ${text} — filled ${filledCount ?? "✓"}`;
+  else if (phase === "review") text = `Step: ${text} — review & submit manually`;
+  else if (phase === "retry") text = `Retrying: ${text}`;
+  else if (phase === "error") text = `⚠ ${text}${error ? `: ${error}` : ""}`;
+  statusEl.textContent = text;
+  statusEl.className = `ja-status ${phase === "error" ? "error" : phase === "filled" || phase === "review" ? "success" : "loading"}`.trim();
+  statusArea?.classList.toggle("loading", phase === "starting" || phase === "filling" || phase === "retry");
 });
 
 // Test hook: when page dispatches 'scraper-test-request', run scrape and respond
@@ -4372,14 +4826,16 @@ function isIntermediateStep() {
   if (confirmSignals.some((s) => bodyText.includes(s))) return false;
   const nextButtonExists = !!document.querySelector(
     'button[type="submit"][data-automation-id*="next"], ' +
-      'button[aria-label*="Next"], ' +
-      'button[aria-label*="Continue"], ' +
+      '[data-automation-id="continueButton"], [data-automation-id*="continue"], ' +
+      'button[aria-label*="Next"], button[aria-label*="Continue"], ' +
       ".next-button, #nextButton, [data-testid='next-btn']"
   );
   const hasStepIndicator = !!document.querySelector(
     ".progress-steps, .step-indicator, [aria-label*='Step '], " +
-      ".wday-wizard-step, [data-automation-id*='progress']"
+      ".wday-wizard-step, [data-automation-id*='progress'], [data-automation-id*='wizard']"
   );
+  const isWorkdayUrl = /workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(location.href);
+  if (isWorkdayUrl && (nextButtonExists || hasStepIndicator)) return true;
   return nextButtonExists || hasStepIndicator;
 }
 
@@ -4391,11 +4847,72 @@ function mergePendingFields(existing, incoming) {
   return Object.values(map);
 }
 
+const PENDING_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours — treat as new session if older
+
+/** Capture current form values before advancing to next Workday step. Stores for submit-feedback on final submit. */
+async function captureAndStoreCurrentStepFeedback() {
+  const lastFill = window.__OPSBRAIN_LAST_FILL__;
+  if (!lastFill?.fields?.length || !lastFill?.mappings) return;
+  const currentSessionId = window.__OPSBRAIN_SESSION_ID__;
+  const docs = getDocuments(true);
+  for (const doc of docs) {
+    let overlappingCount = 0;
+    for (const f of lastFill.fields) {
+      try {
+        const sel = f.selector || (f.selectors?.[0]?.selector);
+        if (sel && doc.querySelector(sel)) overlappingCount++;
+      } catch (_) {}
+    }
+    if (overlappingCount < 2) continue;
+    const currentPageFields = lastFill.fields.map((f) => {
+      let el = null;
+      try {
+        const sel = f.selector || (f.selectors?.[0]?.selector);
+        if (sel) el = doc.querySelector(sel);
+      } catch (_) {}
+      const domValue = el ? (el.value ?? el.textContent ?? "").trim() : null;
+      const autofillVal = lastFill.mappings[f.fingerprint]?.value ?? lastFill.mappings[String(f.index)]?.value;
+      return {
+        fingerprint: f.fingerprint,
+        label: f.label,
+        type: f.type,
+        options: f.options || [],
+        ats_platform: window.__OPSBRAIN_ATS__ || window.__PAGE_DETECTOR__?.platform || "workday",
+        selector_used: f.selector || (f.selectors?.[0]?.selector),
+        selector_type: (f.selectors?.[0]?.type) || "id",
+        autofill_value: autofillVal,
+        submitted_value: domValue,
+        was_edited: domValue != null && domValue !== autofillVal,
+      };
+    });
+    const cacheManager = window.__CACHE_MANAGER__;
+    const pending = cacheManager ? await cacheManager.getPendingSubmission().catch(() => null) : null;
+    const sessionMatch = currentSessionId && pending?.sessionId === currentSessionId;
+    const ttlOk = !pending?.timestamp || (Date.now() - pending.timestamp) < PENDING_TTL_MS;
+    const existingFields = sessionMatch && ttlOk ? (pending?.fields || []) : [];
+    const allFields = mergePendingFields(existingFields, currentPageFields);
+    if (cacheManager) await cacheManager.setPendingSubmission({ url: location.href, fields: allFields, sessionId: currentSessionId, timestamp: Date.now() });
+    logInfo("Workday step — stored", allFields.length, "fields before advance");
+    return;
+  }
+}
+
 let _submitFeedbackAttached = false;
 function attachSubmitFeedbackListener() {
   if (_submitFeedbackAttached) return;
   _submitFeedbackAttached = true;
   document.addEventListener("submit", handleFormSubmitForFeedback, true);
+  // Workday: capture on Continue/Next click (user may have filled manually)
+  document.addEventListener("click", (e) => {
+    if (!/workday\.com|myworkdayjobs\.com/i.test(location.href)) return;
+    const btn = e.target?.closest?.("button, [role='button'], input[type='submit']") || e.target;
+    if (!btn) return;
+    const text = (btn.textContent || btn.innerText || btn.value || "").trim().toLowerCase();
+    const aid = (btn.getAttribute?.("data-automation-id") || "").toLowerCase();
+    if (text.includes("continue") || text.includes("next") || aid.includes("continue") || aid.includes("next")) {
+      captureAndStoreCurrentStepFeedback();
+    }
+  }, true);
 }
 
 async function handleFormSubmitForFeedback(e) {
@@ -4433,10 +4950,14 @@ async function handleFormSubmitForFeedback(e) {
   });
   const cacheManager = window.__CACHE_MANAGER__;
   const pending = cacheManager ? await cacheManager.getPendingSubmission().catch(() => null) : null;
-  const allFields = mergePendingFields(pending?.fields, currentPageFields);
+  const currentSessionId = window.__OPSBRAIN_SESSION_ID__;
+  const sessionMatch = currentSessionId && pending?.sessionId === currentSessionId;
+  const ttlOk = !pending?.timestamp || (Date.now() - pending.timestamp) < PENDING_TTL_MS;
+  const existingFields = sessionMatch && ttlOk ? (pending?.fields || []) : [];
+  const allFields = mergePendingFields(existingFields, currentPageFields);
 
   if (isIntermediateStep()) {
-    if (cacheManager) await cacheManager.setPendingSubmission({ url: location.href, fields: allFields });
+    if (cacheManager) await cacheManager.setPendingSubmission({ url: location.href, fields: allFields, sessionId: currentSessionId || undefined, timestamp: Date.now() });
     logInfo("Intermediate step — accumulated", allFields.length, "fields");
     return;
   }
@@ -4446,24 +4967,47 @@ async function handleFormSubmitForFeedback(e) {
     const apiBase = await getApiBase();
     const headers = await getAuthHeaders();
     if (!headers?.Authorization) return;
-    const res = await fetch(`${apiBase}/chrome-extension/form-fields/submit-feedback`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: location.href,
-        domain: location.hostname,
-        ats: window.__OPSBRAIN_ATS__ || window.__PAGE_DETECTOR__?.platform || "unknown",
-        fields: allFields,
-      }),
-    });
-    if (cacheManager) await cacheManager.clearPendingSubmission();
-    window.__OPSBRAIN_LAST_FILL__ = null;
-    if (res.ok) {
-      chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
+    const payload = {
+      url: location.href,
+      domain: location.hostname,
+      ats: window.__OPSBRAIN_ATS__ || window.__PAGE_DETECTOR__?.platform || "unknown",
+      fields: allFields,
+    };
+    const token = headers.Authorization?.replace("Bearer ", "");
+    const url = token ? `${apiBase}/chrome-extension/form-fields/submit-feedback?token=${encodeURIComponent(token)}` : `${apiBase}/chrome-extension/form-fields/submit-feedback`;
+    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    let ok = false;
+    if (navigator.sendBeacon && navigator.sendBeacon(url, blob)) {
+      logInfo("Submit feedback sent via sendBeacon");
+      ok = true;
+    } else {
+      const res = await fetch(`${apiBase}/chrome-extension/form-fields/submit-feedback`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      });
+      ok = res.ok;
     }
+    if (cacheManager) await cacheManager.clearPendingSubmission();
+    window.__OPSBRAIN_SESSION_ID__ = null;
+    window.__OPSBRAIN_LAST_FILL__ = null;
+    chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
   } catch (err) {
-    if (cacheManager) await cacheManager.setPendingSubmission({ url: location.href, fields: allFields });
-    logWarn("Submit feedback failed, will retry", { error: String(err) });
+    const retryCount = (pending?.retryCount || 0) + 1;
+    if (retryCount <= 3 && cacheManager) {
+      await cacheManager.setPendingSubmission({
+        url: location.href,
+        fields: allFields,
+        sessionId: currentSessionId,
+        timestamp: Date.now(),
+        retryCount,
+      });
+      logWarn("Submit feedback failed, will retry", { error: String(err), retryCount });
+    } else {
+      if (cacheManager) await cacheManager.clearPendingSubmission();
+      logWarn("Submit feedback failed, max retries reached", { error: String(err) });
+    }
   }
 }
 
@@ -4505,7 +5049,9 @@ function tryAutoOpenPopup() {
     const card = widget.querySelector(".ja-card");
     if (card) card.classList.remove("collapsed");
   }
-  runKeywordAnalysisAndMaybeShowWidget();
+  if (!/workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(window.location.href)) {
+    runKeywordAnalysisAndMaybeShowWidget();
+  }
 }
 
 const initAutoOpen = () => {
@@ -4519,12 +5065,31 @@ document.addEventListener("opsbrain-form-changed", () => {
   if (window.__REQUEST_MANAGER__) window.__REQUEST_MANAGER__.clearCache("form_fields:" + location.href);
 });
 
+window.addEventListener("message", (e) => {
+  if (e.source !== window || e.data?.type !== "HIREMATE_PROFILE_SAVED") return;
+  const origin = window.location.origin;
+  if (LOGIN_PAGE_ORIGINS.some((o) => origin === o || origin.startsWith(o.replace(/\/$/, "") + "/"))) {
+    chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
+    logInfo("Profile saved — mapping cache invalidated");
+  }
+});
+
+window.addEventListener("HIREMATE_RESUME_SAVED", (e) => {
+  const resumeId = e.detail?.resumeId;
+  if (resumeId != null) {
+    chrome.runtime.sendMessage({ type: "RESUME_SAVED_FROM_TAILOR", resumeId }).catch(() => {});
+  }
+});
+
 let _lastUrl = location.href;
 const _urlObserver = new MutationObserver(() => {
   const current = location.href;
   if (current !== _lastUrl) {
     _lastUrl = current;
     if (window.__PAGE_DETECTOR__) window.__PAGE_DETECTOR__.reset();
+    // Reset scraper's platform cache so the new URL is re-evaluated
+    if (window.__OPSBRAIN_SCRAPER__?.resetPlatform) window.__OPSBRAIN_SCRAPER__.resetPlatform();
+    if (window.__REQUEST_MANAGER__) window.__REQUEST_MANAGER__.clearCache("form_fields:" + current);
     tryAutoOpenPopup();
   }
 });

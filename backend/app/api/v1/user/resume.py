@@ -22,7 +22,7 @@ from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
 from backend.app.services.pdf_generator import text_to_pdf_bytes
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
 from backend.app.services.resume_extractor import extract_resume_to_payload
-from backend.app.services.resume_generator import generate_resume_html
+from backend.app.services.resume_generator import generate_resume_html, generate_resume_preview_pdf, generate_resume_preview_html
 from backend.app.services.resume_service import delete_file_from_storage, list_resumes as list_resumes_svc
 from backend.app.services.s3_service import upload_file_to_s3
 from backend.app.services.tailor_context_store import get_and_clear_tailor_context
@@ -34,11 +34,40 @@ router = APIRouter()
 class ResumeUpdateIn(BaseModel):
     resume_name: str | None = None
     resume_text: str | None = None
+    # Per-JD profile snapshot - stores the profile data customized for this specific resume/JD.
+    # Saved separately from global Profile so each resume can have its own content.
+    resume_profile_snapshot: dict | None = None
 
 
 class GenerateResumeIn(BaseModel):
     job_title: str = ""
     job_description: str = ""
+    template_id: str = "classic"
+    font_family: str | None = None
+    font_size: str | None = None
+    line_height: str | None = None
+    # Current editor profile state — when provided, download PDF matches live preview exactly.
+    profile_override: dict | None = None
+
+
+class PreviewHtmlIn(BaseModel):
+    job_title: str = ""
+    job_description: str = ""
+    template_id: str = "classic"
+    font_family: str | None = None
+    font_size: str | None = None
+    line_height: str | None = None
+    # Full profile from the editor — bypasses DB so preview reflects unsaved changes instantly.
+    profile_override: dict | None = None
+
+
+@router.get("/list")
+def list_resumes(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list:
+    """List current user's resumes (for dropdowns and resume list UI)."""
+    return list_resumes_svc(db, current_user)
 
 
 @router.get("/workspace")
@@ -55,6 +84,67 @@ def get_resume_workspace(
         "resumes": resumes,
         "tailor_context": tailor_context,
     }
+
+
+@router.post("/preview-html")
+def preview_resume_html(
+    payload: PreviewHtmlIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return the Jinja2-rendered HTML for live preview.
+    Uses the EXACT same templates as PDF generation — guarantees WYSIWYG (preview == download).
+    Fast (~50ms) because there is no WeasyPrint PDF conversion.
+    profile_override lets the frontend pass the current editor state directly so edits appear
+    instantly without waiting for the profile save debounce.
+    """
+    try:
+        html = generate_resume_preview_html(
+            db=db,
+            user=current_user,
+            job_title=(payload.job_title or "").strip(),
+            job_description=(payload.job_description or "").strip(),
+            template_id=(payload.template_id or "classic").strip().lower(),
+            font_family=payload.font_family or None,
+            font_size=payload.font_size or None,
+            line_height=payload.line_height or None,
+            profile_override=payload.profile_override or None,
+        )
+        return Response(content=html, media_type="text/html; charset=utf-8")
+    except Exception as e:
+        logger.exception("preview-html failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/preview")
+def preview_resume(
+    payload: GenerateResumeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate resume PDF on demand (used for Download).
+    Passes profile_override so the downloaded PDF matches the live HTML preview exactly.
+    """
+    try:
+        pdf_bytes = generate_resume_preview_pdf(
+            db=db,
+            user=current_user,
+            job_title=(payload.job_title or "").strip(),
+            job_description=(payload.job_description or "").strip(),
+            template_id=(payload.template_id or "classic").strip().lower(),
+            font_family=payload.font_family or None,
+            font_size=payload.font_size or None,
+            line_height=payload.line_height or None,
+            profile_override=payload.profile_override or None,
+        )
+        return Response(content=pdf_bytes, media_type="application/pdf")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.exception("Resume preview failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/generate")
@@ -74,6 +164,10 @@ def generate_resume(
             user=current_user,
             job_title=(payload.job_title or "").strip(),
             job_description=(payload.job_description or "").strip(),
+            template_id=(payload.template_id or "classic").strip().lower(),
+            font_family=payload.font_family or None,
+            font_size=payload.font_size or None,
+            line_height=payload.line_height or None,
         )
         return result
     except ValueError as e:
@@ -127,7 +221,7 @@ def get_resume_file(
 
 
 @router.patch("/{resume_id}")
-def update_resume(
+async def update_resume(
     resume_id: int,
     payload: ResumeUpdateIn,
     db: Session = Depends(get_db),
@@ -151,6 +245,8 @@ def update_resume(
         text_override = prefs.get("resume_text_override")
         if payload.resume_text is not None and text_override:
             _regenerate_pdf_for_profile(db, profile, current_user, text_override, display)
+        from backend.app.utils import cache
+        await cache.delete(f"autofill_ctx:{current_user.id}")
         return {"id": 0, "resume_name": f"{display} (default)", "resume_text": text_override}
     if resume_id < 0:
         raise HTTPException(status_code=400, detail="Invalid resume id")
@@ -165,11 +261,21 @@ def update_resume(
     if payload.resume_text is not None:
         r.resume_text = payload.resume_text or ""
         text_updated = True
+    if payload.resume_profile_snapshot is not None:
+        r.resume_profile_snapshot = payload.resume_profile_snapshot
     db.commit()
     if text_updated and r.resume_text:
         _regenerate_pdf_for_user_resume(db, r, current_user)
     db.refresh(r)
-    return {"id": r.id, "resume_name": r.resume_name, "resume_text": r.resume_text}
+    from backend.app.utils import cache
+    await cache.delete(f"autofill_ctx:{current_user.id}")
+    return {
+        "id": r.id,
+        "resume_name": r.resume_name,
+        "resume_text": r.resume_text,
+        "resume_profile_snapshot": r.resume_profile_snapshot,
+        "job_title": r.job_title or "",
+    }
 
 
 def _regenerate_pdf_for_user_resume(db: Session, r: UserResume, user: User) -> None:
@@ -213,7 +319,7 @@ def _regenerate_pdf_for_profile(db: Session, profile, user: User, text: str, dis
 
 
 @router.delete("/{resume_id}")
-def delete_resume_by_id(
+async def delete_resume_by_id(
     resume_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -230,6 +336,8 @@ def delete_resume_by_id(
     delete_file_from_storage(r.resume_url, current_user.id)
     db.delete(r)
     db.commit()
+    from backend.app.utils import cache
+    await cache.delete(f"autofill_ctx:{current_user.id}")
     return {"deleted": resume_id}
 
 
@@ -380,8 +488,8 @@ async def upload_resume(
     return payload.model_dump()
 
 
-@router.delete("", response_model=ProfilePayload)
-def delete_resume(
+@router.delete("/profile", response_model=ProfilePayload)
+async def delete_resume(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -399,6 +507,8 @@ def delete_resume(
         profile.resume_last_updated = None
         db.commit()
         db.refresh(profile)
+        from backend.app.utils import cache
+        await cache.delete(f"autofill_ctx:{current_user.id}")
         if had_resume:
             logger.info(
                 "Resume deleted successfully user_id=%s",

@@ -58,6 +58,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
                 first_name=user.first_name,
                 last_name=user.last_name,
                 email=user.email,
+                is_admin=getattr(user, "is_admin", False),
             ),
             message=result["message"],
         )
@@ -113,6 +114,7 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
                 first_name=user.first_name,
                 last_name=user.last_name,
                 email=user.email,
+                is_admin=getattr(user, "is_admin", False),
             ),
         )
     except HTTPException:
@@ -142,6 +144,7 @@ def get_current_user_profile(
         first_name=current_user.first_name or "",
         last_name=current_user.last_name or "",
         email=current_user.email or "",
+        is_admin=getattr(current_user, "is_admin", False),
     )
 
 
@@ -187,6 +190,7 @@ def refresh_access_token(
                 first_name=user.first_name or "",
                 last_name=user.last_name or "",
                 email=user.email or "",
+                is_admin=getattr(user, "is_admin", False),
             ),
         )
     except JWTError:

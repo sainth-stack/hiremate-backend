@@ -10,13 +10,15 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
-from backend.app.core.dependencies import get_current_user, get_db
+from backend.app.core.dependencies import get_current_user, get_current_user_optional, get_db
+from backend.app.db.session import SessionLocal
 from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
 from backend.app.models.user_resume import UserResume
@@ -36,6 +38,7 @@ from backend.app.services.job_description_scraper import parse_job_description_f
 from backend.app.services.keyword_analyzer import analyze_keywords
 from backend.app.services.tailor_context_store import set_tailor_context
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
+from backend.app.services.resume_service import list_resumes as list_resumes_svc
 
 logger = get_logger("api.chrome_extension")
 router = APIRouter(prefix="/chrome-extension", tags=["chrome-extension"])
@@ -55,6 +58,7 @@ class FormFieldMapIn(BaseModel):
     profile: dict[str, Any] | None = None
     custom_answers: dict[str, str] | None = None
     resume_text: str | None = None
+    sync_llm: bool = False  # When True, run LLM synchronously so dropdowns get values on first fill
 
 
 class FormFieldMapOut(BaseModel):
@@ -85,6 +89,10 @@ class SubmitFeedbackIn(BaseModel):
 class SelectorBatchIn(BaseModel):
     fps: list[str] = []
     ats_platform: str | None = None
+
+
+class ProfileInvalidateIn(BaseModel):
+    profile_keys_changed: list[str] | None = None  # If empty/None, full profile refresh
 
 
 class KeywordsAnalyzeIn(BaseModel):
@@ -150,11 +158,14 @@ class KeywordsAnalyzeOut(BaseModel):
     percent: int
     high_priority: list[KeywordItem]
     low_priority: list[KeywordItem]
+    quick_suggestions: list[str] = []  # unmatched high-priority JD keywords missing from profile
     message: str | None = None
     job_description: str | None = None  # included when url was used (for form prefill)
+    job_id: int | None = None  # saved/upserted job id for Tailor Resume flow
 
 
 class TailorContextIn(BaseModel):
+    job_id: int | None = None  # when provided, fetch job and use its job_description/job_title
     job_description: str | None = None
     job_title: str = ""
     url: str = ""
@@ -261,24 +272,32 @@ def _build_resume_text(payload: ProfilePayload) -> str:
 
 @router.get("/autofill/context", response_model=AutofillContextOut)
 async def get_autofill_context(
+    nocache: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> AutofillContextOut:
     """
     Merged autofill: profile + resume text + resume URL.
     Cached 300s per user. resume_url points to /autofill/resume/{filename} for PDF fetch.
+    Pass ?nocache=1 to bypass cache and fetch latest from DB.
     """
     from backend.app.utils import cache
 
     user_id = current_user.id
     cache_key = f"autofill_ctx:{user_id}"
 
-    try:
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return AutofillContextOut(**cached)
-    except Exception:
-        pass
+    if not nocache:
+        try:
+            cached = await cache.get(cache_key)
+            if cached is not None:
+                return AutofillContextOut(**cached)
+        except Exception:
+            pass
+    else:
+        try:
+            await cache.delete(cache_key)
+        except Exception:
+            pass
 
     try:
         profile = ProfileService.get_or_create_profile(db, current_user)
@@ -288,8 +307,6 @@ async def get_autofill_context(
         raise HTTPException(status_code=500, detail=f"Failed to load profile: {exc}") from exc
 
     autofill_profile = _profile_to_autofill_format(payload)
-
-    from backend.app.services.resume_service import list_resumes as list_resumes_svc
 
     resumes = list_resumes_svc(db, current_user)
     default_resume = resumes[0] if resumes else {}
@@ -342,15 +359,21 @@ def get_resume_file_by_name(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Serve resume by filename (for compatibility when extension passes filename from autofill/data)."""
+    """Serve resume by filename. Uses list_resumes (same source as autofill/context) so UserResume + profile are both supported."""
     try:
-        profile = ProfileService.get_or_create_profile(db, current_user)
-        resume_url = profile.resume_url
-        if not resume_url:
-            raise HTTPException(status_code=404, detail="No resume uploaded")
-
         safe_name = Path(file_name).name
-        if safe_name not in resume_url and Path(resume_url).name != safe_name:
+        resume_url = None
+
+        # Use list_resumes (same source as autofill context) - includes UserResume + profile fallback
+        resumes = list_resumes_svc(db, current_user)
+        for r in resumes:
+            url = r.get("resume_url") or ""
+            fn = (url.split("/")[-1] or "").split("?")[0]
+            if fn == safe_name:
+                resume_url = url
+                break
+
+        if not resume_url:
             raise HTTPException(status_code=404, detail="Resume file not found")
 
         if resume_url.startswith("http"):
@@ -399,67 +422,91 @@ def _persist_llm_results(
     profile: dict[str, Any],
     ats_platform: str = "unknown",
 ) -> None:
-    """Persist LLM results to user_field_answers and shared_field_profile_keys. Keyed by field_fp."""
-    from sqlalchemy import func
+    """Persist LLM results to user_field_answers and shared_field_profile_keys. Bulk upsert for scale."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    # Dedupe by field_fp: repeated form fields (e.g. Degree x3) share same fp; only persist once per fp
-    seen_fps: dict[str, tuple[dict, dict]] = {}
+    now = datetime.utcnow()
+    rows_answers = []
+    rows_profile_keys = []
+
+    seen_shared_fps: set[str] = set()
     for field in fields:
         fp = field.get("_fp")
-        if not fp or fp in seen_fps:
+        if not fp:
             continue
         res = llm_results.get(fp, {})
         val = res.get("value")
         if val is None or (isinstance(val, str) and not val.strip()):
             continue
-        seen_fps[fp] = (field, res)
-
-    seen_shared_fps: set[str] = set()
-    for fp, (field, res) in seen_fps.items():
-        value = res.get("value")
-        if value is None:
-            continue
-        profile_key = res.get("profile_key")
-        confidence = float(res.get("confidence", 0.8))
         label_norm = (normalize_label(field.get("label", "")) or "")[:255]
+        confidence = float(res.get("confidence", 0.85))
 
-        existing = db.query(UserFieldAnswer).filter_by(user_id=user_id, field_fp=fp).first()
-        if existing:
-            existing.value = value
-            existing.source = "llm"
-            existing.confidence = confidence
-            existing.label_norm = label_norm
-            existing.last_used = func.now()
-            existing.used_count = (existing.used_count or 0) + 1
-        else:
-            db.add(UserFieldAnswer(
-                user_id=user_id,
-                field_fp=fp,
-                label_norm=label_norm,
-                value=value,
-                source="llm",
-                confidence=confidence,
-            ))
+        rows_answers.append({
+            "user_id": user_id,
+            "field_fp": fp,
+            "value": str(val),
+            "source": "llm",
+            "confidence": confidence,
+            "label_norm": label_norm,
+            "used_count": 1,
+            "last_used": now,
+        })
 
+        profile_key = res.get("profile_key")
         if profile_key and profile_key != "null" and fp not in seen_shared_fps:
             from backend.app.services.form_field_mapper import PROFILE_KEY_TO_FIELD
             pf_key = PROFILE_KEY_TO_FIELD.get(profile_key, profile_key)
             if pf_key in profile and profile.get(pf_key):
                 seen_shared_fps.add(fp)
-                existing_shared = db.query(SharedFieldProfileKey).filter_by(field_fp=fp).first()
-                if existing_shared:
-                    existing_shared.vote_count = (existing_shared.vote_count or 0) + 1
-                    existing_shared.confidence = max(existing_shared.confidence or 0.5, confidence)
-                else:
-                    db.add(SharedFieldProfileKey(
-                        field_fp=fp,
-                        ats_platform=ats_platform,
-                        label_norm=label_norm,
-                        profile_key=profile_key,
-                        confidence=confidence,
-                        vote_count=1,
-                    ))
+                rows_profile_keys.append({
+                    "field_fp": fp,
+                    "ats_platform": ats_platform,
+                    "label_norm": label_norm,
+                    "profile_key": profile_key,
+                    "confidence": confidence,
+                    "vote_count": 1,
+                })
+
+    if rows_answers:
+        stmt = pg_insert(UserFieldAnswer).values(rows_answers)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["user_id", "field_fp"],
+            set_={
+                "value": stmt.excluded.value,
+                "source": stmt.excluded.source,
+                "confidence": stmt.excluded.confidence,
+                "last_used": stmt.excluded.last_used,
+                "used_count": UserFieldAnswer.used_count + 1,
+            },
+        )
+        db.execute(stmt)
+
+    if rows_profile_keys:
+        stmt = pg_insert(SharedFieldProfileKey).values(rows_profile_keys)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["field_fp"],
+            set_={
+                "vote_count": SharedFieldProfileKey.vote_count + 1,
+                "confidence": stmt.excluded.confidence,
+            },
+        )
+        db.execute(stmt)
+
     db.commit()
+
+
+# Profile-driven fields: Layer 2 (UserFieldAnswer) must be skipped so Layer 3 (live profile) wins
+PROFILE_DRIVEN_ATS_TYPES = frozenset({
+    "first_name", "last_name", "full_name", "email", "phone",
+    "linkedin", "portfolio", "city", "state", "country", "postal_code",
+    "address", "salary", "work_authorization", "sponsorship",
+    "gender", "notice_period",
+})
+
+
+def _is_profile_driven(field: dict) -> bool:
+    ats = (field.get("atsFieldType") or field.get("ats_field_type") or "").lower().strip()
+    return ats in PROFILE_DRIVEN_ATS_TYPES
 
 
 def _compute_unfilled_keys(
@@ -470,14 +517,57 @@ def _compute_unfilled_keys(
     unfilled = []
     for f in fields:
         fp = f.get("_fp")
-        if fp and fp not in user_map:
+        val = user_map.get(fp) if fp else None
+        if fp and (val is None or (isinstance(val, str) and not val.strip())):
             unfilled.append(normalize_label(f.get("label", "")))
     return unfilled
+
+
+def _persist_llm_results_sync(
+    user_id: int,
+    llm_fields: list[dict[str, Any]],
+    llm_results: dict[str, dict[str, Any]],
+    profile: dict[str, Any],
+    ats_platform: str,
+) -> None:
+    """Background task: persist pre-computed LLM results to DB."""
+    db = SessionLocal()
+    try:
+        _persist_llm_results(db, user_id, llm_fields, llm_results, profile, ats_platform)
+    except Exception as exc:
+        logger.exception("Persist LLM results failed: %s", exc)
+    finally:
+        db.close()
+
+
+def _run_llm_and_persist(
+    user_id: int,
+    llm_fields: list[dict[str, Any]],
+    profile: dict[str, Any],
+    custom_answers: dict[str, str],
+    resume_text: str,
+    ats_platform: str,
+) -> None:
+    """Background task: run LLM and persist to DB. Uses fresh db session."""
+    db = SessionLocal()
+    try:
+        llm_results = map_form_fields_llm_for_misses(
+            fields_with_fp=llm_fields,
+            profile=profile,
+            custom_answers=custom_answers,
+            resume_text=resume_text,
+        )
+        _persist_llm_results(db, user_id, llm_fields, llm_results, profile, ats_platform)
+    except Exception as exc:
+        logger.exception("Background LLM mapping failed: %s", exc)
+    finally:
+        db.close()
 
 
 @router.post("/form-fields/map", response_model=FormFieldMapOut)
 def map_fields(
     payload: FormFieldMapIn,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> FormFieldMapOut:
@@ -496,49 +586,69 @@ def map_fields(
         fc["_fp"] = compute_field_fingerprint(fc)
         fields_with_fp.append(fc)
     fps = [f["_fp"] for f in fields_with_fp]
+    fp_to_field = {f["_fp"]: f for f in fields_with_fp}
 
-    # Layer 2: Per-user learned answers (DB)
+    # Layer 2: Per-user learned answers (DB) — skip profile-driven fields so Layer 3 (live profile) wins
     user_rows = (
         db.query(UserFieldAnswer)
         .filter_by(user_id=current_user.id)
         .filter(UserFieldAnswer.field_fp.in_(fps))
         .all()
     )
-    user_map = {r.field_fp: r.value for r in user_rows if (r.value or "").strip()}
+    user_map = {
+        r.field_fp: r.value
+        for r in user_rows
+        if (r.value or "").strip() and not _is_profile_driven(fp_to_field.get(r.field_fp, {}))
+    }
 
-    # Layer 3: Shared profile key lookup
+    # Layer 3: Shared profile key lookup (Redis-cached when available)
     miss_fps = [fp for fp in fps if fp not in user_map]
     if miss_fps:
         from backend.app.services.form_field_mapper import PROFILE_KEY_TO_FIELD
-        shared_rows = (
-            db.query(SharedFieldProfileKey)
-            .filter(SharedFieldProfileKey.field_fp.in_(miss_fps))
-            .all()
-        )
-        for row in shared_rows:
-            pk = PROFILE_KEY_TO_FIELD.get(row.profile_key, row.profile_key)
-            if pk in profile and profile.get(pk):
-                user_map[row.field_fp] = profile.get(pk)
+        from backend.app.utils.cache import get_shared_profile_keys_cached
 
-    # Layer 4: LLM for remaining misses
+        fp_to_profile_key = get_shared_profile_keys_cached(miss_fps, db)
+        for fp, profile_key in fp_to_profile_key.items():
+            pk = PROFILE_KEY_TO_FIELD.get(profile_key, profile_key)
+            if pk in profile and profile.get(pk):
+                user_map[fp] = profile.get(pk)
+
+    # Layer 4: LLM for remaining misses — sync (when requested) or background
     llm_fields = [f for f in fields_with_fp if f["_fp"] not in user_map]
-    llm_results: dict[str, dict[str, Any]] = {}
     if llm_fields:
-        try:
+        if payload.sync_llm:
             llm_results = map_form_fields_llm_for_misses(
                 fields_with_fp=llm_fields,
                 profile=profile,
                 custom_answers=custom_answers,
                 resume_text=resume_text,
             )
-            for fp, res in llm_results.items():
+            for f in llm_fields:
+                fp = f["_fp"]
+                res = llm_results.get(fp, {})
                 val = res.get("value")
                 if val is not None and (not isinstance(val, str) or val.strip()):
                     user_map[fp] = val
-            _persist_llm_results(db, current_user.id, llm_fields, llm_results, profile, ats_platform)
-        except Exception as exc:
-            logger.exception("LLM mapping failed")
-            raise HTTPException(status_code=500, detail=f"Mapping failed: {exc}") from exc
+            background_tasks.add_task(
+                _persist_llm_results_sync,
+                user_id=current_user.id,
+                llm_fields=llm_fields,
+                llm_results=llm_results,
+                profile=profile,
+                ats_platform=ats_platform,
+            )
+        else:
+            background_tasks.add_task(
+                _run_llm_and_persist,
+                user_id=current_user.id,
+                llm_fields=llm_fields,
+                profile=profile,
+                custom_answers=custom_answers,
+                resume_text=resume_text,
+                ats_platform=ats_platform,
+            )
+            for f in llm_fields:
+                user_map[f["_fp"]] = None  # Explicit null — extension treats as unfilled
 
     unfilled_keys = _compute_unfilled_keys(fields_with_fp, user_map)
 
@@ -556,14 +666,57 @@ def map_fields(
         out_mappings[fp] = entry
         out_mappings[key_idx] = entry
 
+    llm_count = len(llm_fields) if llm_fields else 0
     logger.info(
-        "Form map: user_id=%s fields=%d hits=%d llm=%d",
+        "Form map: user_id=%s fields=%d hits=%d llm_deferred=%d",
         current_user.id,
         len(fields_with_fp),
-        len(user_map),
-        len(llm_results),
+        len([v for v in user_map.values() if v is not None]),
+        llm_count,
     )
     return FormFieldMapOut(mappings=out_mappings, unfilled_profile_keys=unfilled_keys)
+
+
+@router.post("/profile/invalidate-field-answers")
+def invalidate_field_answers(
+    payload: ProfileInvalidateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Delete stale UserFieldAnswer rows (source=llm) when profile changes so Layer 3 (live profile) wins on next map."""
+    if payload.profile_keys_changed:
+        # Delete LLM-sourced rows whose field_fp maps to a changed profile key via SharedFieldProfileKey
+        shared_fps = [
+            row.field_fp
+            for row in db.query(SharedFieldProfileKey.field_fp)
+            .filter(SharedFieldProfileKey.profile_key.in_(payload.profile_keys_changed))
+            .all()
+        ]
+        if shared_fps:
+            deleted = (
+                db.query(UserFieldAnswer)
+                .filter(
+                    UserFieldAnswer.user_id == current_user.id,
+                    UserFieldAnswer.field_fp.in_(shared_fps),
+                    UserFieldAnswer.source == "llm",
+                )
+                .delete(synchronize_session=False)
+            )
+        else:
+            deleted = 0
+    else:
+        # Full profile refresh — delete ALL LLM-sourced user field answers
+        deleted = (
+            db.query(UserFieldAnswer)
+            .filter(
+                UserFieldAnswer.user_id == current_user.id,
+                UserFieldAnswer.source == "llm",
+            )
+            .delete(synchronize_session=False)
+        )
+    db.commit()
+    logger.info("Profile invalidate: user_id=%s deleted=%s keys=%s", current_user.id, deleted, payload.profile_keys_changed)
+    return {"ok": True, "deleted": deleted}
 
 
 def _update_form_structure(
@@ -607,11 +760,14 @@ def _update_form_structure(
 def submit_feedback(
     payload: SubmitFeedbackIn,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ) -> dict:
-    """Learn from form submission - user answers, selector performance."""
+    """Learn from form submission - user answers, selector performance. Accepts token via query for sendBeacon."""
     from datetime import datetime
     from sqlalchemy import func
+
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     submission_record = []
     for field in payload.fields:
@@ -669,9 +825,38 @@ def submit_feedback(
             "field_fp": fp,
             "label": field.label,
             "value": value,
+            "autofill_value": field.autofill_value,
+            "submitted_value": field.submitted_value,
             "source": source,
             "was_edited": field.was_edited,
         })
+
+    # Compute mapping analysis
+    correctly_mapped = [r for r in submission_record if not r["was_edited"] and r["value"]]
+    user_changed = [r for r in submission_record if r["was_edited"]]
+    unmapped_fields = []
+    for f in payload.fields:
+        if not f.fingerprint:
+            continue
+        has_value = (f.submitted_value is not None and str(f.submitted_value).strip() != "") or \
+                    (f.autofill_value is not None and str(f.autofill_value).strip() != "")
+        if not has_value:
+            unmapped_fields.append({"label": f.label or "", "fingerprint": f.fingerprint})
+
+    total_with_values = len(submission_record)
+    mapping_analysis = {
+        "total_fields": len(payload.fields),
+        "filled_count": len([f for f in payload.fields if f.submitted_value]),
+        "correctly_mapped": len(correctly_mapped),
+        "user_changed": len(user_changed),
+        "unmapped": len(unmapped_fields),
+        "accuracy_pct": round(len(correctly_mapped) / max(total_with_values, 1) * 100, 1),
+        "changed_fields": [
+            {"label": r["label"], "field_fp": r["field_fp"], "autofill": r.get("autofill_value"), "submitted": r["value"]}
+            for r in user_changed
+        ],
+        "unmapped_fields": unmapped_fields,
+    }
 
     db.add(UserSubmissionHistory(
         user_id=current_user.id,
@@ -681,10 +866,11 @@ def submit_feedback(
         field_count=len(payload.fields),
         filled_count=len([f for f in payload.fields if f.submitted_value]),
         submitted_fields=submission_record,
+        mapping_analysis=mapping_analysis,
     ))
     _update_form_structure(db, payload.domain, payload.url, payload.ats, payload.fields)
     db.commit()
-    return {"ok": True, "learned": len(submission_record)}
+    return {"ok": True, "learned": len(submission_record), "mapping_analysis": mapping_analysis}
 
 
 @router.get("/form-structure/check")
@@ -784,6 +970,17 @@ def _extract_company_from_url(url: str | None) -> str:
     except Exception:
         pass
     return ""
+
+
+def _normalize_job_url(url: str | None) -> str:
+    """Normalize URL for job upsert matching: strip fragment, trailing slash."""
+    if not url or not url.strip():
+        return ""
+    u = url.strip()
+    if "#" in u:
+        u = u.split("#")[0]
+    u = u.rstrip("/")
+    return u or ""
 
 
 def _looks_like_tagline(s: str) -> bool:
@@ -944,6 +1141,28 @@ class JobUpdateIn(BaseModel):
     application_status: str | None = None
 
 
+@router.get("/jobs/{job_id}")
+def get_user_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Get a single job by ID including job_description. Used by resume generator when job_id in URL but tailor_context is null."""
+    job = db.query(UserJob).filter(UserJob.id == job_id, UserJob.user_id == current_user.id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "id": job.id,
+        "company": job.company or "",
+        "position_title": job.position_title or "",
+        "location": job.location or "",
+        "job_description": job.job_description or "",
+        "job_posting_url": job.job_posting_url,
+        "application_status": _normalize_status(job.application_status),
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+    }
+
+
 @router.patch("/jobs/{job_id}")
 def update_user_job(
     job_id: int,
@@ -997,32 +1216,98 @@ async def analyze_job_keywords(
         resume_text=resume_text or "",
     )
     out = KeywordsAnalyzeOut(**result)
+    out.quick_suggestions = [
+        item["keyword"] for item in result.get("high_priority", []) if not item.get("matched")
+    ]
     out.job_description = job_description  # include for form prefill
+
+    # Auto-save job for Tailor Resume flow (upsert by normalized URL)
+    job_id_saved: int | None = None
+    job_url = _normalize_job_url(payload.url)
+    if job_url:
+        position_title = _extract_position_from_text(job_description)
+        company = _extract_company_from_url(job_url)
+        location = _extract_location_from_text(job_description)
+        raw_url = (payload.url or "").strip()
+        existing = (
+            db.query(UserJob)
+            .filter(UserJob.user_id == current_user.id)
+            .filter(or_(UserJob.job_posting_url == job_url, UserJob.job_posting_url == raw_url))
+            .first()
+        )
+        if existing:
+            existing.job_description = job_description
+            existing.position_title = position_title or existing.position_title
+            existing.company = company or existing.company
+            existing.location = location or existing.location
+            existing.job_posting_url = job_url  # normalize for future lookups
+            db.commit()
+            db.refresh(existing)
+            job_id_saved = existing.id
+        else:
+            job = UserJob(
+                user_id=current_user.id,
+                company=company or None,
+                position_title=position_title or None,
+                location=location or None,
+                job_description=job_description,
+                application_status="saved",
+                job_posting_url=job_url,
+            )
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            job_id_saved = job.id
+        out.job_id = job_id_saved
+        from backend.app.utils import cache
+        await cache.delete(f"dashboard_summary:{current_user.id}")
+
     return out
 
 
 @router.post("/tailor-context")
 def save_tailor_context(
     payload: TailorContextIn,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """
     Store job description + title for Tailor Resume flow.
-    Extension calls this before opening /resume-generator; that page fetches via GET /resume/tailor-context.
+    Extension calls this before opening /resume-generator; that page fetches via GET /resume/workspace.
+    When job_id is provided, fetch job and use its job_description/job_title. Otherwise use payload.
     """
-    job_description = (payload.job_description or "").strip()
-    if (not job_description or len(job_description) < 50) and payload.page_html and len((payload.page_html or "").strip()) > 100:
-        job_description = parse_job_description_from_html(payload.page_html) or ""
-    job_description = (job_description or "").strip()
+    job_description = ""
+    job_title = (payload.job_title or "").strip()
+    url = (payload.url or "").strip()
+
+    job_id_out: int | None = None
+    if payload.job_id is not None and payload.job_id > 0:
+        job = db.query(UserJob).filter(
+            UserJob.id == payload.job_id,
+            UserJob.user_id == current_user.id,
+        ).first()
+        if job and job.job_description and len(job.job_description.strip()) >= 50:
+            job_description = job.job_description.strip()
+            job_title = (job.position_title or "").strip() or job_title
+            url = (job.job_posting_url or "").strip() or url
+            job_id_out = job.id
+
     if not job_description or len(job_description) < 50:
-        raise HTTPException(status_code=400, detail="job_description or page_html with scrapable content is required")
+        job_description = (payload.job_description or "").strip()
+        if (not job_description or len(job_description) < 50) and payload.page_html and len((payload.page_html or "").strip()) > 100:
+            job_description = parse_job_description_from_html(payload.page_html) or ""
+        job_description = (job_description or "").strip()
+        if not job_description or len(job_description) < 50:
+            raise HTTPException(status_code=400, detail="job_description or page_html with scrapable content is required")
+
     set_tailor_context(
         user_id=current_user.id,
         job_description=job_description,
-        job_title=(payload.job_title or "").strip(),
-        url=(payload.url or "").strip(),
+        job_title=job_title,
+        url=url,
+        job_id=job_id_out,
     )
-    return {"ok": True}
+    return {"ok": True, "job_id": job_id_out}
 
 
 # --- Cover Letter ---
@@ -1075,6 +1360,69 @@ def cover_letter_upsert(
     profile.preferences = prefs
     db.commit()
     return {"content": content or "", "job_title": job_title}
+
+
+# --- Extension Popup Summary ---
+@router.get("/summary")
+async def get_extension_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Lightweight summary for the extension popup.
+    Returns: applications_filled, last_fill_time, applications, interviews, fill_rate.
+    """
+    user_id = current_user.id
+
+    applications_filled = (
+        db.query(CareerPageVisit)
+        .filter(
+            CareerPageVisit.user_id == user_id,
+            CareerPageVisit.action_type == "autofill_used",
+        )
+        .count()
+    )
+
+    last_fill_row = (
+        db.query(CareerPageVisit.created_at)
+        .filter(
+            CareerPageVisit.user_id == user_id,
+            CareerPageVisit.action_type == "autofill_used",
+        )
+        .order_by(CareerPageVisit.created_at.desc())
+        .limit(1)
+        .first()
+    )
+    last_fill_time = last_fill_row[0].isoformat() if last_fill_row and last_fill_row[0] else None
+
+    _APPLIED = frozenset({"applied", "interview", "closed", "Applied", "Interviewing", "Offer", "Rejected", "Withdrawn"})
+    _INTERVIEW = frozenset({"interview", "Interviewing"})
+
+    applications = (
+        db.query(UserJob)
+        .filter(UserJob.user_id == user_id, UserJob.application_status.in_(_APPLIED))
+        .count()
+    )
+    interviews = (
+        db.query(UserJob)
+        .filter(UserJob.user_id == user_id, UserJob.application_status.in_(_INTERVIEW))
+        .count()
+    )
+
+    total_visits = (
+        db.query(CareerPageVisit)
+        .filter(CareerPageVisit.user_id == user_id)
+        .count()
+    )
+    fill_rate = round((applications_filled / total_visits) * 100) if total_visits else 0
+
+    return {
+        "applications_filled": applications_filled,
+        "last_fill_time": last_fill_time,
+        "applications": applications,
+        "interviews": interviews,
+        "fill_rate": fill_rate,
+    }
 
 
 # --- Extension Error Reporting ---

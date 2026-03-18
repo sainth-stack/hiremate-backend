@@ -27,16 +27,20 @@ def test_dashboard_summary_response_shape(client, auth_headers):
 
 
 def test_dashboard_summary_stats_keys(client, auth_headers):
-    """stats has keys: jobs_applied, jobs_saved, companies_checked (all int)."""
+    """stats has keys: jobs_applied, jobs_saved, companies_checked, applications_filled (int), last_autofill_at (str or null)."""
     r = client.get("/api/dashboard/summary", headers=auth_headers)
     data = r.json()
     stats = data["stats"]
     assert "jobs_applied" in stats
     assert "jobs_saved" in stats
     assert "companies_checked" in stats
+    assert "applications_filled" in stats
+    assert "last_autofill_at" in stats
     assert isinstance(stats["jobs_applied"], int)
     assert isinstance(stats["jobs_saved"], int)
     assert isinstance(stats["companies_checked"], int)
+    assert isinstance(stats["applications_filled"], int)
+    assert stats["last_autofill_at"] is None or isinstance(stats["last_autofill_at"], str)
 
 
 def test_dashboard_summary_lists(client, auth_headers):

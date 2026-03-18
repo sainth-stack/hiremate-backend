@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: Letter; margin: 0.5in; }
+body { font-family: "{{ font_family|default('Calibri') }}", Arial, sans-serif; font-size: {{ font_size|default('11pt') }}; margin: 0; padding: 0; line-height: {{ line_height|default('1.25') }}; color: #1a1a1a; }
+.header-band { background: #0f2952; color: white; padding: 18px 20px 14px; margin: -8px -8px 14px -8px; }
+.header-band .name { font-size: 22pt; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
+.header-band .contact { font-size: 9.5pt; margin-top: 6px; opacity: 0.92; }
+.header-band .contact a { color: #93c5fd; text-decoration: none; }
+.section { margin-top: 12px; }
+.section-title { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #0f2952; border-bottom: 2px solid #0f2952; padding-bottom: 3px; margin-bottom: 8px; }
+.skills-grid { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; }
+.skills-grid .sk-label { font-weight: 700; font-size: 10pt; white-space: nowrap; }
+.skills-grid .sk-val { font-size: 10pt; }
+.job { margin-bottom: 8px; }
+.job-header { display: flex; justify-content: space-between; font-weight: 700; }
+.job-role { font-style: italic; color: #374151; margin-top: 1px; }
+ul { margin: 3px 0 3px 18px; padding: 0; }
+li { margin-bottom: 2px; }
+.education { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.project { margin-bottom: 6px; }
+.project-tech { font-style: italic; font-size: 10pt; margin: 1px 0 2px 0; color: #4b5563; }
+.summary-text { margin: 0; font-size: 10.5pt; line-height: 1.35; }
+.awards ul { margin-top: 4px; }
+@media screen {
+  body { padding: 0.5in !important; box-sizing: border-box; }
+  .header-band { margin-left: -0.5in !important; margin-right: -0.5in !important; margin-top: -0.5in !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="header-band">
+  <div class="name">{{ name }}</div>
+  <div class="contact">
+    {% if email %}<a href="mailto:{{ email }}">{{ email }}</a>{% endif %}
+    {% if phone %}{% if email %} &nbsp;|&nbsp; {% endif %}{{ phone }}{% endif %}
+    {% if linkedin %}{% if email or phone %} &nbsp;|&nbsp; {% endif %}<a href="{{ linkedin }}">{{ linkedin.replace('https://','').replace('http://','') }}</a>{% endif %}
+    {% if github %}{% if email or phone or linkedin %} &nbsp;|&nbsp; {% endif %}<a href="{{ github }}">{{ github.replace('https://','').replace('http://','') }}</a>{% endif %}
+    {% if portfolio %}{% if email or phone or linkedin or github %} &nbsp;|&nbsp; {% endif %}<a href="{{ portfolio }}">{{ portfolio.replace('https://','').replace('http://','') }}</a>{% endif %}
+  </div>
+</div>
+
+{% if professional_summary %}
+<div class="section">
+  <div class="section-title">Executive Summary</div>
+  <p class="summary-text">{{ professional_summary }}</p>
+</div>
+{% endif %}
+
+{% if skills %}
+<div class="section">
+  <div class="section-title">Core Competencies</div>
+  <div class="skills-grid">
+    {% if skills.languages %}<span class="sk-label">Languages:</span><span class="sk-val">{{ skills.languages }}</span>{% endif %}
+    {% if skills.frontend %}<span class="sk-label">Frontend:</span><span class="sk-val">{{ skills.frontend }}</span>{% endif %}
+    {% if skills.backend %}<span class="sk-label">Backend:</span><span class="sk-val">{{ skills.backend }}</span>{% endif %}
+    {% if skills.genai %}<span class="sk-label">AI/GenAI:</span><span class="sk-val">{{ skills.genai }}</span>{% endif %}
+    {% if skills.tools %}<span class="sk-label">Tools:</span><span class="sk-val">{{ skills.tools }}</span>{% endif %}
+    {% if skills.devops %}<span class="sk-label">DevOps & Cloud:</span><span class="sk-val">{{ skills.devops }}</span>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if experiences %}
+<div class="section">
+  <div class="section-title">Professional Experience</div>
+  {% for exp in experiences %}
+  <div class="job">
+    <div class="job-header">
+      <span>{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</span>
+      <span>{{ exp.dates }}</span>
+    </div>
+    <div class="job-role">{{ exp.title }}</div>
+    {% if exp.bullets %}
+    <ul>
+      {% for bullet in exp.bullets %}<li>{{ bullet|safe }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if educations %}
+<div class="section">
+  <div class="section-title">Education</div>
+  {% for edu in educations %}
+  <div class="education">
+    <div><strong>{{ edu.institution }}</strong><br>{{ edu.degree }}</div>
+    <div>{{ edu.dates }}{% if edu.grade %}<br><em>{{ edu.grade }}</em>{% endif %}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if projects %}
+<div class="section">
+  <div class="section-title">Key Projects</div>
+  {% for proj in projects %}
+  <div class="project">
+    <strong>{{ proj.name }}</strong>
+    {% if proj.techStack %}<div class="project-tech">{{ proj.techStack }}</div>{% endif %}
+    <div>{{ proj.description }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if awards %}
+<div class="section awards">
+  <div class="section-title">Awards & Certifications</div>
+  <ul>{% for award in awards %}<li>{{ award }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+</body>
+</html>

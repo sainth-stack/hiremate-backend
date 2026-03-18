@@ -1,4 +1,20 @@
 const DB_NAME = "JobAutofillDB";
+// Full content script list — must match manifest so frames have scraper/filler when injected on retry
+const CONTENT_SCRIPT_FILES = [
+  "config.js",
+  "security-manager.js",
+  "content-script/requestManager.js",
+  "content-script/cacheManager.js",
+  "content-script/error-handler.js",
+  "content-script/pageDetector.js",
+  "content-script/formWatcher.js",
+  "content-script/selectorResolver.js",
+  "content-script/professionalWidget.js",
+  "content-script/fieldScraper.js",
+  "content-script/humanFiller.js",
+  "content-script/workday-step-manager.js",
+  "content.js",
+];
 const HIREMATE_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -10,7 +26,7 @@ const HIREMATE_ORIGINS = [
   "https://hiremate.com",
   "https://www.hiremate.com",
 ];
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "resume";
 const LOG_PREFIX = "[Autofill][background]";
 
@@ -26,15 +42,29 @@ function openDB() {
     req.onsuccess = () => resolve(req.result);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
+      const oldVersion = e.oldVersion;
+
+      if (oldVersion < 1) {
+        // Fresh install: create the object store
         db.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+      if (oldVersion < 2) {
+        // v1 → v2 migration: store already exists, nothing structural to change.
+        // Tab-specific keys use the same object store with different id values.
+        // No schema change needed — just version bump to track the migration.
       }
     };
   });
 }
 
-async function saveResume(buffer, name) {
+function resumeKey(tabId) {
+  return tabId ? `resume_tab_${tabId}` : "current";
+}
+
+async function saveResume(buffer, name, tabId, hash = null) {
+  const key = resumeKey(tabId);
   logInfo("Saving resume in IndexedDB", {
+    key,
     fileName: name || "resume.pdf",
     bytes: Array.isArray(buffer) ? buffer.length : 0,
   });
@@ -42,7 +72,7 @@ async function saveResume(buffer, name) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
-    store.put({ id: "current", buffer, name, updatedAt: Date.now() });
+    store.put({ id: key, buffer, name, hash, updatedAt: Date.now() });
     tx.oncomplete = () => {
       db.close();
       resolve();
@@ -51,28 +81,57 @@ async function saveResume(buffer, name) {
   });
 }
 
-async function getResume() {
-  logInfo("Fetching resume from IndexedDB");
+async function getResume(tabId) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).get("current");
-    req.onsuccess = () => {
-      db.close();
-      resolve(req.result || null);
+    const store = tx.objectStore(STORE_NAME);
+    const tabKey = resumeKey(tabId);
+    const tryCurrent = () => {
+      const r = store.get("current");
+      r.onsuccess = () => {
+        db.close();
+        resolve(r.result || null);
+      };
+      r.onerror = () => reject(r.error);
     };
-    req.onerror = () => reject(req.error);
+    if (tabKey !== "current") {
+      const r = store.get(tabKey);
+      r.onsuccess = () => {
+        if (r.result) {
+          db.close();
+          resolve(r.result);
+        } else {
+          tryCurrent();
+        }
+      };
+      r.onerror = () => reject(r.error);
+    } else {
+      tryCurrent();
+    }
   });
 }
 
+// Clean up tab-specific resume storage when a tab is closed
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const idbKey = resumeKey(tabId);
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).delete(idbKey);
+    tx.oncomplete = () => db.close();
+  } catch (_) {}
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "SAVE_RESUME") {
-    const { buffer, name } = msg.payload || {};
+    const { buffer, name, tabId, hash } = msg.payload || {};
     if (!buffer || !name) {
       sendResponse({ ok: false, error: "Missing buffer or name" });
       return true;
     }
-    saveResume(buffer, name)
+    const effectiveTabId = tabId ?? sender?.tab?.id;
+    saveResume(buffer, name, effectiveTabId, hash)
       .then(() => {
         logInfo("Resume saved successfully", { fileName: name });
         sendResponse({ ok: true });
@@ -92,7 +151,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try {
         const { loginPageUrl } = await chrome.storage.local.get(["loginPageUrl"]);
         const base = loginPageUrl ? new URL(loginPageUrl).origin : "http://localhost:5173";
-        const url = `${base}/resume-generator?tailor=1`;
+        const url = `${base}/resume-generator/build?tailor=1`;
         await chrome.tabs.create({ url });
         sendResponse({ ok: true });
       } catch (err) {
@@ -100,6 +159,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     })();
     return true;
+  }
+
+  if (msg.type === "RESUME_SAVED_FROM_TAILOR") {
+    const { resumeId } = msg;
+    if (resumeId != null) {
+      chrome.storage.local.set({ hm_selected_resume_id: resumeId }).catch(() => {});
+      const tabId = sender?.tab?.id;
+      if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+    }
+    return false;
   }
 
   if (msg.type === "SYNC_TOKEN_TO_HIREMATE_TAB") {
@@ -258,7 +327,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           } catch (e) {
             if (e?.message?.includes("Receiving end does not exist")) {
               try {
-                await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content.js"] });
+                await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: CONTENT_SCRIPT_FILES });
                 const res = await chrome.tabs.sendMessage(tabId, { type: "SCRAPE_FIELDS", payload }, { frameId });
                 results.push({ frameId, ok: true, res });
               } catch (e2) {
@@ -290,10 +359,86 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "INVALIDATE_MAPPING_CACHE") {
-    chrome.storage.local.remove("hm_field_mappings")
-      .then(() => { logInfo("Mapping cache invalidated after submit-feedback"); })
-      .catch((e) => logInfo("Could not invalidate mapping cache", { error: String(e) }));
-    sendResponse({ ok: true });
+    (async () => {
+      try {
+        const all = await chrome.storage.local.get(null);
+        const keysToRemove = Object.keys(all || {}).filter((k) => k.startsWith("hm_fm_"));
+        if (keysToRemove.length > 0) {
+          await chrome.storage.local.remove(keysToRemove);
+          logInfo("Mapping cache invalidated", { keysRemoved: keysToRemove.length });
+        }
+        // Legacy: also remove old flat key if present
+        await chrome.storage.local.remove("hm_field_mappings");
+      } catch (e) {
+        logInfo("Could not invalidate mapping cache", { error: String(e) });
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (msg.type === "START_WORKDAY_AUTOFILL") {
+    (async () => {
+      try {
+        const { profileData } = msg.payload || {};
+        const tabId = msg.tabId ?? sender?.tab?.id;
+        if (!tabId || !profileData) {
+          sendResponse({ ok: false, error: "Missing tabId or profileData" });
+          return;
+        }
+        let frameIds = [0];
+        try {
+          const frames = await chrome.webNavigation.getAllFrames({ tabId });
+          frameIds = (frames || []).map((f) => f.frameId).filter((id) => id != null);
+          if (!frameIds.length) frameIds = [0];
+          frameIds = [...new Set(frameIds)];
+        } catch (_) {}
+        logInfo("START_WORKDAY_AUTOFILL: broadcasting to frames", { frameCount: frameIds.length, frameIds });
+        for (const frameId of frameIds) {
+          try {
+            await chrome.tabs.sendMessage(tabId, { type: "START_WORKDAY_AUTOFILL", payload: { profileData } }, { frameId });
+          } catch (e) {
+            if (e?.message?.includes("Receiving end does not exist")) {
+              try {
+                await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: CONTENT_SCRIPT_FILES });
+                await chrome.tabs.sendMessage(tabId, { type: "START_WORKDAY_AUTOFILL", payload: { profileData } }, { frameId });
+              } catch (_) {}
+            }
+          }
+        }
+        sendResponse({ ok: true });
+      } catch (err) {
+        logInfo("START_WORKDAY_AUTOFILL error", { error: String(err) });
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "STOP_WORKDAY_AUTOFILL") {
+    (async () => {
+      try {
+        const tabId = msg.tabId ?? sender?.tab?.id;
+        if (!tabId) {
+          sendResponse({ ok: true });
+          return;
+        }
+        let frameIds = [0];
+        try {
+          const frames = await chrome.webNavigation.getAllFrames({ tabId });
+          frameIds = (frames || []).map((f) => f.frameId).filter((id) => id != null);
+          if (!frameIds.length) frameIds = [0];
+        } catch (_) {}
+        for (const frameId of frameIds) {
+          try {
+            await chrome.tabs.sendMessage(tabId, { type: "STOP_WORKDAY_AUTOFILL" }, { frameId });
+          } catch (_) {}
+        }
+        sendResponse({ ok: true });
+      } catch (_) {
+        sendResponse({ ok: true });
+      }
+    })();
     return true;
   }
 
@@ -333,7 +478,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           } catch (e) {
             if (e?.message?.includes("Receiving end does not exist")) {
               try {
-                await chrome.scripting.executeScript({ target: { tabId, frameIds: [parseInt(fid, 10) || 0] }, files: ["content.js"] });
+                await chrome.scripting.executeScript({ target: { tabId, frameIds: [parseInt(fid, 10) || 0] }, files: CONTENT_SCRIPT_FILES });
                 const fieldsForFrame = (fieldsByFrame && fieldsByFrame[fid]) || [];
                 const res = await chrome.tabs.sendMessage(tabId, {
                   type: "FILL_WITH_VALUES",
@@ -355,8 +500,70 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === "GET_CACHED_MAPPINGS_BY_FP") {
+    const { fps, domain } = msg.payload || {};
+    if (!fps?.length) {
+      sendResponse({ ok: true, data: {} });
+      return true;
+    }
+    (async () => {
+      try {
+        const key = `hm_fm_${(domain || "").replace(/\./g, "_")}`;
+        const stored = await chrome.storage.local.get([key]);
+        const all = stored[key] || {};
+        const now = Date.now();
+        const TTL = 7 * 86400 * 1000;
+        const out = {};
+        for (const fp of fps) {
+          const rec = all[fp];
+          if (rec && rec.cached_at && (now - rec.cached_at) < TTL) {
+            out[fp] = rec.mapping;
+          }
+        }
+        sendResponse({ ok: true, data: out });
+      } catch (e) {
+        sendResponse({ ok: false, data: {} });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "SET_CACHED_MAPPINGS_BY_FP") {
+    const { mappingsByFp, domain } = msg.payload || {};
+    if (!mappingsByFp || Object.keys(mappingsByFp).length === 0) {
+      sendResponse({ ok: true });
+      return true;
+    }
+    (async () => {
+      try {
+        const key = `hm_fm_${(domain || "").replace(/\./g, "_")}`;
+        const stored = await chrome.storage.local.get([key]);
+        const all = stored[key] || {};
+        const now = Date.now();
+        for (const [fp, mapping] of Object.entries(mappingsByFp)) {
+          if (mapping && mapping.value !== undefined) {
+            all[fp] = { mapping, cached_at: now };
+          }
+        }
+        const keys = Object.keys(all);
+        if (keys.length > 500) {
+          const sorted = keys.map((k) => ({ k, t: all[k].cached_at })).sort((a, b) => a.t - b.t);
+          for (let i = 0; i < sorted.length - 400; i++) {
+            delete all[sorted[i].k];
+          }
+        }
+        await chrome.storage.local.set({ [key]: all });
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false });
+      }
+    })();
+    return true;
+  }
+
   if (msg.type === "GET_RESUME") {
-    getResume()
+    const tabId = msg.tabId ?? sender?.tab?.id;
+    getResume(tabId)
       .then((row) => {
         if (!row) {
           logInfo("No resume found in storage");
@@ -369,6 +576,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           data: {
             buffer: row.buffer,
             name: row.name || "resume.pdf",
+            hash: row.hash || null,
           },
         });
       })

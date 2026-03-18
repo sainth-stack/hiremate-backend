@@ -87,3 +87,4 @@ class UserSubmissionHistory(Base):
     filled_count = Column(Integer, nullable=True)
     unfilled_profile_keys = Column(JSON, nullable=True)
     submitted_fields = Column(JSON, nullable=True)
+    mapping_analysis = Column(JSON, nullable=True)

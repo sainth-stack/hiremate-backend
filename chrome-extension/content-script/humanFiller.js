@@ -23,6 +23,10 @@
   const log = (msg, meta) => { meta !== undefined ? console.info(LOG, msg, meta) : console.info(LOG, msg); };
   const delay = (min, max) => new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
 
+  // Track which Workday date groups have been atomically filled
+  // Prevents triple-fill when scraper detects Month/Day/Year as 3 separate fields
+  const _filledDateGroupRoots = new WeakSet();
+
   // ─── REACT / FRAMEWORK VALUE SETTER ───────────────────────────
   // Correct order: nativeSetter → _valueTracker reset → InputEvent
   // This works for React 16, 17, 18 (including concurrent mode)
@@ -69,17 +73,23 @@
     const url = (doc?.defaultView?.location?.href||"").toLowerCase();
     const html = (doc?.documentElement?.innerHTML||"").slice(0,5000).toLowerCase();
     if (url.includes("greenhouse.io")||url.includes("boards.greenhouse")) return "greenhouse";
-    if (url.includes("workday.com")||url.includes("myworkdayjobs")||html.includes("wd3.myworkday")) return "workday";
+    if (url.includes("workday.com")||url.includes("myworkdayjobs")||url.includes("jobs.workday.com")||html.includes("wd3.myworkday")||/wd\d+\.myworkday/.test(html)) return "workday";
     if (url.includes("lever.co")) return "lever";
     if (url.includes("smartrecruiters.com")) return "smartrecruiters";
     if (url.includes("ashbyhq.com")) return "ashby";
+    if (url.includes("taleo.net")) return "taleo";
+    if (url.includes("jobvite.com")) return "jobvite";
+    if (url.includes("icims.com")) return "icims";
+    if (url.includes("bamboohr.com")) return "bamboohr";
+    if (url.includes("jazz.co")) return "jazz";
+    if (url.includes("recruitee.com")) return "recruitee";
     return "generic";
   }
 
   // ─── SCROLL & CLICK ───────────────────────────────────────────
   async function humanScrollTo(el) {
-    try { el.scrollIntoView({behavior:"smooth",block:"center",inline:"nearest"}); await delay(40,100); }
-    catch(_) { try { el.scrollIntoView({block:"center"}); await delay(30,80); } catch(_2) {} }
+    try { el.scrollIntoView({behavior:"auto",block:"center",inline:"nearest"}); await delay(15,35); }
+    catch(_) { try { el.scrollIntoView({block:"center"}); await delay(15,35); } catch(_2) {} }
   }
 
   async function humanClick(el, opts = {}) {
@@ -151,9 +161,9 @@
         el.dispatchEvent(new InputEvent("input",{bubbles:true,cancelable:true,data:char,inputType:"insertText",view:win}));
       } catch(_) {}
       try { el.dispatchEvent(new KeyboardEvent("keyup",{key:char,keyCode:code,which:code,bubbles:true,view:win})); } catch(_) {}
-      let d = 8 + Math.random()*12;
-      if (Math.random()<0.02) d += 25+Math.random()*30;
-      await delay(d, d+5);
+      let d = 4 + Math.random()*8;
+      if (Math.random()<0.02) d += 15+Math.random()*20;
+      await delay(d, d+4);
     }
     await delay(20,40);
     try { el.dispatchEvent(new Event("change",{bubbles:true})); } catch(_) {}
@@ -205,7 +215,7 @@
     try {
       setNativeValue(el, value);
       triggerChange(el, value, doc);
-      await delay(60,120);
+      await delay(25,55);
     } catch(_) { el.value = value; }
   }
 
@@ -248,9 +258,30 @@
       } catch(_) {}
     }
 
-    // Workday date sections (separate MM/DD/YYYY inputs)
-    const aid = el.getAttribute("data-automation-id")||"";
+    // Workday date sections — fill Year → Month → Day atomically, single blur at end
+    // WeakSet guard prevents triple-fill when scraper detects all 3 parts as separate fields
+    const aid = el.getAttribute("data-automation-id") || "";
     if (/dateSection/i.test(aid)) {
+      let fieldGroup = el.parentElement;
+      for (let i = 0; i < 8 && fieldGroup; i++) {
+        const yearEl = fieldGroup.querySelector('[data-automation-id*="dateSectionYear"]');
+        const monthEl = fieldGroup.querySelector('[data-automation-id*="dateSectionMonth"]');
+        const dayEl = fieldGroup.querySelector('[data-automation-id*="dateSectionDay"]');
+        if (yearEl || monthEl || dayEl) {
+          // If this group was already filled atomically, skip (prevents triple-fill)
+          if (_filledDateGroupRoots.has(fieldGroup)) {
+            return true; // silently succeed — date was already filled by a sibling field's call
+          }
+          _filledDateGroupRoots.add(fieldGroup);
+          if (yearEl && parsed.year) { await humanType(yearEl, parsed.year); await delay(40, 80); }
+          if (monthEl && parsed.month) { await humanType(monthEl, parsed.month); await delay(40, 80); }
+          if (dayEl && parsed.day) { await humanType(dayEl, parsed.day); await delay(40, 80); }
+          const lastEl = dayEl || monthEl || yearEl;
+          if (lastEl) lastEl.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+          return true;
+        }
+        fieldGroup = fieldGroup.parentElement;
+      }
       if (/Month/i.test(aid) && parsed.month) await humanType(el, parsed.month);
       else if (/Day/i.test(aid) && parsed.day) await humanType(el, parsed.day);
       else if (/Year/i.test(aid) && parsed.year) await humanType(el, parsed.year);
@@ -322,7 +353,7 @@
   async function findSpecifyInputAfterOther(selectEl, valueToFill, doc) {
     let scope = selectEl.closest("form,.form-group,.field,.question,.application-question,.input-group,[data-provides]") || selectEl.parentElement;
     if (!scope) scope = doc;
-    const maxWait = 1000;
+    const maxWait = 500;
     const start = Date.now();
     const isSpecifyLike = (inp) => {
       if (inp === selectEl || selectEl.contains(inp)) return false;
@@ -352,17 +383,32 @@
         await humanType(best, String(valueToFill));
         return true;
       }
-      await delay(80,150);
+      await delay(50,100);
     }
     return false;
   }
 
+  // ─── INSTITUTION-LIKE VALUE (avoid fuzzy match for school/company names) ──
+  // Fuzzy "first word" match can select wrong option (e.g. JNTU Hyderabad vs JNTU Pulivendula)
+  function isInstitutionLikeValue(value) {
+    const s = String(value||"").trim();
+    if (s.length < 25) return false;
+    return /university|college|institute|institution|school|polytechnic|academy/i.test(s);
+  }
+
   // ─── OPTION ELEMENT MATCH ─────────────────────────────────────
+  // For institution/company names: EXACT match only (no fuzzy) to avoid wrong selection
   function findOptionEl(optEls, value) {
     const v = normKey(value); if (!v) return null;
+    const strictMatch = isInstitutionLikeValue(value);
+
     // exact
     let m = optEls.find(el => normKey(el.textContent||el.getAttribute?.("data-value")||"")=== v);
     if (m) return m;
+
+    // For institution-like values: ONLY exact match — never fuzzy (avoids JNTU Hyderabad vs Pulivendula)
+    if (strictMatch) return null;
+
     // starts with (avoid overly long matches like "British Indian...")
     m = optEls.find(el => normKey(el.textContent||"").startsWith(v+" ") || normKey(el.textContent||"")===v);
     if (m) return m;
@@ -374,9 +420,9 @@
       return true;
     });
     if (m) return m;
-    // first word
+    // first word (skip for long institution names)
     const fw = v.split(/\s+/)[0];
-    if (fw && fw.length>1) m = optEls.find(el => normKey(el.textContent||"").startsWith(fw));
+    if (fw && fw.length>1 && v.length<=40) m = optEls.find(el => normKey(el.textContent||"").startsWith(fw));
     return m||null;
   }
 
@@ -404,11 +450,13 @@
   // ─── WAIT FOR OPTIONS ─────────────────────────────────────────
   function isPhoneCountry(el) { return !!el?.closest?.(".iti__country-list,.iti__country,[class*='iti-'],[class*='intl-tel']"); }
 
-  async function waitForOptions(doc, triggerEl, maxMs = 3000) {
+  async function waitForOptions(doc, triggerEl, maxMs = 1500) {
     const optSel = '[role="option"],.select__option,[class*="option"][role],li[data-value],[data-radix-collection-item]';
     const start = Date.now();
+    const radixContentId = triggerEl?.getAttribute?.("aria-controls")||triggerEl?.getAttribute?.("aria-owns")||triggerEl?.id;
+
     while (Date.now()-start < maxMs) {
-      // aria-controls (most reliable)
+      // 1. aria-controls (most reliable, works for Radix when id is set)
       const cid = triggerEl?.getAttribute?.("aria-controls")||triggerEl?.getAttribute?.("aria-owns");
       if (cid) {
         try {
@@ -419,25 +467,106 @@
           }
         } catch(_) {}
       }
-      // visible listbox
+
+      // 2. Radix portal: look for popper wrapper that is open
+      const radixPortals = Array.from(doc.querySelectorAll(
+        '[data-radix-popper-content-wrapper],[data-state="open"][role="listbox"]'
+      )).filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width>0 && r.height>0;
+      });
+      if (radixPortals.length === 1) {
+        const opts = Array.from(radixPortals[0].querySelectorAll(optSel)).filter(o=>!isPhoneCountry(o));
+        if (opts.length) return opts;
+      } else if (radixPortals.length > 1 && radixContentId) {
+        const triggerRect = triggerEl?.getBoundingClientRect?.() || { left: 0, top: 0 };
+        radixPortals.sort((a, b) => {
+          const ar = a.getBoundingClientRect();
+          const br = b.getBoundingClientRect();
+          const distA = Math.abs(ar.left - triggerRect.left) + Math.abs(ar.top - triggerRect.top);
+          const distB = Math.abs(br.left - triggerRect.left) + Math.abs(br.top - triggerRect.top);
+          return distA - distB;
+        });
+        const opts = Array.from(radixPortals[0].querySelectorAll(optSel)).filter(o=>!isPhoneCountry(o));
+        if (opts.length) return opts;
+      }
+
+      // 3. visible listbox fallback
       const lb = doc.querySelector('[role="listbox"]:not([hidden]):not([style*="display: none"]),[role="listbox"][data-state="open"]');
       if (lb && !isPhoneCountry(lb)) {
         const opts = Array.from(lb.querySelectorAll(optSel)).filter(o=>!isPhoneCountry(o));
         if (opts.length) return opts;
       }
-      // document-wide visible options (portal pattern)
+
+      // 4. document-wide visible options (portal pattern)
       const all = Array.from(doc.querySelectorAll(optSel)).filter(o => {
         if (isPhoneCountry(o)) return false;
         const r = o.getBoundingClientRect(); return r.width>0 && r.height>0;
       });
       if (all.length) return all;
-      await delay(80,140);
+      await delay(50,100);
     }
     return [];
   }
 
+  // ─── INJECT CUSTOM OPTION (when value not in dropdown) ─────────
+  // For school/company fields: inject our value as a selectable option below the field
+  async function injectCustomOptionAndSelect(doc, triggerEl, optionEls, value, fieldMeta) {
+    const atsType = (fieldMeta?.atsFieldType||"").toLowerCase();
+    const label = (fieldMeta?.label||"").toLowerCase();
+    const isSchoolOrCompany = atsType==="school" || atsType==="company" ||
+      /school|university|college|institution/i.test(label) || /company|employer|organization/i.test(label);
+    if (!isSchoolOrCompany && !isInstitutionLikeValue(value)) return false;
+
+    const listbox = optionEls[0]?.parentElement ||
+      doc.querySelector('[role="listbox"]:not([hidden]),[role="listbox"][data-state="open"]');
+    if (!listbox || !listbox.isConnected) return false;
+
+    // Ensure full value is in the input (type it if searchable)
+    const tag = (triggerEl?.tagName||"").toLowerCase();
+    const inputEl = tag==="input" ? triggerEl : triggerEl?.querySelector?.('input[type="text"],input[type="search"],input:not([type])');
+    if (inputEl) {
+      const currentVal = (inputEl.value||"").trim();
+      const wantVal = String(value||"").trim();
+      if (normKey(currentVal) !== normKey(wantVal)) {
+        await clearField(inputEl);
+        await delay(30,60);
+        await humanType(inputEl, wantVal);
+        await delay(80,150);
+      }
+    }
+
+    // Create injected option — match structure of existing options or use simple div
+    const sample = optionEls[0];
+    const injected = doc.createElement(sample ? (sample.tagName||"div") : "div");
+    injected.setAttribute("role", "option");
+    injected.textContent = String(value||"").trim();
+    injected.setAttribute("data-value", String(value||"").trim());
+    injected.classList.add("ja-injected-option");
+    if (sample?.className) injected.className = String(sample.className) + " ja-injected-option";
+    if (sample) {
+      const r = sample.getBoundingClientRect();
+      if (r?.height > 0) injected.style.minHeight = r.height + "px";
+    }
+    injected.style.cursor = "pointer";
+    injected.style.padding = "8px 12px";
+
+    listbox.insertBefore(injected, listbox.firstChild);
+    await delay(30,60);
+
+    try {
+      await humanScrollTo(injected);
+      await humanClick(injected);
+      await delay(50,100);
+      log("Injected custom option and selected",{value:String(value).slice(0,50)});
+      return true;
+    } finally {
+      try { injected.remove(); } catch(_) {}
+    }
+  }
+
   // ─── HUMAN SELECT ─────────────────────────────────────────────
-  async function humanSelect(el, value, knownOptions, doc) {
+  async function humanSelect(el, value, knownOptions, doc, fieldMeta) {
     if (!doc) doc = el.ownerDocument || document;
     const win = doc.defaultView || window;
     const tag = el.tagName.toLowerCase();
@@ -479,20 +608,21 @@
 
     // Step 2: For searchable dropdowns WITHOUT known options, type to filter
     const searchable = isSearchableDropdown(triggerEl) || isSearchableDropdown(el);
+    const institutionLike = isInstitutionLikeValue(value);
     if (searchable && !hasKnown) {
       const inputEl = tag==="input" ? el : el.querySelector('input[type="text"],input[type="search"],input:not([type])');
       if (inputEl) {
         await humanClick(inputEl);
         await delay(30,60);
-        // Type just enough to narrow options (first 20 chars)
-        const typeVal = String(value).slice(0,20);
+        // For institution names: type FULL value so input shows correct text; inject will add option if not in list
+        const typeVal = institutionLike ? String(value) : String(value).slice(0,20);
         await humanType(inputEl, typeVal);
         await delay(120,220);
       }
     }
 
     // Step 3: Wait for and click the matching option
-    const optionEls = await waitForOptions(doc, triggerEl, fast ? 1200 : 3000);
+    const optionEls = await waitForOptions(doc, triggerEl, fast ? 800 : 1500);
     if (optionEls.length > 0) {
       const match = findOptionEl(optionEls, value);
       if (match) {
@@ -502,7 +632,14 @@
         log("Custom select filled",{value,text:match.textContent?.trim()?.slice(0,40)});
         return true;
       }
+      // No match: for school/company, inject our value as option and select it
+      const injected = await injectCustomOptionAndSelect(doc, triggerEl, optionEls, value, fieldMeta);
+      if (injected) return true;
       log("Option not found in list",{value,sample:optionEls.slice(0,3).map(o=>o.textContent?.trim())});
+    } else if (institutionLike && fieldMeta) {
+      // Dropdown may show "no results" — inject into listbox if we can find it
+      const injected = await injectCustomOptionAndSelect(doc, triggerEl, [], value, fieldMeta);
+      if (injected) return true;
     }
 
     // Step 4: Workday aria-activedescendant fallback
@@ -558,7 +695,7 @@
     await delay(20,50);
     await humanClick(triggerEl, {center:true});
     await delay(150,300);
-    const optionEls = await waitForOptions(doc, triggerEl, 2000);
+    const optionEls = await waitForOptions(doc, triggerEl, 1000);
     const otherOpt = optionEls.length ? findOptionElOther(optionEls) : null;
     if (!otherOpt) return false;
     await humanScrollTo(otherOpt);
@@ -594,9 +731,12 @@
     input.dispatchEvent(new Event("input",{bubbles:true}));
     await delay(200,400);
 
-    // Strategy 2: If file not registered, try drag-and-drop on dropzone wrapper
+    // Strategy 2: If file not registered, try drag-and-drop on dropzone wrapper (Workday, Greenhouse)
     if (!input.files?.length) {
-      const dropzone = input.closest('[class*="dropzone"],[class*="upload"],[class*="filepond"],[data-dropzone]') || input.parentElement;
+      const dropzone = input.closest(
+        '[class*="dropzone"],[class*="upload"],[class*="filepond"],[data-dropzone],' +
+        '[data-automation-id*="fileUpload"],[data-automation-id*="file-upload"],[data-automation-id*="attachment"]'
+      ) || input.parentElement;
       if (dropzone) {
         try {
           const r = dropzone.getBoundingClientRect();
@@ -660,23 +800,48 @@
     await humanScrollTo(el);
     await delay(25,70);
 
-    // ── FILE ──
+    // ── Workday upload button (fileUploadButton) — MUST be before generic FILE block ──
+    // Workday 2024 uses <button data-automation-id="fileUploadButton"> instead of input[type=file]
+    const elAid = (el.getAttribute("data-automation-id") || "").toLowerCase();
+    const isWorkdayUploadBtn = (tag === "button") &&
+      (elAid.includes("fileupload") || elAid.includes("uploadfile") || elAid.includes("attachment")) &&
+      (value === "RESUME_FILE" || fieldMeta.atsFieldType === "resume" ||
+       /resume|cv\b/i.test(fieldMeta.label || "") || fieldType === "file");
+    if (isWorkdayUploadBtn && resumeData) {
+      const form = el.closest("form") || el.parentElement?.parentElement;
+      const fileInput =
+        form?.querySelector('input[type="file"]') ||
+        el.nextElementSibling?.querySelector('input[type="file"]') ||
+        el.parentElement?.querySelector('input[type="file"]') ||
+        el.closest('[data-automation-id*="fileUpload"],[data-automation-id*="attachment"]')
+          ?.querySelector('input[type="file"]');
+      if (fileInput) {
+        const ok = await humanUploadFile(fileInput, resumeData);
+        return { ok, isResume: true };
+      }
+    }
+
+    // ── FILE (native input[type=file]) ──
     if (type === "file" || fieldType === "file") {
       const isResume = value === "RESUME_FILE" || fieldMeta.atsFieldType === "resume" ||
-        /resume|cv\b/i.test(fieldMeta.label||"");
+        /resume|cv\b/i.test(fieldMeta.label || "");
       if (isResume && resumeData) {
         const ok = await humanUploadFile(el, resumeData);
-        return {ok, isResume:true};
+        return { ok, isResume: true };
       }
-      return {ok:false,reason:"no_resume"};
+      return { ok: false, reason: "no_resume" };
     }
 
     // ── SELECT / COMBOBOX ──
+    // Include school/company inputs that are autocomplete (inside combobox or have dropdown)
+    const isAutocompleteInput = (fieldMeta.atsFieldType==="school" || fieldMeta.atsFieldType==="company") &&
+      (tag==="input") && (el.closest('[role="combobox"],[aria-haspopup="listbox"]') || el.getAttribute("aria-haspopup")==="listbox");
     if (tag==="select" || fieldType==="select" ||
       role==="combobox" || role==="listbox" ||
       el.getAttribute("aria-haspopup")==="listbox" ||
-      /react-select|MuiSelect|ant-select/i.test(el.className||"")) {
-      const ok = await humanSelect(el, String(value), fieldMeta.options, doc);
+      /react-select|MuiSelect|ant-select/i.test(el.className||"") ||
+      isAutocompleteInput) {
+      const ok = await humanSelect(el, String(value), fieldMeta.options, doc, fieldMeta);
       if (!ok) {
         // For school/company: try "Other" option, then fill the specify/enter field
         const otherOk = await trySelectOtherAndFillSpecify(el, String(value), fieldMeta.options, fieldMeta, doc);
@@ -727,22 +892,118 @@
 
     // ── STANDARD INPUT / TEXTAREA ──
     if (tag==="input" || tag==="textarea" || fieldType==="text" || fieldType==="textarea" || fieldType==="number") {
-      await humanClick(el);
-      await delay(25,70);
-      await humanType(el, String(value));
-      await delay(25,70);
-      // Verify and fallback if needed
-      const got = el.value||"";
       const expected = String(value||"");
-      if (got !== expected && Math.abs(got.length-expected.length) > 3) {
-        log("Fallback fill",{label:fieldMeta.label,got:got.slice(0,20),expected:expected.slice(0,20)});
-        await fallbackFill(el, expected, doc);
+      // Fast path: try fallbackFill first (instant, React-compatible). Only humanType if value doesn't stick.
+      await humanScrollTo(el);
+      await humanClick(el);
+      await delay(15,40);
+      await fallbackFill(el, expected, doc);
+      await delay(20,50);
+      const got = (el.value||"").toString().trim();
+      const expectedTrim = expected.trim();
+      if (got !== expectedTrim && Math.abs(got.length-expectedTrim.length) > 2) {
+        log("Fallback didn't stick, retrying with humanType",{label:fieldMeta.label});
+        await humanType(el, expected);
       }
       return {ok:true};
     }
 
     log("Unhandled field",{label:fieldMeta.label,tag,type,role,fieldType});
     return {ok:false,reason:"unhandled_type"};
+  }
+
+  // ─── WORKDAY RESUME-ONLY STEP ─────────────────────────────────
+  async function handleWorkdayResumeStep(resumeData, doc) {
+    if (!doc) doc = document;
+    log("Workday resume-only step: starting");
+
+    if (resumeData?.buffer) {
+      const fileInput =
+        doc.querySelector('input[type="file"]') ||
+        doc.querySelector('[data-automation-id*="fileUpload"] input[type="file"]') ||
+        doc.querySelector('[data-automation-id*="attachment"] input[type="file"]');
+
+      if (fileInput) {
+        const ok = await humanUploadFile(fileInput, resumeData);
+        log("Resume upload result", { ok });
+
+        if (ok) {
+          // Wait for Workday to show filename preview (up to 3s)
+          const start = Date.now();
+          while (Date.now() - start < 3000) {
+            const preview =
+              doc.querySelector('[data-automation-id*="fileName"]') ||
+              doc.querySelector('[class*="fileName"],[class*="file-name"]') ||
+              doc.querySelector('[data-automation-id*="uploadedFile"]');
+            if (preview?.textContent?.trim()) {
+              log("File preview appeared", { text: preview.textContent.trim() });
+              break;
+            }
+            await new Promise(r => setTimeout(r, 150));
+          }
+        }
+      } else {
+        // Drag-drop fallback
+        const dropzone =
+          doc.querySelector('[class*="drop-zone"],[class*="dropzone"],[class*="dropZone"]') ||
+          doc.querySelector('[data-automation-id*="fileUpload"]');
+        if (dropzone && resumeData.buffer) {
+          try {
+            const name = resumeData.name || "resume.pdf";
+            const ext = name.toLowerCase().split(".").pop();
+            const mimes = { pdf: "application/pdf", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", txt: "text/plain" };
+            const file = new File([new Uint8Array(resumeData.buffer)], name, { type: mimes[ext] || "application/pdf" });
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            const r = dropzone.getBoundingClientRect();
+            const evOpts = { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+            dropzone.dispatchEvent(new DragEvent("dragenter", evOpts));
+            await new Promise(r2 => setTimeout(r2, 80));
+            dropzone.dispatchEvent(new DragEvent("dragover", evOpts));
+            await new Promise(r2 => setTimeout(r2, 80));
+            dropzone.dispatchEvent(new DragEvent("drop", evOpts));
+            await new Promise(r2 => setTimeout(r2, 1500));
+          } catch (e) {
+            log("Dropzone drop failed", { error: String(e) });
+          }
+        }
+      }
+    }
+
+    // Click Continue
+    await new Promise(r => setTimeout(r, 400));
+    const selectors = [
+      "[data-automation-id='bottom-navigation-next-button']",
+      "[data-automation-id='wd-CommandButton_uic_nextButton']",
+      "button[data-automation-id*='continueButton']",
+      "button[data-automation-id*='nextButton']",
+      "button[data-automation-id*='continue']",
+    ];
+
+    for (const sel of selectors) {
+      const btn = doc.querySelector(sel);
+      if (btn && !btn.disabled && btn.getBoundingClientRect().width > 0) {
+        await humanScrollTo(btn);
+        await new Promise(r => setTimeout(r, 200));
+        await humanClick(btn);
+        log("Clicked Continue", { selector: sel });
+        return true;
+      }
+    }
+
+    // Last resort
+    const allBtns = Array.from(doc.querySelectorAll("button:not([disabled])"))
+      .filter(b => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.top > window.innerHeight / 2;
+      })
+      .sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
+    if (allBtns[0]) {
+      await humanScrollTo(allBtns[0]);
+      await humanClick(allBtns[0]);
+      return true;
+    }
+    return false;
   }
 
   // ─── MAIN FILL LOOP ───────────────────────────────────────────
@@ -845,14 +1106,14 @@
         if (highlightFailedField && el.isConnected && !el.disabled) highlightFailedField(el);
       }
 
-      await delay(70,160);
+      await delay(35,90);
     }
 
     const elapsed = Date.now()-t0;
     log("Fill done",{filledCount,resumeCount,failedCount:failed.length,elapsed,failed:failed.slice(0,5)});
 
     // Remove failure highlights from fields that became disabled (e.g. "present" checkbox hides end date)
-    await delay(120,220);
+    await delay(50,100);
     for (const f of failed) {
       try {
         if (f.element?.isConnected && (f.element.disabled || f.element.getAttribute?.("aria-disabled")==="true")) {
@@ -868,10 +1129,12 @@
   window.__OPSBRAIN_FILLER__ = {
     fillWithValuesHumanLike,
     fillField,
+    handleWorkdayResumeStep,
     humanType, humanTypeRichText, humanSelect, humanUploadFile, humanDateInput,
     humanScrollTo, humanClick, clearField, fallbackFill,
     setNativeValue, getNativeSetter, triggerChange,
     normKey, findNativeMatch, findOptionEl, waitForOptions,
+    isInstitutionLikeValue, injectCustomOptionAndSelect,
     parseDate, resolveField, detectPlatform,
   };
   window.__HIREMATE_HUMAN_FILLER__ = window.__OPSBRAIN_FILLER__;

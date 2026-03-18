@@ -116,3 +116,29 @@ def mock_redis():
          patch("backend.app.utils.cache.connect", new_callable=AsyncMock):
         yield
 
+
+@pytest.fixture
+def admin_user(db_session):
+    """Create an admin user in the DB."""
+    user = User(
+        id=2,
+        first_name="Admin",
+        last_name="User",
+        email="admin@example.com",
+        hashed_password=get_password_hash("adminpass123"),
+        is_active=1,
+        is_admin=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def admin_headers(admin_user):
+    """Bearer token for admin user."""
+    token = create_access_token(data={"sub": str(admin_user.id), "email": admin_user.email})
+    return {"Authorization": f"Bearer {token}"}
+
+

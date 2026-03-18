@@ -20,7 +20,8 @@ logger = get_logger("services.resume")
 def list_resumes(db: Session, user: User) -> list[dict]:
     """
     List user's resumes. Single source - UserResume first, profile fallback when empty.
-    Returns list of {id, resume_name, resume_url, resume_text, is_default}.
+    Returns list of {id, resume_name, resume_url, resume_text, is_default,
+                     resume_profile_snapshot, job_title, job_description_snippet}.
     """
     items = []
     for r in (
@@ -35,6 +36,9 @@ def list_resumes(db: Session, user: User) -> list[dict]:
             "resume_url": r.resume_url,
             "resume_text": r.resume_text or "",
             "is_default": bool(r.is_default),
+            "resume_profile_snapshot": r.resume_profile_snapshot or None,
+            "job_title": r.job_title or "",
+            "job_description_snippet": r.job_description_snippet or "",
         })
     if not items:
         profile = ProfileService.get_or_create_profile(db, user)

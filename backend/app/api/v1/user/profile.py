@@ -8,6 +8,7 @@ from backend.app.core.dependencies import get_current_user, get_db
 from backend.app.models.user import User
 from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
 from backend.app.services.profile_service import ProfileService
+from backend.app.services.resume_generator import clear_preview_cache_for_user
 from backend.app.utils import cache
 
 router = APIRouter()
@@ -35,4 +36,5 @@ async def update_profile(
     user_id = current_user.id
     await cache.delete(f"dashboard_summary:{user_id}")
     await cache.delete(f"autofill_ctx:{user_id}")
+    clear_preview_cache_for_user(user_id)
     return result

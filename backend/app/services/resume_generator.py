@@ -3,11 +3,15 @@ Dynamic resume generation: fetch profile, match JD keywords.
 Uses Jinja2 for HTML templates and WeasyPrint for HTML→PDF conversion.
 Same user profile with JD optimizations (prioritized bullets by keywords).
 """
+import hashlib
 import html
 import re
 import subprocess
 import tempfile
+import threading
+import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 from jinja2 import Environment, BaseLoader, FileSystemLoader
@@ -195,8 +199,9 @@ def _enrich_skills_with_jd_keywords(
     payload,
     jd_keywords: set[str],
 ) -> dict[str, str]:
-    """Add JD keywords to skills when they appear in profile (experiences, projects).
-    No fabrication. Deduplicates (React vs React.js). Ensures correct category placement."""
+    """Add JD keywords to skills when they appear in profile (experiences, projects, techSkills).
+    Also adds JD keywords in same category as user's skills for better match % (90%+ target).
+    No fabrication of unrelated skills. Deduplicates (React vs React.js)."""
     if not jd_keywords:
         return _deduplicate_tools(skills_dict)
 
@@ -205,6 +210,8 @@ def _enrich_skills_with_jd_keywords(
         corpus_parts.append((exp.description or "") + " " + (exp.jobTitle or ""))
     for proj in (payload.projects or [])[:5]:
         corpus_parts.append((proj.description or "") + " " + (proj.techStack or ""))
+    for ts in (payload.techSkills or [])[:20]:
+        corpus_parts.append((ts.name or "").strip())
     corpus = " ".join(corpus_parts).lower()
     if not corpus.strip():
         return _deduplicate_tools(skills_dict)
@@ -217,6 +224,11 @@ def _enrich_skills_with_jd_keywords(
                 return cat
         return "tools"
 
+    def user_has_skill_in_category(cat: str) -> bool:
+        """Check if user has any skill in this category."""
+        val = skills_dict.get(cat) or ""
+        return bool(val and any(s.strip() for s in val.split(",")))
+
     added: dict[str, list[str]] = {
         "languages": [], "frontend": [], "backend": [], "genai": [], "tools": [], "devops": [],
     }
@@ -225,14 +237,20 @@ def _enrich_skills_with_jd_keywords(
             continue
         if _skill_already_in_skills(kw, skills_dict):
             continue
-        if kw.lower() not in corpus:
-            continue
         cat = category_for_kw(kw)
-        display = kw.strip().title()
-        lst = added[cat]
-        if display in lst or len(lst) >= 8:
+        kw_in_corpus = kw.lower() in corpus
+        kw_in_same_category = user_has_skill_in_category(cat) and cat != "tools"
+        if not kw_in_corpus and not kw_in_same_category:
             continue
-        lst.append(display)
+        if len(added[cat]) >= 8:
+            continue
+        # Allow more JD keywords in same category for 90%+ match target
+        if not kw_in_corpus and kw_in_same_category and len(added[cat]) >= 6:
+            continue
+        display = kw.strip().title()
+        if display in added[cat]:
+            continue
+        added[cat].append(display)
 
     out = dict(skills_dict)
     for cat in added:
@@ -397,6 +415,96 @@ Output ONLY the summary text, nothing else."""
     return None
 
 
+def _enhance_bullets_for_jd_llm(
+    bullets: list[str],
+    job_title: str,
+    job_description: str,
+    company: str,
+    role: str,
+    keywords: set[str],
+) -> list[str] | None:
+    """Use LLM to rewrite bullets to weave in JD keywords. Returns None on failure."""
+    if not settings.openai_api_key or not bullets or not keywords or len((job_description or "").strip()) < 80:
+        return None
+    if OpenAI is None:
+        return None
+    try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        jd_snippet = (job_description or "").strip()[:600]
+        kw_str = ", ".join(sorted(keywords)[:15])
+        bullets_str = "\n".join(f"- {b}" for b in bullets[:4])
+        prompt = f"""Rewrite these resume bullet points to better match the job description.
+Rules: Use ONLY facts from the bullets. Do not invent. Weave in these JD keywords naturally where they fit: {kw_str}
+Keep each bullet under 200 chars. Output exactly 4 bullets, one per line, starting with "- ".
+Company: {company}. Role: {role}.
+Original bullets:
+{bullets_str}
+
+Job description excerpt:
+{jd_snippet[:400]}
+
+Output ONLY the 4 rewritten bullets, one per line."""
+        resp = client.chat.completions.create(
+            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=500,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return None
+        out = []
+        for line in content.split("\n"):
+            line = line.strip()
+            if line.startswith("- "):
+                line = line[2:].strip()
+            if line and len(line) > 20:
+                out.append(line[:200])
+        return out[:4] if len(out) >= 2 else None
+    except Exception as e:
+        logger.warning("LLM bullet enhancement failed: %s", e)
+    return None
+
+
+def _enhance_project_for_jd_llm(
+    name: str,
+    description: str,
+    tech_stack: str,
+    job_description: str,
+    keywords: set[str],
+) -> str | None:
+    """Use LLM to rewrite project description to weave in JD keywords. Returns None on failure."""
+    if not settings.openai_api_key or not description or not keywords or len((job_description or "").strip()) < 80:
+        return None
+    if OpenAI is None:
+        return None
+    try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        jd_snippet = (job_description or "").strip()[:500]
+        kw_str = ", ".join(sorted(keywords)[:12])
+        prompt = f"""Rewrite this project description to better match the job description.
+Rules: Use ONLY facts from the original. Do not invent. Weave in these keywords naturally: {kw_str}
+Keep under 220 chars. Output ONLY the rewritten description.
+Project: {name}. Tech: {tech_stack or 'N/A'}.
+Original: {description[:300]}
+
+Job excerpt: {jd_snippet[:300]}
+
+Output ONLY the rewritten description."""
+        resp = client.chat.completions.create(
+            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=150,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if content and len(content) > 30:
+            return content[:220]
+    except Exception as e:
+        logger.warning("LLM project enhancement failed: %s", e)
+    return None
+
+
 def _build_professional_summary(
     payload,
     job_title: str,
@@ -404,14 +512,25 @@ def _build_professional_summary(
     keywords: set[str],
     skills_dict: dict,
     escape_fn,
+    skip_llm: bool = False,
 ) -> str:
     """
-    Build professional summary from user profile + JD using LLM.
-    JD and OpenAI required; no fallback.
+    Build professional summary from user profile.
+    When skip_llm=True (live preview), use the user's text directly — no LLM calls.
+    When skip_llm=False (initial generation), LLM tailors short/empty summaries.
     """
     headline = (payload.professionalHeadline or "").strip()
     summary = (payload.professionalSummary or "").strip()
 
+    # Always prefer the user's own text — left panel must match right panel
+    if summary and len(summary) >= 80:
+        return escape_fn(_truncate_at_word(summary, max_len=1000))
+
+    # For live preview: use whatever the user typed, even if short
+    if skip_llm:
+        return escape_fn(_truncate_at_word(summary or headline, max_len=1000)) if (summary or headline) else ""
+
+    # LLM tailoring only during initial generation when summary is empty or very short
     all_skills: list[str] = []
     for val in (skills_dict or {}).values():
         if val:
@@ -429,16 +548,18 @@ def _build_professional_summary(
     return ""
 
 
-def build_resume_context(
-    profile: Profile,
+def build_resume_context_from_payload(
+    payload: ProfilePayload,
     job_title: str,
     job_description: str,
     for_html: bool = False,
+    raw_awards: list | None = None,
+    skip_llm: bool = False,
 ) -> dict:
-    """Build Jinja2 context from profile, job title, and JD. Prioritizes bullets by JD relevance.
-    Uses same user profile - only reorders/prioritizes content by JD keywords (no fabrication)."""
+    """Build Jinja2 context directly from a ProfilePayload (no DB access needed).
+    skip_llm=True: skip all LLM enhancement calls — use for live preview (~50ms response).
+    skip_llm=False: run LLM bullet/project/summary enhancement — use for initial generation."""
     escape_fn = _identity if for_html else _latex_escape
-    payload = profile_model_to_payload(profile)
     keywords = _get_jd_keywords(job_description or "")
 
     name = f"{payload.firstName or ''} {payload.lastName or ''}".strip() or "Your Name"
@@ -458,15 +579,29 @@ def build_resume_context(
         skills["languages"] = ", ".join((s.name or "").strip() for s in payload.techSkills[:10])
     skills = _enrich_skills_with_jd_keywords(skills, payload, keywords)
 
-    # Experiences: max 3 roles, 4 bullets each (single-page, fuller content)
+    # Experiences: max 3 roles, 4 bullets each
     experiences: list[dict] = []
     for exp in (payload.experiences or [])[:3]:
         bullets = _parse_bullets(exp.description or "", max_bullets=4)
         if keywords and bullets:
-            bullets = sorted(bullets, key=lambda b: -_score_bullet(b, keywords))[:4]
+            # Only re-sort by keyword score during initial AI generation (skip_llm=False).
+            # When skip_llm=True (preview/download), preserve the order the user sees in the editor.
+            if not skip_llm:
+                bullets = sorted(bullets, key=lambda b: -_score_bullet(b, keywords))[:4]
+            else:
+                bullets = bullets[:4]
+            if not skip_llm:
+                total_score = sum(_score_bullet(b, keywords) for b in bullets)
+                if total_score < len(keywords) * 0.3 and len(keywords) >= 3:
+                    enhanced = _enhance_bullets_for_jd_llm(
+                        bullets, job_title or "", job_description or "",
+                        exp.companyName or "Company", exp.jobTitle or "Role", keywords,
+                    )
+                    if enhanced:
+                        bullets = enhanced
         elif bullets:
             bullets = bullets[:4]
-        bullet_texts = [_truncate_at_word(b or "", max_len=200) for b in bullets]
+        bullet_texts = [_truncate_at_word(b or "", max_len=350) for b in bullets]
         if for_html and keywords:
             bullets_out = [_bold_keywords_in_bullet(t, keywords) for t in bullet_texts]
         else:
@@ -479,7 +614,7 @@ def build_resume_context(
             "bullets": bullets_out,
         })
 
-    # Education: max 2 (single-page)
+    # Education: max 2
     educations: list[dict] = []
     for edu in (payload.educations or [])[:2]:
         degree = edu.degree or ""
@@ -493,17 +628,26 @@ def build_resume_context(
             "grade": escape_fn(edu.grade or ""),
         })
 
-    # Projects: max 2, name + techStack (italic) + description for template layout
+    # Projects: max 2
     projects: list[dict] = []
     for proj in (payload.projects or [])[:2]:
-        desc = _truncate_at_word(proj.description or "", max_len=220)
+        desc = proj.description or ""
+        if not skip_llm and keywords and desc and _score_bullet(desc, keywords) < len(keywords) * 0.2 and len(keywords) >= 3:
+            enhanced = _enhance_project_for_jd_llm(
+                proj.name or "Project", desc, proj.techStack or "",
+                job_description or "", keywords,
+            )
+            if enhanced:
+                desc = enhanced
+        # No truncation for project descriptions — show the full text the user wrote
+        desc = _truncate_at_word(desc, max_len=1000)
         projects.append({
             "name": escape_fn(proj.name or "Project"),
             "techStack": escape_fn((proj.techStack or "").strip()),
             "description": escape_fn(desc or ""),
         })
 
-    # Professional summary: JD-optimized from profile (headline, summary, top JD-matching skills)
+    # Professional summary
     professional_summary = _build_professional_summary(
         payload=payload,
         job_title=job_title or "",
@@ -511,15 +655,15 @@ def build_resume_context(
         keywords=keywords,
         skills_dict=skills,
         escape_fn=escape_fn,
+        skip_llm=skip_llm,
     )
 
-    # Awards: max 2 (single-page) - only include real awards, no placeholder
-    prefs = profile.preferences or {}
-    raw_awards = prefs.get("awards", prefs.get("certificates", []))
-    if isinstance(raw_awards, list):
-        awards = [escape_fn(str(a)) for a in raw_awards if a][:2]
-    elif isinstance(raw_awards, str):
-        awards = [escape_fn(raw_awards)]
+    # Awards
+    aw = raw_awards if raw_awards is not None else []
+    if isinstance(aw, list):
+        awards = [escape_fn(str(a)) for a in aw if a][:2]
+    elif isinstance(aw, str):
+        awards = [escape_fn(aw)]
     else:
         awards = []
 
@@ -537,6 +681,23 @@ def build_resume_context(
         "projects": projects,
         "awards": awards,
     }
+
+
+def build_resume_context(
+    profile: Profile,
+    job_title: str,
+    job_description: str,
+    for_html: bool = False,
+) -> dict:
+    """Build Jinja2 context from Profile ORM model. Delegates to build_resume_context_from_payload."""
+    payload = profile_model_to_payload(profile)
+    prefs = profile.preferences or {}
+    raw_aw = prefs.get("awards", prefs.get("certificates", []))
+    if isinstance(raw_aw, str):
+        raw_aw = [raw_aw]
+    elif not isinstance(raw_aw, list):
+        raw_aw = []
+    return build_resume_context_from_payload(payload, job_title, job_description, for_html, raw_aw)
 
 
 def build_resume_text_from_context(context: dict) -> str:
@@ -577,12 +738,46 @@ def build_resume_text_from_context(context: dict) -> str:
     return "\n".join(parts).strip() or "Resume content"
 
 
-def render_html_resume(context: dict, template_dir: Path | None = None) -> str:
+TEMPLATE_MAP = {
+    "classic": "resume.html",
+    "accent": "resume_accent.html",
+    "minimalist": "resume_minimalist.html",
+    "modern": "resume_modern.html",
+    "executive": "resume_executive.html",
+    "harvard": "resume_harvard.html",
+    "elegant": "resume_elegant.html",
+    "impact": "resume_impact.html",
+}
+
+
+def _normalize_font_params(font_family: str | None, font_size: str | None, line_height: str | None) -> tuple[str, str, str]:
+    """Normalize font params for templates. Returns (font_family, font_size, line_height)."""
+    families = ("Times New Roman", "Arial", "Georgia", "Calibri", "Garamond", "Helvetica", "Verdana", "Lato", "Segoe UI")
+    sizes_map = {"9pt": "9pt", "9px": "9pt", "10pt": "10pt", "10px": "10pt", "10.5pt": "10.5pt", "10.5px": "10.5pt", "11pt": "11pt", "11px": "11pt", "12pt": "12pt", "12px": "12pt", "12.5pt": "12pt"}
+    heights = ("1.0", "1.1", "1.2", "1.25", "1.3", "1.5")
+    ff = (font_family or "").strip() or "Times New Roman"
+    if ff not in families:
+        ff = "Times New Roman"
+    fs_raw = (font_size or "").strip()
+    fs = sizes_map.get(fs_raw) or (fs_raw.replace("px", "pt") if fs_raw else "11pt")
+    if fs not in ("9pt", "10pt", "10.5pt", "11pt", "12pt"):
+        fs = "11pt"
+    lh = (line_height or "").strip() or "1.25"
+    if lh not in heights:
+        lh = "1.25"
+    return (ff, fs, lh)
+
+
+def render_html_resume(context: dict, template_dir: Path | None = None, template_id: str = "classic") -> str:
     """Render HTML resume from Jinja2 template with context. Returns HTML string."""
     if template_dir is None:
         template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)
-    template = env.get_template("resume.html")
+    template_name = TEMPLATE_MAP.get((template_id or "classic").lower(), "resume.html")
+    try:
+        template = env.get_template(template_name)
+    except Exception:
+        template = env.get_template("resume.html")
     return template.render(**context)
 
 
@@ -607,11 +802,151 @@ def html_to_pdf_weasyprint(html_content: str, work_dir: Path) -> bytes:
     return pdf_path.read_bytes()
 
 
+_PREVIEW_CACHE: OrderedDict[str, tuple[bytes, float]] = OrderedDict()
+_PREVIEW_CACHE_LOCK = threading.Lock()
+_PREVIEW_CACHE_TTL = 90
+_PREVIEW_CACHE_MAX = 32
+
+
+def _preview_cache_key(user_id: int, template_id: str, ff: str, fs: str, lh: str, job_title: str, job_description: str) -> str:
+    h = hashlib.sha256(f"{job_title}|{job_description}".encode()).hexdigest()[:16]
+    return f"preview:{user_id}:{template_id}:{ff}:{fs}:{lh}:{h}"
+
+
+def clear_preview_cache_for_user(user_id: int) -> None:
+    """Clear in-memory preview cache for a user so next preview uses fresh profile."""
+    with _PREVIEW_CACHE_LOCK:
+        to_del = [k for k in _PREVIEW_CACHE if k.startswith(f"preview:{user_id}:")]
+        for k in to_del:
+            del _PREVIEW_CACHE[k]
+        if to_del:
+            logger.debug("Resume preview cache cleared for user_id=%s entries=%d", user_id, len(to_del))
+
+
+def generate_resume_preview_pdf(
+    db: Session,
+    user: User,
+    job_title: str,
+    job_description: str,
+    template_id: str = "classic",
+    font_family: str | None = None,
+    font_size: str | None = None,
+    line_height: str | None = None,
+    profile_override: dict | None = None,
+) -> bytes:
+    """
+    Generate resume PDF without saving. Returns PDF bytes.
+    When profile_override is provided (current editor state), uses it directly so the
+    downloaded PDF matches the live preview exactly. Cache is bypassed for overrides.
+    """
+    ff, fs, lh = _normalize_font_params(font_family, font_size, line_height)
+
+    # Cache only applies when using the DB profile (not a live editor override)
+    if not profile_override:
+        cache_key = _preview_cache_key(user.id, template_id, ff, fs, lh, job_title or "", job_description or "")
+        with _PREVIEW_CACHE_LOCK:
+            if cache_key in _PREVIEW_CACHE:
+                pdf_bytes, expiry = _PREVIEW_CACHE[cache_key]
+                if time.time() < expiry:
+                    _PREVIEW_CACHE.move_to_end(cache_key)
+                    logger.debug("Resume preview cache hit template=%s", template_id)
+                    return pdf_bytes
+                del _PREVIEW_CACHE[cache_key]
+
+    if profile_override:
+        try:
+            payload = ProfilePayload(**profile_override)
+        except Exception:
+            payload = ProfilePayload()
+        context = build_resume_context_from_payload(payload, job_title or "", job_description or "", for_html=True)
+    else:
+        profile = ProfileService.get_or_create_profile(db, user)
+        context = build_resume_context(profile, job_title or "", job_description or "", for_html=True)
+
+    context["font_family"] = ff
+    context["font_size"] = fs
+    context["line_height"] = lh
+    template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
+    html_content = render_html_resume(context, template_dir, template_id=template_id)
+    with tempfile.TemporaryDirectory() as tmp:
+        work_dir = Path(tmp)
+        pdf_bytes = html_to_pdf_weasyprint(html_content, work_dir)
+
+    if not profile_override:
+        with _PREVIEW_CACHE_LOCK:
+            while len(_PREVIEW_CACHE) >= _PREVIEW_CACHE_MAX and _PREVIEW_CACHE:
+                _PREVIEW_CACHE.popitem(last=False)
+            _PREVIEW_CACHE[cache_key] = (pdf_bytes, time.time() + _PREVIEW_CACHE_TTL)
+            _PREVIEW_CACHE.move_to_end(cache_key)
+
+    return pdf_bytes
+
+
+def generate_resume_preview_html(
+    db: Session,
+    user: User,
+    job_title: str,
+    job_description: str,
+    template_id: str = "classic",
+    font_family: str | None = None,
+    font_size: str | None = None,
+    line_height: str | None = None,
+    profile_override: dict | None = None,
+) -> str:
+    """
+    Return rendered Jinja2 HTML string using the SAME templates as PDF generation.
+    This guarantees pixel-perfect WYSIWYG: preview == download.
+    Fast (~50ms) — no WeasyPrint conversion needed.
+    profile_override: current editor profile state passed directly from the frontend,
+    bypassing the DB so live edits appear instantly without waiting for the 700ms save debounce.
+    """
+    if profile_override:
+        try:
+            payload = ProfilePayload(**profile_override)
+        except Exception:
+            payload = ProfilePayload()
+        # skip_llm=True: preview must be fast (~50ms). LLM enhancement already ran at generation time.
+        context = build_resume_context_from_payload(payload, job_title or "", job_description or "", for_html=True, skip_llm=True)
+    else:
+        profile = ProfileService.get_or_create_profile(db, user)
+        # Even without override, skip LLM for preview — this endpoint is for display only.
+        context = build_resume_context_from_payload(
+            profile_model_to_payload(profile), job_title or "", job_description or "", for_html=True, skip_llm=True
+        )
+
+    ff, fs, lh = _normalize_font_params(font_family, font_size, line_height)
+    context["font_family"] = ff
+    context["font_size"] = fs
+    context["line_height"] = lh
+
+    template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
+    html = render_html_resume(context, template_dir, template_id=template_id)
+
+    # Inject screen-only CSS for templates that don't define their own @media screen rules.
+    # WeasyPrint ignores @media screen entirely, so this never affects the PDF output.
+    # Templates that already include @media screen (modern, executive, harvard) are skipped.
+    _templates_with_own_screen_css = {"modern", "executive", "harvard", "elegant", "impact"}
+    if (template_id or "classic").lower() not in _templates_with_own_screen_css:
+        margin = "0.4in" if (template_id or "classic").lower() == "modern" else "0.5in"
+        screen_css = f"""<style>
+@media screen {{
+  body {{ padding: {margin} !important; box-sizing: border-box; }}
+  .header-band {{ margin-left: -{margin} !important; margin-right: -{margin} !important; margin-top: -{margin} !important; }}
+}}
+</style>"""
+        html = html.replace("</head>", screen_css + "\n</head>")
+    return html
+
+
 def generate_resume_html(
     db: Session,
     user: User,
     job_title: str,
     job_description: str,
+    template_id: str = "classic",
+    font_family: str | None = None,
+    font_size: str | None = None,
+    line_height: str | None = None,
 ) -> dict:
     """
     Generate resume using Jinja2 HTML template + WeasyPrint.
@@ -620,9 +955,13 @@ def generate_resume_html(
     """
     profile = ProfileService.get_or_create_profile(db, user)
     context = build_resume_context(profile, job_title or "", job_description or "", for_html=True)
+    ff, fs, lh = _normalize_font_params(font_family, font_size, line_height)
+    context["font_family"] = ff
+    context["font_size"] = fs
+    context["line_height"] = lh
 
     template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
-    html_content = render_html_resume(context, template_dir)
+    html_content = render_html_resume(context, template_dir, template_id=template_id)
 
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
@@ -656,6 +995,12 @@ def generate_resume_html(
     resume_name = ats_name
     resume_text = build_resume_text_from_context(context)
 
+    # Build serializable profile snapshot for per-JD storage
+    try:
+        profile_snapshot = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    except Exception:
+        profile_snapshot = None
+
     for r in db.query(UserResume).filter(UserResume.user_id == user.id).all():
         r.is_default = 0
     ur = UserResume(
@@ -664,6 +1009,9 @@ def generate_resume_html(
         resume_name=resume_name,
         resume_text=resume_text,
         is_default=1,
+        resume_profile_snapshot=profile_snapshot,
+        job_title=(job_title or "").strip()[:255] or None,
+        job_description_snippet=(job_description or "").strip()[:1000] or None,
     )
     db.add(ur)
     db.commit()
@@ -782,7 +1130,13 @@ def generate_resume(
         presigned_url = resume_url
 
     resume_name = f"{job_title or 'Resume'} (generated)"
-    resume_text = build_resume_text_from_payload(profile_model_to_payload(profile))
+    _payload2 = profile_model_to_payload(profile)
+    resume_text = build_resume_text_from_payload(_payload2)
+
+    try:
+        profile_snapshot2 = _payload2.model_dump() if hasattr(_payload2, "model_dump") else _payload2.dict()
+    except Exception:
+        profile_snapshot2 = None
 
     # Mark other resumes as non-default
     for r in db.query(UserResume).filter(UserResume.user_id == user.id).all():
@@ -793,6 +1147,9 @@ def generate_resume(
         resume_name=resume_name,
         resume_text=resume_text,
         is_default=1,
+        resume_profile_snapshot=profile_snapshot2,
+        job_title=(job_title or "").strip()[:255] or None,
+        job_description_snippet=(job_description or "").strip()[:1000] or None,
     )
     db.add(ur)
     db.commit()

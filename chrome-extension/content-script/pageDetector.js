@@ -7,23 +7,39 @@ class PageDetector {
     this._cachedResult = undefined;
     this.JOB_PAGE_PATTERNS = {
       urls: [
+        // Greenhouse
         /greenhouse\.io\/.*\/jobs\//,
         /boards\.greenhouse\.io/,
+        // Workday (all subdomains: wd1–wd5, myworkdayjobs, jobs.workday.com)
         /myworkdayjobs\.com\/.+\/job\//,
         /\.wd\d+\.myworkdayjobs\.com/,
+        /jobs\.workday\.com\/.+\/job\//,
+        /workday\.com\/.+\/job\//,
+        // Lever
         /lever\.co\/.+\/jobs\//,
         /jobs\.lever\.co/,
+        // Other ATS
         /smartrecruiters\.com\/.*\/\d+/,
         /ashbyhq\.com\/.+\/application/,
         /taleo\.net\/careersection/,
         /icims\.com\/jobs\//,
         /jobvite\.com\/.*\/job\//,
         /successfactors\.com\/.*\/career/,
+        /bamboohr\.com\/.+\/careers\//,
+        /jazz\.co\/.+\/jobs\//,
+        /recruitee\.com\/.+\/jobs\//,
+        /jobvite\.com\/.+\/job\//,
+        /ultipro\.com\/.+\/job\//,
+        /paylocity\.com\/.+\/careers\//,
+        // Job boards
         /linkedin\.com\/jobs\/view\//,
         /indeed\.com\/viewjob/,
         /glassdoor\.com\/job-listing/,
         /monster\.com\/job-openings/,
         /ziprecruiter\.com\/jobs\//,
+        /dice\.com\/job/,
+        /simplyhired\.com\/job/,
+        // Generic career / apply paths (covers custom company career pages)
         /careers\./,
         /\/jobs?\//,
         /\/careers?\//,
@@ -31,6 +47,7 @@ class PageDetector {
         /\/application\//,
         /\/job-openings\//,
         /\/opportunities\//,
+        /\/positions\//,
       ],
       domSignals: [
         { selector: 'input[type="file"][accept*="pdf"]', weight: 3 },

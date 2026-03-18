@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.app.models.user import User
 from backend.app.schemas.user import UserRegister, UserLogin
 from backend.app.core.security import verify_password, get_password_hash, create_access_token
+from backend.app.core.config import settings
 from datetime import timedelta
 
 
@@ -35,9 +36,15 @@ class AuthService:
             db.add(new_user)
             db.commit()
             db.refresh(new_user)
-            
+
+            # Auto-promote admin if ADMIN_EMAIL matches
+            if settings.admin_email and new_user.email and new_user.email.strip().lower() == settings.admin_email.strip().lower():
+                new_user.is_admin = True
+                db.commit()
+                db.refresh(new_user)
+
             # Create access token (same as login - user is logged in after register)
-            access_token_expires = timedelta(minutes=30)
+            access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
             access_token = create_access_token(
                 data={"sub": str(new_user.id), "email": new_user.email},
                 expires_delta=access_token_expires
@@ -69,9 +76,16 @@ class AuthService:
         
         if not user.is_active:
             return {"success": False, "message": "User account is inactive"}
-        
+
+        # Auto-promote admin if ADMIN_EMAIL matches
+        if settings.admin_email and user.email and user.email.strip().lower() == settings.admin_email.strip().lower():
+            if not getattr(user, "is_admin", False):
+                user.is_admin = True
+                db.commit()
+                db.refresh(user)
+
         # Create access token
-        access_token_expires = timedelta(minutes=30)
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
         access_token = create_access_token(
             data={"sub": str(user.id), "email": user.email},
             expires_delta=access_token_expires

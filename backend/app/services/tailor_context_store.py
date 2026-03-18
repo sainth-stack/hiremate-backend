@@ -12,11 +12,18 @@ from backend.app.core.config import settings
 _store: dict[int, tuple[float, dict[str, Any]]] = {}
 
 
-def set_tailor_context(user_id: int, job_description: str, job_title: str = "", url: str = "") -> None:
+def set_tailor_context(
+    user_id: int,
+    job_description: str,
+    job_title: str = "",
+    url: str = "",
+    job_id: int | None = None,
+) -> None:
     _store[user_id] = (time.time(), {
         "job_description": job_description or "",
         "job_title": job_title or "",
         "url": url or "",
+        "job_id": job_id,
     })
 
 

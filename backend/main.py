@@ -7,12 +7,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from backend.app.api.v1.activity import router as activity_router
+from backend.app.api.v1.admin import router as admin_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.chrome_extension.routes import router as chrome_extension_router
 from backend.app.api.v1.dashboard import router as dashboard_router
 from backend.app.api.v1.payment import router as payment_router
 from backend.app.api.v1.user.profile import router as profile_router
-from backend.app.api.v1.user.resume import router as resume_router
+from backend.app.api.v1.resume import router as resume_router
 from backend.app.core.logging_config import setup_logging
 from backend.app.core.config import settings
 from backend.app.core.logging_config import get_logger
@@ -48,6 +49,7 @@ app.include_router(profile_router, prefix="/api/profile", tags=["profile"])
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(chrome_extension_router, prefix="/api")
 app.include_router(activity_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
 
 # Serve uploaded resumes (create dir if missing)
 upload_path = Path(settings.upload_dir)

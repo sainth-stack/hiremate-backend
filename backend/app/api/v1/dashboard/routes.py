@@ -115,6 +115,24 @@ def _build_dashboard_summary(
             all_companies.add((row[0] or "").strip().lower())
     companies_checked = len(all_companies)
 
+    # Applications filled (autofill_used count) and last fill time — for extension popup / dashboard
+    autofill_q = (
+        db.query(CareerPageVisit)
+        .filter(base_visit, CareerPageVisit.action_type == "autofill_used")
+    )
+    for f in visit_date_filter:
+        autofill_q = autofill_q.filter(f)
+    applications_filled = autofill_q.count()
+    # Last autofill time (global, no date filter — for "Last fill: X ago" in extension)
+    last_autofill_row = (
+        db.query(CareerPageVisit.created_at)
+        .filter(base_visit, CareerPageVisit.action_type == "autofill_used")
+        .order_by(CareerPageVisit.created_at.desc())
+        .limit(1)
+        .first()
+    )
+    last_autofill_at = last_autofill_row[0].isoformat() if last_autofill_row and last_autofill_row[0] else None
+
     # Recent applications
     recent_jobs_q = (
         db.query(UserJob)
@@ -197,6 +215,8 @@ def _build_dashboard_summary(
             "jobs_applied": jobs_applied,
             "jobs_saved": jobs_saved,
             "companies_checked": companies_checked,
+            "applications_filled": applications_filled,
+            "last_autofill_at": last_autofill_at,
         },
         "recent_applications": recent_applications,
         "companies_viewed": companies_viewed,

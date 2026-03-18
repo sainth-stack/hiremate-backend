@@ -35,7 +35,7 @@
     const snip = (doc.documentElement?.innerHTML || "").slice(0, 10000).toLowerCase();
     const is = (u, h) => url.includes(u) || snip.includes(h || u);
     if (is("greenhouse.io") || is("boards.greenhouse") || snip.includes('"greenhouse"')) _plat = "greenhouse";
-    else if (is("workday.com") || is("myworkdayjobs") || snip.includes("wd3.myworkday")) _plat = "workday";
+    else if (is("workday.com") || is("myworkdayjobs") || is("jobs.workday.com") || snip.includes("wd3.myworkday") || snip.includes("wd1.myworkday") || snip.includes("wd2.myworkday") || /wd\d+\.myworkday/.test(snip)) _plat = "workday";
     else if (is("lever.co") || snip.includes("lever-job-listing")) _plat = "lever";
     else if (is("smartrecruiters.com") || snip.includes("smartrecruiters")) _plat = "smartrecruiters";
     else if (is("ashbyhq.com") || snip.includes("ashby")) _plat = "ashby";
@@ -43,8 +43,46 @@
     else if (is("jobvite.com") || snip.includes("jobvite")) _plat = "jobvite";
     else if (is("icims.com") || snip.includes("icims")) _plat = "icims";
     else if (is("successfactors") || snip.includes("sap-successfactors")) _plat = "successfactors";
+    else if (is("bamboohr.com") || snip.includes("bamboohr")) _plat = "bamboohr";
+    else if (is("jazz.co") || snip.includes("jazz.co")) _plat = "jazz";
+    else if (is("recruitee.com") || snip.includes("recruitee")) _plat = "recruitee";
+    else if (is("ultipro.com") || snip.includes("ultipro")) _plat = "ultipro";
     else _plat = "generic";
     return _plat;
+  }
+
+  function isWorkdayResumeOnlyStep(doc) {
+    if (!doc) doc = document;
+    if (detectPlatform(doc) !== "workday") return false;
+
+    const headings = Array.from(doc.querySelectorAll("h1,h2"));
+    const headingText = headings.map(h => (h.textContent || "").toLowerCase()).join(" ");
+    if (/autofill with resume|upload.*resume|resume.*upload|attach.*resume/.test(headingText)) {
+      return true;
+    }
+
+    const visibleTextInputs = Array.from(doc.querySelectorAll(
+      '[data-automation-id*="textInput"],[data-automation-id*="dropdown"],' +
+      'input[type="text"],input[type="email"],input[type="tel"],select,textarea'
+    )).filter(el => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+
+    const hasFileArea = !!(
+      doc.querySelector('input[type="file"]') ||
+      doc.querySelector('[data-automation-id*="fileUpload"]') ||
+      doc.querySelector('[class*="drop-zone"],[class*="dropzone"],[class*="dropZone"]')
+    );
+
+    return hasFileArea && visibleTextInputs.length === 0;
+  }
+
+  /** Workday questionnaire steps (e.g. Wells Fargo screening) are single-form pages with no tabs.
+   *  Expanding "tabs" on these pages clicks dropdown triggers and causes unwanted tab switching. */
+  function isWorkdayQuestionnaireStep(doc) {
+    if (!doc?.body || detectPlatform(doc) !== "workday") return false;
+    return !!(doc.querySelector('[id*="primaryQuestionnaire"]') || doc.querySelector('[data-automation-id*="primaryQuestionnaire"]'));
   }
 
   // ─── SELECTOR GROUPS ──────────────────────────────────────────
@@ -95,6 +133,9 @@
       '[data-automation-id*="dropdown"]','[data-automation-id*="selectWidget"]',
       '[data-automation-id*="formSelect"]','[data-automation-id*="checkbox"]',
       '[data-automation-id*="radioButton"]','[data-automation-id*="numericInput"]',
+      '[data-automation-id*="dateSection"]','[data-automation-id*="fileUpload"]',
+      '[data-automation-id*="file-upload"]','[data-automation-id*="attachment"]',
+      '[data-automation-id="fileUploadButton"]','[data-automation-id*="uploadFile"]',
     ].join(","),
   };
 
@@ -158,6 +199,8 @@
   function humanize(n) {
     return String(n||"").replace(/[-_.[\]]/g," ")
       .replace(/([a-z])([A-Z])/g,"$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g,"$1 $2")
+      .replace(/\b\d+\b/g,"")
+      .replace(/\s+/g," ")
       .replace(/\b\w/g,c=>c.toUpperCase()).trim();
   }
 
@@ -413,23 +456,61 @@
   // ─── AUXILIARY FILTER ─────────────────────────────────────────
   function isAuxiliary(el, label, doc) {
     const tag = el.tagName.toLowerCase();
-    const role = (el.getAttribute("role")||"").toLowerCase();
-    const id = el.getAttribute("id")||"";
-    const cls = String(el.className||"");
-    const ll = (label||"").toLowerCase();
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const id = el.getAttribute("id") || "";
+    const cls = String(el.className || "");
+
     if (el.closest?.("#ja-keyword-match-root,#job-autofill-inpage-root,#opsbrain-widget")) return true;
-    if ((tag==="li"||tag==="option"||tag==="div") && role==="option") return true;
-    if (tag==="ul" && role==="listbox") return true;
+    if ((tag === "li" || tag === "option" || tag === "div") && role === "option") return true;
+    if (tag === "ul" && role === "listbox") return true;
     if (/^iti-\d+__(search-input|country-listbox|item-)/.test(id)) return true;
     if (el.closest?.(".iti__flag-container,.iti__selected-flag")) return true;
-    if (el.getAttribute?.("aria-hidden")==="true") return true;
-    if (tag==="input" && el.getAttribute("type")==="search") {
-      if (el.closest("header,nav,[role='navigation'],[role='banner']")) return true;
+    if (el.getAttribute?.("aria-hidden") === "true") return true;
+
+    // Exclude all navigation/chrome areas
+    if (el.closest?.("header,nav,footer,aside")) return true;
+    if (el.closest?.("[role='navigation'],[role='banner'],[role='complementary']")) return true;
+    if (el.closest?.([
+      "[data-automation-id='globalNavContainer']",
+      "[data-automation-id='headerContainer']",
+      "[data-automation-id='siteHeader']",
+      "[data-automation-id='topNav']",
+      "[class*='navContainer']",
+      "[class*='siteHeader']",
+      "[class*='globalNav']",
+      "[data-automation-id*='progressStep']",
+      "[data-automation-id*='wizardStep']",
+      "[data-automation-id*='stepIndicator']",
+      "[data-automation-id*='breadcrumb']",
+      "[data-automation-id='bottom-navigation-next-button']",
+      "[data-automation-id='bottom-navigation-previous-button']",
+      "[role='tablist']",
+      "[role='tab']",
+    ].join(","))) return true;
+
+    // Must be inside a form area (skip for Workday — structure varies; nav exclusions above are enough)
+    const url = (doc?.defaultView?.location?.href || typeof location !== "undefined" ? location?.href : "").toLowerCase();
+    const isWorkday = /workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(url);
+    if (!isWorkday) {
+      const inFormArea = el.closest([
+        "form",
+        "[data-automation-id*='WizardTask']",
+        "[data-automation-id*='formContainer']",
+        "[data-automation-id*='applicationForm']",
+        "[data-automation-id*='taskSection']",
+        ".application-form,.greenhouse-form,.lever-application",
+        "[class*='applicationBody']",
+        "[class*='formBody']",
+      ].join(","));
+      if (!inFormArea && !el.closest("form")) return true;
     }
+
     return false;
   }
 
   // ─── SHADOW DOM TRAVERSAL ─────────────────────────────────────
+  const HAS_CLOSED_SHADOW = typeof chrome !== "undefined" && !!chrome.dom?.openOrClosedShadowRoot;
+
   function traverseShadow(root, callback, seen) {
     if (!seen) seen = new WeakSet();
     if (!root || seen.has(root)) return;
@@ -446,7 +527,7 @@
             callback(node.shadowRoot);
             traverseShadow(node.shadowRoot, callback, seen);
           }
-          if (typeof chrome!=="undefined" && chrome.dom?.openOrClosedShadowRoot) {
+          if (HAS_CLOSED_SHADOW) {
             try {
               const closed = chrome.dom.openOrClosedShadowRoot(node);
               if (closed && closed !== node.shadowRoot && !seen.has(closed)) { callback(closed); traverseShadow(closed, callback, seen); }
@@ -518,6 +599,7 @@
     if (platform==="workday") queryAll(SEL.workday);
     if (platform==="greenhouse") { queryAll('[data-provides="select"],[data-provides="typeahead"]'); queryAll('.attachment-input,[data-field="resume"]'); }
     if (platform==="lever") queryAll('.application-field input,.application-field select,.application-field textarea');
+    if (platform==="bamboohr") queryAll('[data-qa*="input"],[data-qa*="select"],.application-form input,.application-form select,.application-form textarea');
 
     const allForms = Array.from(doc.querySelectorAll("form"));
 
@@ -546,6 +628,20 @@
         const atsType = detectATSType(canonical, wrapper, label);
         const selectorBundle = buildSelectorBundle(canonical, wrapper, doc);
 
+        // Workday fileUploadButton correction:
+        // normalizeType returns "text" for <button> but these are file upload triggers.
+        // Override fieldType to "file" so humanFiller routes to the upload handler.
+        const dataAid = (canonical.getAttribute("data-automation-id") ||
+          wrapper?.getAttribute("data-automation-id") || "").toLowerCase();
+        const effectiveFieldType = (
+          dataAid.includes("fileupload") ||
+          dataAid.includes("uploadfile") ||
+          dataAid.includes("attachment") ||
+          atsType === "resume"
+        ) && canonical.tagName.toLowerCase() === "button"
+          ? "file"
+          : fieldType;
+
         const form = canonical.closest("form");
         const formIndex = form ? allForms.indexOf(form) : -1;
         const fieldsInForm = form ? Array.from(form.querySelectorAll("input:not([disabled]),select:not([disabled]),textarea:not([disabled])")) : [];
@@ -559,7 +655,7 @@
           label,
           name: canonical.getAttribute("name")||wrapper?.getAttribute("name")||"",
           id: canonical.getAttribute("id")||wrapper?.getAttribute("id")||"",
-          type: fieldType, inputType: type, tagName: tag, tag: canonical.tagName.toLowerCase(),
+          type: effectiveFieldType, inputType: type, tagName: tag, tag: canonical.tagName.toLowerCase(),
           required: !!(canonical.required || canonical.getAttribute("aria-required")==="true" || wrapper?.getAttribute("aria-required")==="true"),
           placeholder: canonical.getAttribute("placeholder")||"",
           value: getVal(canonical),
@@ -644,8 +740,13 @@
       }
     } catch(_) {}
 
+    // Use platform-aware timeout: Workday needs more time on slow networks
+    const docUrl = (doc.defaultView?.location?.href || "").toLowerCase();
+    const isWorkday = docUrl.includes("workday") || docUrl.includes("myworkdayjobs");
+    const waitPerAttempt = isWorkday ? [100, 150, 200, 250, 300, 350, 400, 450] : [80, 80, 80, 150, 150, 150, 150, 150];
+
     for (let attempt=0; attempt<8; attempt++) {
-      await new Promise(r=>setTimeout(r, attempt<3 ? 80 : 150));
+      await new Promise(r => setTimeout(r, waitPerAttempt[attempt] ?? 150));
       const options = collectVisibleOptions(el, doc, isCountry);
       if (options.length > 0) {
         if (!isCountry && looksLikePhoneList(options)) {
@@ -696,6 +797,48 @@
     return out;
   }
 
+  async function waitForWorkdayTabContent(doc, maxMs = 1500) {
+    const start = Date.now();
+    while (Date.now() - start < maxMs) {
+      const inputs = doc.querySelectorAll('[data-automation-id*="textInput"],[data-automation-id*="dropdown"]');
+      const visible = Array.from(inputs).filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+      if (visible.length > 0) return;
+      await new Promise(r => setTimeout(r, 100));
+    }
+  }
+
+  async function expandWorkdayTabsAndSections(doc) {
+    if (!doc?.body) return;
+    if (isWorkdayQuestionnaireStep(doc)) return; // Questionnaire pages have no tabs; expansion causes dropdown clicks & tab switching
+    const win = doc.defaultView || window;
+    const tabSelectors = [
+      '[role="tab"]','[data-automation-id*="tab"]','[data-automation-id*="Tab"]',
+      '.wday-tab','[aria-expanded="false"]:not([role="combobox"]):not([aria-haspopup="listbox"])',
+    ];
+    for (const sel of tabSelectors) {
+      try {
+        const tabs = Array.from(doc.querySelectorAll(sel)).filter(el => {
+          const r = el.getBoundingClientRect?.(); return r && r.width > 0 && r.height > 0;
+        });
+        for (const tab of tabs.slice(0, 12)) {
+          try {
+            tab.scrollIntoView?.({ block: "nearest", behavior: "auto" });
+            await new Promise(r => setTimeout(r, 60));
+            const rect = tab.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              const opts = { bubbles: true, cancelable: true, view: win, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+              tab.dispatchEvent(new MouseEvent("click", opts));
+              await waitForWorkdayTabContent(doc, 800);
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+  }
+
   // ─── MAIN ENTRY ───────────────────────────────────────────────
   function getScrapedFields(options = {}) {
     const t0 = performance.now();
@@ -727,6 +870,18 @@
   }
 
   async function getScrapedFieldsWithExpandedOptions(options = {}) {
+    const rootDoc = options.document || document;
+
+    // Never scrape the resume-upload-only step
+    if (isWorkdayResumeOnlyStep(rootDoc)) {
+      return { fields: [], elements: [], stats: { count: 0, ms: 0, platform: "workday", resumeStepOnly: true } };
+    }
+
+    const platform = detectPlatform(rootDoc);
+    if (platform === "workday") {
+      await expandWorkdayTabsAndSections(rootDoc);
+      await new Promise(r => setTimeout(r, 200));
+    }
     const result = getScrapedFields(options);
     if (options.expandSelectOptions === false) {
       await attachShaFingerprints(result.fields);
@@ -739,12 +894,14 @@
       return (aC?1:0)-(bC?1:0);
     });
     log("info","Expanding dropdowns",{count:selectFields.length});
+    const isWorkday = platform === "workday";
+    const delayMs = isWorkday ? 280 : 80; // Workday: longer delay to avoid triggering definition API bursts
     for (const f of selectFields) {
       try {
         const doc = f._canonical.ownerDocument||document;
         const opts = await expandDropdownForOptions(f._canonical, doc);
         if (opts.length>0) { f.options=opts; log("info","Expanded",{label:f.label?.slice(0,30),count:opts.length}); }
-        await new Promise(r=>setTimeout(r,80));
+        await new Promise(r=>setTimeout(r,delayMs));
       } catch(_) {}
     }
     await attachShaFingerprints(result.fields);
@@ -795,8 +952,10 @@
     getScrapedFields, getScrapedFieldsWithExpandedOptions, attachShaFingerprints,
     serializeFields, resolveElementFromField,
     findAddAnotherLinks, expandDropdownForOptions,
-    detectPlatform, getSmartLabel, isVisible, resolveCanonical,
+    detectPlatform, isWorkdayResumeOnlyStep, getSmartLabel, isVisible, resolveCanonical,
     normalizeType, detectATSType, buildSelectorBundle, extractOptions,
+    // Expose platform cache reset so content.js can clear it on SPA navigation
+    resetPlatform: () => { _plat = null; },
   };
   window.__HIREMATE_FIELD_SCRAPER__ = window.__OPSBRAIN_SCRAPER__;
 })();

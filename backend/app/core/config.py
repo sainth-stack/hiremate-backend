@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # Auth
     secret_key: str = "your-secret-key-change-in-production"
+    admin_email: str = ""  # Optional: auto-promote this email as admin (e.g. superadmin@gmail.com)
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
