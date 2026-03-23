@@ -220,6 +220,7 @@ def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
             {
                 "jobTitle": e.jobTitle or "",
                 "companyName": e.companyName or "",
+                "employmentType": getattr(e, "employmentType", "") or "",
                 "startDate": e.startDate or "",
                 "endDate": e.endDate or "",
                 "description": e.description or "",
@@ -261,6 +262,9 @@ def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
         skills_list.append(s.name)
     profile["skills_list"] = skills_list
     profile["skills"] = ", ".join(skills_list) if skills_list else ""
+    profile["tech_skills_list"] = [s.name for s in (payload.techSkills or [])]
+    profile["soft_skills_list"] = [s.name for s in (payload.softSkills or [])]
+    profile["languages_list"] = list(payload.willingToWorkIn or [])
 
     return profile
 
