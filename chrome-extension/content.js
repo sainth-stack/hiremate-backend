@@ -100,24 +100,113 @@ const ACCORDION_ICONS = {
   person: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>',
 };
 
-/** Reusable accordion component. opts: { id, iconBg, iconSvg, title, showHelpIcon, statusText, statusCheckmark } */
+/** Inline SVGs for question UIs (Lucide-style, matches Tailwind/shadcn references). */
+const QUESTION_UI_ICONS = {
+  helpCircle: '<svg class="ja-q-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
+  sparkles: '<svg class="ja-q-svg ja-q-svg-tiny" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>',
+  wand: '<svg class="ja-q-svg ja-q-svg-tiny" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/><path d="M17.8 11.8 19 13"/><path d="M5 20l14-14"/></svg>',
+  edit: '<svg class="ja-q-svg ja-q-svg-tiny" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+  checkCircle: '<svg class="ja-q-svg ja-cq-state" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
+  alertCircle: '<svg class="ja-q-svg ja-cq-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>',
+  clock: '<svg class="ja-q-svg ja-q-meta" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+  layers: '<svg class="ja-q-svg ja-q-meta" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.05 4.32a2 2 0 0 1-1.9 0L2 17.65"/><path d="m22 12.65-9.05 4.32a2 2 0 0 1-1.9 0L2 12.65"/></svg>',
+  download: '<svg class="ja-footer-link-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>',
+  users: '<svg class="ja-footer-link-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 11c1.66 0 3-1.79 3-4s-1.34-4-3-4-3 1.79-3 4 1.34 4 3 4z"/><path d="M8 11c1.66 0 3-1.79 3-4S9.66 3 8 3 5 4.79 5 7s1.34 4 3 4z"/><path d="M2 21v-2c0-2.5 3.5-4 6-4"/><path d="M22 21v-2c0-2.5-3.5-4-6-4"/></svg>',
+};
+
+/** Keywords tab — Lucide-style icons (Tailor, gauge tip, suggestions, refresh). */
+const KEYWORD_TAB_ICONS = {
+  target: '<svg class="ja-kw-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2"/></svg>',
+  lightbulb: '<svg class="ja-kw-ico ja-kw-ico-tip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>',
+  trendingUp: '<svg class="ja-kw-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/></svg>',
+  refreshCw: '<svg class="ja-kw-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>',
+  chipCheck: '<svg class="ja-kw-chip-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+};
+
+/** Profile tab — Lucide-style icons (contact rows, sections, actions). */
+const PROFILE_TAB_ICONS = {
+  mapPin: '<svg class="ja-prof-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
+  mail: '<svg class="ja-prof-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>',
+  phone: '<svg class="ja-prof-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
+  linkedin: '<svg class="ja-prof-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"/><rect width="4" height="12" x="2" y="9"/><circle cx="4" cy="4" r="2"/></svg>',
+  github: '<svg class="ja-prof-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>',
+  globe: '<svg class="ja-prof-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>',
+  graduationCap: '<svg class="ja-prof-svg ja-prof-svg-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 10v6M6 12v4c0 1.1.9 2 2 2h2"/><path d="M18 22v-4"/><path d="M4 10 12 6l8 4-8 4-8-4Z"/><path d="M6 12v7a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-7"/></svg>',
+  briefcase: '<svg class="ja-prof-svg ja-prof-svg-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>',
+  award: '<svg class="ja-prof-svg ja-prof-svg-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>',
+  awardSm: '<svg class="ja-prof-award-sm" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>',
+  upload: '<svg class="ja-prof-svg ja-prof-svg-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>',
+  fileText: '<svg class="ja-prof-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  code: '<svg class="ja-prof-svg ja-prof-svg-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+  messageSquare: '<svg class="ja-prof-svg ja-prof-svg-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  copy: '<svg class="ja-prof-copy-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>',
+  check: '<svg class="ja-prof-copy-ico ja-prof-copy-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+  refreshCwSm: '<svg class="ja-prof-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>',
+  editSm: '<svg class="ja-prof-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+  eyeSm: '<svg class="ja-prof-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  downloadSm: '<svg class="ja-prof-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
+  eyeFile: '<svg class="ja-prof-file-act" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  downloadFile: '<svg class="ja-prof-file-act" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
+};
+
+/** Autofill tab hero — Zap, Sparkles, Check (button states). */
+const AUTOFILL_TAB_ICONS = {
+  zap: '<svg class="ja-hero-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+  sparkles: '<svg class="ja-hero-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z"/></svg>',
+  check: '<svg class="ja-hero-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+};
+
+function keywordGaugeDashArray(percent) {
+  const c = 213.628;
+  const p = Math.max(0, Math.min(100, Number(percent) || 0));
+  return `${(p / 100) * c} ${c}`;
+}
+
+/** @returns {{ label: string, color: string, badgeBg: string, stroke: string }} */
+function keywordMatchTheme(matchPercent, totalKeywords) {
+  if (!totalKeywords) {
+    return { label: "No skills found", color: "#6b7280", badgeBg: "rgba(243, 244, 246, 0.9)", stroke: "#e5e7eb" };
+  }
+  const p = Number(matchPercent) || 0;
+  if (p >= 70) return { label: "Strong Match", color: "#16a34a", badgeBg: "rgba(34, 197, 94, 0.12)", stroke: "#22c55e" };
+  if (p >= 40) return { label: "Needs Improvement", color: "#d97706", badgeBg: "rgba(245, 158, 11, 0.12)", stroke: "#f59e0b" };
+  return { label: "Weak Match", color: "#dc2626", badgeBg: "rgba(239, 68, 68, 0.1)", stroke: "#ef4444" };
+}
+
+function renderKeywordMatchChip(item) {
+  const freq = item.frequency != null ? Number(item.frequency) : 1;
+  const m = item.matched;
+  return `<div class="ja-kw-chip ${m ? "ja-kw-chip--on" : "ja-kw-chip--off"}">
+    <span class="ja-kw-chip-box">${m ? KEYWORD_TAB_ICONS.chipCheck : ""}</span>
+    <span class="ja-kw-chip-name">${escapeHtml(item.keyword)}</span>
+    <span class="ja-kw-chip-freq">×${Number.isFinite(freq) ? freq : 1}</span>
+  </div>`;
+}
+
+/** Reusable accordion component. opts: { id, iconBg, iconColor, iconSvg, title, showHelpIcon, statusText, statusCheckmark } */
 function createAccordionItem(opts) {
   const id = escapeHtml(opts.id || "accordion");
   const iconBg = escapeHtml(opts.iconBg || "#e0e7ff");
+  const iconColor = opts.iconColor != null ? escapeHtml(String(opts.iconColor)) : "";
   const iconSvg = opts.iconSvg || ACCORDION_ICONS.document;
   const title = escapeHtml(opts.title || "");
   const showHelpIcon = !!opts.showHelpIcon;
   const statusText = escapeHtml(opts.statusText || "");
   const statusCheckmark = !!opts.statusCheckmark;
+  const checkImgUrl = chrome.runtime.getURL("icons/circle-check-big.svg");
+  const checkMarkHtml = statusCheckmark
+    ? `<span class="ja-accordion-check" aria-hidden="true"><img src="${checkImgUrl}" alt="" width="14" height="14" class="ja-resume-check-img" /></span>`
+    : "";
+  const iconStyle = iconColor ? `background:${iconBg};color:${iconColor}` : `background:${iconBg}`;
   return `
     <div class="ja-accordion-item" data-accordion-id="${id}">
       <button type="button" class="ja-accordion-header" aria-expanded="false" aria-controls="ja-accordion-body-${id}" id="ja-accordion-trigger-${id}">
-        <span class="ja-accordion-icon" style="background:${iconBg}">${iconSvg}</span>
+        <span class="ja-accordion-icon" style="${iconStyle}">${iconSvg}</span>
         <span class="ja-accordion-title-wrap">
           <span class="ja-accordion-title">${title}</span>
           ${showHelpIcon ? '<span class="ja-accordion-help" title="Help">?</span>' : ""}
         </span>
-        ${statusText || statusCheckmark ? `<span class="ja-accordion-status">${statusCheckmark ? '<span class="ja-accordion-check">✓</span>' : ""}${statusText ? `<span class="ja-accordion-status-text">${statusText}</span>` : ""}</span>` : ""}
+        ${statusText || statusCheckmark ? `<span class="ja-accordion-status">${statusText ? `<span class="ja-accordion-status-text">${statusText}</span>` : ""}${checkMarkHtml}</span>` : ""}
         <span class="ja-accordion-chevron" aria-hidden="true">▼</span>
       </button>
       <div class="ja-accordion-body" id="ja-accordion-body-${id}" role="region" aria-labelledby="ja-accordion-trigger-${id}" hidden>
@@ -148,6 +237,26 @@ function renderAccordions(containerEl, items, rootEl) {
   });
 }
 
+/** Same profile fields as Profile tab — from `GET .../autofill/context` → `profile`. */
+function buildResumeAccordionFieldRows(flat) {
+  const f = flat || {};
+  const location = [f.city, f.country].filter(Boolean).join(", ") || "—";
+  const fullName = [f.firstName, f.lastName].filter(Boolean).join(" ") || f.name || "—";
+  return [
+    ["Full name", fullName],
+    ["Location", location],
+    ["Email", f.email || "—"],
+    ["Phone", f.phone || "—"],
+    ["LinkedIn", f.linkedin || "—"],
+    ["GitHub", f.github || "—"],
+    ["Portfolio", f.portfolio || "—"],
+  ];
+}
+
+/** Inline SVG (icons/circle-check-big.svg) — no chrome-extension:// img fetch. */
+const RESUME_FIELD_CHECK_SVG =
+  '<svg class="ja-resume-check-svg" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.801 10A10 10 0 1 1 17 3.335"/><path d="m9 11 3 3L22 4"/></svg>';
+
 async function loadAccordionContent(id, contentEl, rootEl) {
   if (id === "resume") {
     await loadResumeAccordionContent(contentEl, rootEl);
@@ -160,38 +269,85 @@ async function loadAccordionContent(id, contentEl, rootEl) {
 
 async function loadResumeAccordionContent(contentEl, rootEl) {
   contentEl.innerHTML = "<p class=\"ja-score-text\">Loading...</p>";
+
   try {
     const resumes = await fetchResumesFromApi();
+
     if (resumes.length === 0) {
       contentEl.innerHTML = `
         <p class="ja-score-text">No resumes yet. Upload in your OpsBrain profile.</p>
         <button type="button" class="ja-action" style="margin-top:8px;">Open Profile</button>
       `;
-      contentEl.querySelector(".ja-action")?.addEventListener("click", () => openResumeGeneratorUrl());
+      contentEl.querySelector(".ja-action")?.addEventListener("click", openResumeGeneratorUrl);
       return;
     }
+
     const { hm_selected_resume_id } = await chrome.storage.local.get(["hm_selected_resume_id"]);
-    const storedId = hm_selected_resume_id != null ? parseInt(hm_selected_resume_id, 10) : null;
+    const storedId = hm_selected_resume_id ? parseInt(hm_selected_resume_id, 10) : null;
+
     const defaultResume = resumes.find((r) => r.is_default) || resumes[0];
-    const selectedId = (storedId && resumes.some((r) => r.id === storedId)) ? storedId : (defaultResume?.id ?? resumes[0]?.id);
+    const selectedId =
+      storedId && resumes.some((r) => r.id === storedId)
+        ? storedId
+        : defaultResume?.id;
+
     const selectId = "ja-accordion-resume-select";
+
+    let flat = {};
+    try {
+      const ctx = await getAutofillContextFromApi();
+      flat = ctx.profile || {};
+    } catch (_) { }
+
+    const resumeFieldRows = buildResumeAccordionFieldRows(flat);
+
     contentEl.innerHTML = `
       <div class="ja-resume-accordion-row">
         <select class="ja-resume-select" id="${selectId}">
-          ${resumes.map((r) => `<option value="${r.id}" ${r.id === selectedId ? "selected" : ""}>${escapeHtml(r.resume_name || `Resume ${r.id}`)}</option>`).join("")}
+          ${resumes.map((r) => `
+            <option value="${r.id}" ${r.id === selectedId ? "selected" : ""}>
+              ${escapeHtml(r.resume_name || `Resume ${r.id}`)}
+            </option>
+          `).join("")}
         </select>
+
         <button type="button" class="ja-action ja-upload-preview">Preview</button>
       </div>
-      <p class="ja-resume-preview-hint">Default selected resume shown above. Click Preview to open PDF.</p>
+
+      <p class="ja-resume-preview-hint">
+        Default selected resume shown above. Click Preview to open PDF.
+      </p>
+
+      <div class="ja-resume-card">
+
+        ${resumeFieldRows
+          .map(
+            ([label, value]) => `
+          <div class="ja-resume-row">
+            <span class="ja-resume-label">${escapeHtml(label)}</span>
+            <div class="ja-resume-value-wrap">
+              <span class="ja-resume-value">${escapeHtml(value)}</span>
+              <span class="ja-check-icon">${RESUME_FIELD_CHECK_SVG}</span>
+            </div>
+          </div>
+        `
+          )
+          .join("")}
+
+      </div>
     `;
+
     contentEl.querySelector(".ja-upload-preview")?.addEventListener("click", async () => {
       const sel = contentEl.querySelector(`#${selectId}`);
       const id = sel ? parseInt(sel.value, 10) : selectedId;
-      if (!id || id <= 0) return;
+
+      if (!id) return;
+
       try {
         const apiBase = await getApiBase();
         const headers = await getAuthHeaders();
         const res = await fetchWithAuthRetry(`${apiBase}/resume/${id}/file`, { headers });
+
         if (res.ok) {
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
@@ -199,6 +355,7 @@ async function loadResumeAccordionContent(contentEl, rootEl) {
         }
       } catch (_) {}
     });
+
   } catch (err) {
     contentEl.innerHTML = "<p class=\"ja-score-text\">Failed to load resumes.</p>";
   }
@@ -222,11 +379,44 @@ async function loadCoverLetterAccordionContent(contentEl, rootEl, forceRegenerat
     const displayTitle = coverLetterData?.job_title || jobTitle;
     if (letter) {
       contentEl.innerHTML = `
-        <div class="ja-cover-letter-preview">
-          ${displayTitle ? `<p class="ja-cover-letter-job">${escapeHtml(displayTitle)}</p>` : ""}
-          <div class="ja-cover-letter-text">${escapeHtml(letter).replace(/\n/g, "<br>")}</div>
-        </div>
-        <button type="button" class="ja-action" id="ja-generate-cover-letter">Regenerate</button>
+      <div class="ja-cover-letter-preview ja-cover-box">
+  ${displayTitle ? `<p class="ja-cover-letter-job">${escapeHtml(displayTitle)}</p>` : ""}
+  
+  <div class="ja-cover-letter-text">
+    ${escapeHtml(letter).replace(/\n/g, "<br>")}
+  </div>
+</div>
+        <div class="ja-btn-row">
+  <button type="button" class="ja-btn"  id="ja-generate-cover-letter">
+    <!-- Wand Icon -->
+    <svg class="ja-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <path d="M15 4V2"></path>
+      <path d="M15 10V8"></path>
+      <path d="M19 6h2"></path>
+      <path d="M13 6h-2"></path>
+      <path d="M5 20l14-14"></path>
+    </svg>
+    Regenerate
+  </button>
+
+  <button class="ja-btn">
+    <!-- Edit Icon -->
+    <svg class="ja-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <path d="M12 20h9"></path>
+      <path d="M16.5 3.5a2.1 2.1 0 113 3L7 19l-4 1 1-4 12.5-12.5z"></path>
+    </svg>
+    Edit
+  </button>
+
+  <button class="ja-btn-icon">
+    <!-- Copy Icon -->
+    <svg class="ja-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
+    </svg>
+  </button>
+</div>
+      
       `;
     } else {
       contentEl.innerHTML = `
@@ -289,7 +479,7 @@ async function loadQuestionsAccordionContent(id, contentEl, rootEl) {
         const errBody = await mapRes.json();
         const d = errBody?.detail;
         errMsg = typeof d === "string" ? d : Array.isArray(d) ? (d[0]?.msg || String(d[0] || d)) : errMsg;
-      } catch (_) {}
+      } catch (_) { }
       contentEl.innerHTML = `<p class="ja-score-text">${escapeHtml(String(errMsg))} (${mapRes.status})</p>`;
       return;
     }
@@ -308,21 +498,74 @@ async function loadQuestionsAccordionContent(id, contentEl, rootEl) {
       return m?.value != null && String(m.value).trim() !== "";
     }).length;
     const total = list.length;
-    const itemHtml = list.slice(0, 15).map((f) => {
-      const m = mappings[f.index] || {};
-      const val = m.value != null ? String(m.value).trim() : "";
-      const label = f.label || f.name || f.placeholder || `Field ${f.index + 1}`;
-      // Derive display type: select, date, textarea, or input
-      let displayType = "input";
-      if (f.tag === "select") displayType = "select";
-      else if (f.tag === "textarea") displayType = "textarea";
-      else if (f.type === "date" || f.type === "datetime-local" || f.type === "month") displayType = "date";
-      const typeBadge = `<span class="ja-field-type-badge ja-field-type-${displayType}">${displayType}</span>`;
-      return `<div class="ja-question-row">${typeBadge}<span class="ja-question-label">${escapeHtml(label)}</span><span class="ja-question-value">${escapeHtml(val || "—")}</span></div>`;
-    }).join("");
-    contentEl.innerHTML = itemHtml ? `<div class="ja-questions-list">${itemHtml}</div>` : "<p class=\"ja-score-text\">No questions in this category.</p>";
+    const slice = list.slice(0, 15);
+
+    if (id === "unique-questions") {
+      const cards = slice.map((f) => {
+        const m = mappings[f.index] || {};
+        const val = m.value != null ? String(m.value).trim() : "";
+        const label = f.label || f.name || f.placeholder || `Field ${f.index + 1}`;
+        const hasAnswer = val.length > 0;
+        const qRow = `
+          <div class="ja-uq-qrow">
+            <span class="ja-uq-help">${QUESTION_UI_ICONS.helpCircle}</span>
+            <p class="ja-uq-question">${escapeHtml(label)}</p>
+          </div>`;
+        let body = "";
+        if (hasAnswer) {
+          body = `
+          <div class="ja-uq-body">
+            <p class="ja-uq-answer">${escapeHtml(val)}</p>
+            <div class="ja-uq-foot">
+              <span class="ja-badge ja-badge-ai">${QUESTION_UI_ICONS.sparkles}<span>AI Generated</span></span>
+              <button type="button" class="ja-uq-textbtn">Edit</button>
+            </div>
+          </div>`;
+        } else {
+          body = `
+          <div class="ja-uq-body ja-uq-body-empty">
+            <span class="ja-badge ja-badge-need">Needs Answer</span>
+            <button type="button" class="ja-uq-textbtn ja-uq-textbtn-wand">${QUESTION_UI_ICONS.wand}<span>Generate</span></button>
+          </div>`;
+        }
+        return `<div class="ja-uq-card">${qRow}${body}</div>`;
+      }).join("");
+      contentEl.innerHTML = slice.length
+        ? `<div class="ja-uq-stack">${cards}</div>`
+        : "<p class=\"ja-score-text\">No questions in this category.</p>";
+    } else {
+      const rows = slice.map((f, i) => {
+        const m = mappings[f.index] || {};
+        const val = m.value != null ? String(m.value).trim() : "";
+        const label = f.label || f.name || f.placeholder || `Field ${f.index + 1}`;
+        const hasAnswer = val.length > 0;
+        const isLast = i === slice.length - 1;
+        const icon = hasAnswer ? QUESTION_UI_ICONS.checkCircle : QUESTION_UI_ICONS.alertCircle;
+        return `
+          <div class="ja-cq-row${isLast ? "" : " ja-cq-row-b"}">
+            <span class="ja-cq-q">${escapeHtml(label)}</span>
+            <div class="ja-cq-ans">
+              <span class="ja-cq-val">${hasAnswer ? escapeHtml(val) : "—"}</span>
+              <span class="ja-cq-ico">${icon}</span>
+            </div>
+          </div>`;
+      }).join("");
+      contentEl.innerHTML = slice.length
+        ? `<div class="ja-cq-shell">
+            <div class="ja-cq-list">${rows}</div>
+            <div class="ja-cq-editbar">
+              <button type="button" class="ja-cq-editall">${QUESTION_UI_ICONS.edit}<span>Edit all answers in settings</span></button>
+            </div>
+          </div>
+          <div class="ja-cq-meta">
+            <span class="ja-cq-meta-item">${QUESTION_UI_ICONS.clock}<span>Last fill: —</span></span>
+            <span class="ja-cq-meta-item">${QUESTION_UI_ICONS.layers}<span>— applications filled</span></span>
+          </div>`
+        : "<p class=\"ja-score-text\">No questions in this category.</p>";
+    }
+
     const statusWrap = rootEl?.querySelector(`[data-accordion-id="${id}"]`)?.querySelector(".ja-accordion-status-text");
-    if (statusWrap) statusWrap.textContent = `Filled (${filled}/${total})`;
+    if (statusWrap) statusWrap.textContent = `${filled}/${total}`;
   } catch (err) {
     contentEl.innerHTML = "<p class=\"ja-score-text\">Failed to load questions.</p>";
   }
@@ -351,7 +594,7 @@ function getAllRoots(doc) {
       for (const el of all) {
         if (el.shadowRoot) addRoot(el.shadowRoot);
       }
-    } catch (_) {}
+    } catch (_) { }
   }
   addRoot(doc);
   return roots;
@@ -541,7 +784,7 @@ function getFillableFields(includeNestedDocuments = true, includeHidden = false)
           totalCandidates += 1;
           if (isFillable(el, includeHidden)) out.push(el);
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   }
   if (totalCandidates > 0 && out.length === 0) {
@@ -596,25 +839,25 @@ function setNativeValue(field, nextValue) {
       // Skip placeholder options like "Select...", "Choose...", empty options
       const optText = normalizeKey(opt.text);
       const optValue = normalizeKey(opt.value);
-      return optValue !== "" && 
-             !optText.startsWith("select") && 
-             !optText.startsWith("choose") && 
-             !optText.startsWith("pick");
+      return optValue !== "" &&
+        !optText.startsWith("select") &&
+        !optText.startsWith("choose") &&
+        !optText.startsWith("pick");
     });
-    
+
     if (options.length === 0) {
       logWarn("Select dropdown has no valid options", {
         field: field.name || field.id || field.placeholder
       });
       return false;
     }
-    
+
     // Try exact match first (case-insensitive)
-    let match = options.find((opt) => 
+    let match = options.find((opt) =>
       String(opt.value).toLowerCase() === value.toLowerCase() ||
       opt.text.toLowerCase() === value.toLowerCase()
     );
-    
+
     // Special handling for Yes/No questions
     if (!match && (valStr === "yes" || valStr === "no" || valStr === "none")) {
       match = options.find((opt) => {
@@ -623,22 +866,22 @@ function setNativeValue(field, nextValue) {
         return optText === valStr || optValue === valStr;
       });
     }
-    
+
     // Try normalized text/value match
     if (!match) {
       match = options.find((opt) => normalizeKey(opt.text) === valStr || normalizeKey(opt.value) === valStr);
     }
-    
+
     // Try partial contains match (both ways)
     if (!match) {
       match = options.find((opt) => {
         const optText = normalizeKey(opt.text);
         const optValue = normalizeKey(opt.value);
-        return optText.includes(valStr) || valStr.includes(optText) || 
-               optValue.includes(valStr) || valStr.includes(optValue);
+        return optText.includes(valStr) || valStr.includes(optText) ||
+          optValue.includes(valStr) || valStr.includes(optValue);
       });
     }
-    
+
     // Try first word match (for cases like "Male" matching "Male / पुरुष")
     if (!match && valStr) {
       const firstWord = valStr.split(/\s+/)[0];
@@ -647,7 +890,7 @@ function setNativeValue(field, nextValue) {
         return optText === firstWord || optText.includes(firstWord) || firstWord.includes(optText);
       });
     }
-    
+
     if (!match) {
       logWarn("Select dropdown match failed", {
         field: field.name || field.id || field.placeholder,
@@ -660,8 +903,8 @@ function setNativeValue(field, nextValue) {
     // Step 1: Focus and simulate opening the dropdown
     focusWithoutScroll(field);
     field.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
-    field.dispatchEvent(new MouseEvent("mouseup",  { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
-    field.dispatchEvent(new MouseEvent("click",    { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+    field.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+    field.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
 
     // Step 2: Set value using the native prototype setter so React/Vue get the real DOM change
     const nativeSetter = Object.getOwnPropertyDescriptor(
@@ -680,18 +923,18 @@ function setNativeValue(field, nextValue) {
       if (tracker) {
         tracker.setValue(field.value === match.value ? "" : field.value);
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // Step 4: Simulate clicking the matching <option> element
     try {
       match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
-      match.dispatchEvent(new MouseEvent("mouseup",   { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
-      match.dispatchEvent(new MouseEvent("click",     { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
-    } catch (_) {}
+      match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+      match.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: field.ownerDocument?.defaultView }));
+    } catch (_) { }
 
     // Step 5: Fire change + blur so all framework listeners fire
     field.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    field.dispatchEvent(new Event("blur",   { bubbles: true }));
+    field.dispatchEvent(new Event("blur", { bubbles: true }));
 
     logInfo("Select dropdown filled", {
       field: field.name || field.id,
@@ -724,7 +967,7 @@ function setNativeValue(field, nextValue) {
       const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
       if (descriptor?.set) descriptor.set.call(field, formattedDate);
       else field.value = formattedDate;
-      try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) {}
+      try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) { }
       dispatchFrameworkEvents(field);
       return true;
     }
@@ -736,7 +979,7 @@ function setNativeValue(field, nextValue) {
       || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     if (nativeSetter) nativeSetter.call(field, value);
     else field.value = value;
-    try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) {}
+    try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) { }
     dispatchFrameworkEvents(field);
     return true;
   }
@@ -748,7 +991,7 @@ function setNativeValue(field, nextValue) {
       || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     if (nativeSetter) nativeSetter.call(field, value);
     else field.value = value;
-    try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) {}
+    try { if (field._valueTracker) field._valueTracker.setValue(""); } catch (_) { }
     dispatchFrameworkEvents(field);
     return true;
   }
@@ -775,7 +1018,7 @@ async function recordAutofillFieldsFilled(count) {
     const stored = await chrome.storage.local.get([AUTOFILL_TIME_SAVED_KEY]);
     const prev = stored[AUTOFILL_TIME_SAVED_KEY] || 0;
     await chrome.storage.local.set({ [AUTOFILL_TIME_SAVED_KEY]: prev + count });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 /** Get saved time text for display */
@@ -784,11 +1027,10 @@ async function getSavedTimeDisplayText() {
     const stored = await chrome.storage.local.get([AUTOFILL_TIME_SAVED_KEY]);
     const total = stored[AUTOFILL_TIME_SAVED_KEY] || 0;
     const mins = Math.round((total * AVG_SECONDS_PER_FIELD) / 60);
-    if (mins < 1) return "Start autofilling to save time 🔥";
-    const unit = mins === 1 ? "minute" : "minutes";
-    return `You have saved ${mins} ${unit} by autofilling so far 🔥`;
+    if (mins <= 0) return "One-click fill for this job application";
+    return `You have saved ${mins} minute${mins === 1 ? "" : "s"} by autofilling so far 🔥`;
   } catch (_) {
-    return "You have saved time by autofilling so far 🔥";
+    return "One-click fill for this job application";
   }
 }
 
@@ -799,7 +1041,95 @@ async function updateSavedTimeDisplay(root) {
   const text = await getSavedTimeDisplayText();
   if (!statusAreaHasFillResults(statusEl)) {
     statusEl.textContent = text;
-    statusEl.className = "ja-status";
+    statusEl.className = "ja-status ja-autofill-hero-sub";
+  }
+}
+
+/** Format ISO `last_fill_time` from GET /chrome-extension/summary. */
+function formatRelativeTimeFromIso(iso) {
+  if (!iso || typeof iso !== "string") return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const sec = Math.round((Date.now() - d.getTime()) / 1000);
+  if (sec < 45) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hr${hr === 1 ? "" : "s"} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 14) return `${day} day${day === 1 ? "" : "s"} ago`;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
+  });
+}
+
+/** Footer stats (Last fill / applications filled): GET /api/chrome-extension/summary when signed in; else chrome.storage fallback. */
+async function updateAutofillFooterStats(root) {
+  const lastEl = root?.querySelector?.("#ja-autofill-last-fill");
+  const appsEl = root?.querySelector?.("#ja-autofill-apps-filled");
+  if (!lastEl && !appsEl) return;
+
+  let hasToken = false;
+  try {
+    const t = await chrome.storage.local.get(["accessToken"]);
+    hasToken = !!t.accessToken;
+  } catch (_) { }
+  if (!hasToken) {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "FETCH_TOKEN_FROM_OPEN_TAB" });
+      if (res?.ok && res?.token) hasToken = true;
+    } catch (_) { }
+  }
+
+  if (hasToken) {
+    try {
+      const apiBase = await getApiBase();
+      const headers = await getAuthHeaders();
+      if (headers.Authorization) {
+        const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/summary`, { headers });
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const apps = data.applications_filled;
+          const lastIso = data.last_fill_time;
+          if (lastEl) {
+            const rel = formatRelativeTimeFromIso(lastIso);
+            lastEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.clock}</span> Last fill: ${rel}`;
+          }
+          if (appsEl && typeof apps === "number" && Number.isFinite(apps)) {
+            appsEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.layers}</span> ${apps} application${apps === 1 ? "" : "s"} filled`;
+          }
+          return;
+        }
+      }
+    } catch (_) { }
+  }
+
+  try {
+    const s = await chrome.storage.local.get(["hm_autofill_last_fill_label", "hm_autofill_apps_count"]);
+    if (lastEl) {
+      if (s.hm_autofill_last_fill_label) {
+        lastEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.clock}</span> ${String(s.hm_autofill_last_fill_label)}`;
+      } else {
+        lastEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.clock}</span> Last fill: —`;
+      }
+    }
+    if (appsEl) {
+      if (typeof s.hm_autofill_apps_count === "number" && Number.isFinite(s.hm_autofill_apps_count)) {
+        const n = s.hm_autofill_apps_count;
+        appsEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.layers}</span> ${n} application${n === 1 ? "" : "s"} filled`;
+      } else {
+        appsEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.layers}</span> — applications filled`;
+      }
+    }
+  } catch (_) {
+    if (lastEl) {
+      lastEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.clock}</span> Last fill: —`;
+    }
+    if (appsEl) {
+      appsEl.innerHTML = `<span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.layers}</span> — applications filled`;
+    }
   }
 }
 
@@ -858,7 +1188,7 @@ function openDropdownForSelection(field) {
       field.dispatchEvent(new MouseEvent("mouseup", opts));
       field.dispatchEvent(new MouseEvent("click", opts));
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function highlightFailedField(field) {
@@ -958,7 +1288,7 @@ function findContinueButton(doc = document) {
     try {
       const el = doc.querySelector(sel);
       if (el && el.getBoundingClientRect?.().width > 0) return el;
-    } catch (_) {}
+    } catch (_) { }
   }
   const sel = 'button, [role="button"], input[type="submit"]';
   for (const el of doc.querySelectorAll(sel)) {
@@ -1032,7 +1362,7 @@ async function getKnownFormStructure(domain, url) {
   try {
     const stored = await chrome.storage.local.get(["hm_cache_enabled"]);
     useCache = stored.hm_cache_enabled !== false;
-  } catch (_) {}
+  } catch (_) { }
   const cacheManager = window.__CACHE_MANAGER__;
   logInfo("getKnownFormStructure: entry", { domain, hasCacheManager: !!cacheManager, useCache });
   if (useCache) {
@@ -1045,7 +1375,7 @@ async function getKnownFormStructure(domain, url) {
           return cached;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   }
   try {
     logInfo("getKnownFormStructure: fetching from server", { domain });
@@ -1207,7 +1537,7 @@ async function scrapeFields(options = {}) {
             el.dispatchEvent(new MouseEvent(name, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
           }
           await new Promise((r) => setTimeout(r, 800));
-        } catch (_) {}
+        } catch (_) { }
       }
     }
   }
@@ -1315,8 +1645,8 @@ async function scrapeFields(options = {}) {
     const opts =
       meta.tag === "select"
         ? Array.from(el.options || [])
-            .map((o) => (o.text || "").trim())
-            .filter(Boolean)
+          .map((o) => (o.text || "").trim())
+          .filter(Boolean)
         : null;
     const id = meta.id || null;
     const selector = id ? `#${CSS.escape(id)}` : null;
@@ -1785,7 +2115,7 @@ async function getPageHtmlForKeywordsApi() {
   try {
     const res = await chrome.runtime.sendMessage({ type: "GET_ALL_FRAMES_HTML" });
     if (res?.ok && res.html) return res.html;
-  } catch (_) {}
+  } catch (_) { }
   try {
     const el = document.documentElement || document.body;
     if (!el) return null;
@@ -1851,7 +2181,7 @@ async function runKeywordAnalysisAndMaybeShowWidget() {
       const data = await res.json();
       if ((data.total_keywords || 0) === 0) return null;
       if (cacheManager) {
-        try { await cacheManager.set("keywordAnalysis", { url, result: data }); } catch (_) {}
+        try { await cacheManager.set("keywordAnalysis", { url, result: data }); } catch (_) { }
       }
       return data;
     };
@@ -1866,7 +2196,7 @@ async function runKeywordAnalysisAndMaybeShowWidget() {
             if (window.__CONFIG__?.log) window.__CONFIG__.log("[Keyword] Cache hit");
             data = cached.result;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
       if (!data) {
         data = requestManager?.dedupedRequest
@@ -1881,7 +2211,7 @@ async function runKeywordAnalysisAndMaybeShowWidget() {
       } else {
         mountKeywordMatchWidgetWithData({ matched: data.matched_count, total: data.total_keywords, percent: data.percent });
       }
-    } catch (_) {}
+    } catch (_) { }
   }, 2000);
 }
 
@@ -2085,12 +2415,12 @@ async function refreshTokenViaApi() {
               await chrome.storage.local.set({ accessToken: newToken });
               try {
                 await chrome.runtime.sendMessage({ type: "SYNC_TOKEN_TO_HIREMATE_TAB", token: newToken });
-              } catch (_) {}
+              } catch (_) { }
               if (LOGIN_PAGE_ORIGINS.some((o) => window.location.origin === o)) {
                 try {
                   localStorage.setItem("token", newToken);
                   localStorage.setItem("access_token", newToken);
-                } catch (_) {}
+                } catch (_) { }
               }
               logInfo("Token refreshed via API and synced to chrome.storage + localStorage");
               return newToken;
@@ -2121,10 +2451,10 @@ async function getAuthHeaders() {
     if (syncRes?.ok && syncRes?.token) {
       await chrome.storage.local.set({ accessToken: syncRes.token });
     }
-  } catch (_) {}
+  } catch (_) { }
   let token = null;
   if (window.__SECURITY_MANAGER__?.getToken) {
-    try { token = await window.__SECURITY_MANAGER__.getToken(); } catch (_) {}
+    try { token = await window.__SECURITY_MANAGER__.getToken(); } catch (_) { }
   }
   if (!token) {
     const data = await chrome.storage.local.get(["accessToken"]);
@@ -2158,7 +2488,7 @@ async function fetchWithAuthRetry(url, options = {}) {
           newToken = syncRes.token;
           await chrome.storage.local.set({ accessToken: newToken });
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     if (!newToken) {
       await chrome.storage.local.remove([AUTOFILL_CTX_KEY]);
@@ -2180,8 +2510,23 @@ function makeCopyable(el, text) {
   if (!el || !text) return;
   el.classList.add("ja-copyable");
   el.addEventListener("click", () => {
-    navigator.clipboard.writeText(text).catch(() => {});
+    navigator.clipboard.writeText(text).catch(() => { });
   });
+}
+
+
+async function fetchProfileResumeBlob(ctx) {
+  const resumeUrl = ctx?.resumeUrl || ctx?.resume_url;
+  const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
+  if (!resumeFilename) return null;
+  const apiBase = await getApiBase();
+  const headers = await getAuthHeaders();
+  const res = await fetchWithAuthRetry(
+    `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
+    { headers }
+  );
+  if (!res.ok) return null;
+  return { blob: await res.blob(), filename: resumeFilename };
 }
 
 async function loadProfileIntoPanel(root) {
@@ -2190,11 +2535,16 @@ async function loadProfileIntoPanel(root) {
   const educationEl = root?.querySelector("#ja-profile-education");
   const experienceEl = root?.querySelector("#ja-profile-experience");
   const uploadsEl = root?.querySelector("#ja-profile-uploads");
-  const linksEl = root?.querySelector("#ja-profile-links");
-  const skillsEl = root?.querySelector("#ja-profile-skills");
+  const certificationsEl = root?.querySelector("#ja-profile-certifications");
+  const techSkillsEl = root?.querySelector("#ja-profile-tech-skills");
+  const softSkillsEl = root?.querySelector("#ja-profile-soft-skills");
   const languagesEl = root?.querySelector("#ja-profile-languages");
   const avatarEl = root?.querySelector("#ja-profile-avatar");
   const titleEl = root?.querySelector("#ja-profile-title");
+  const statApps = root?.querySelector("#ja-profile-stat-apps");
+  const statInt = root?.querySelector("#ja-profile-stat-interviews");
+  const statFill = root?.querySelector("#ja-profile-stat-fill");
+  const techCountEl = root?.querySelector("#ja-profile-tech-count");
 
   const setHtml = (el, html) => {
     if (el) el.innerHTML = html || "—";
@@ -2203,15 +2553,30 @@ async function loadProfileIntoPanel(root) {
     if (el) el.textContent = text || "—";
   };
 
+  const clearStats = () => {
+    if (statApps) statApps.textContent = "—";
+    if (statInt) statInt.textContent = "—";
+    if (statFill) statFill.textContent = "—";
+  };
+
   try {
     const ctx = await getAutofillContextFromApi();
+    root._profileCtx = ctx;
     const flat = ctx.profile || {};
     const detail = ctx.profileDetail;
+
+    try {
+      const st = await chrome.storage.local.get(["hm_stat_applications", "hm_stat_interviews", "hm_stat_fill_rate"]);
+      if (statApps) statApps.textContent = st.hm_stat_applications != null ? String(st.hm_stat_applications) : "—";
+      if (statInt) statInt.textContent = st.hm_stat_interviews != null ? String(st.hm_stat_interviews) : "—";
+      if (statFill) statFill.textContent = st.hm_stat_fill_rate != null ? String(st.hm_stat_fill_rate) : "—";
+    } catch (_) {
+      clearStats();
+    }
 
     const fullName = [flat.firstName, flat.lastName].filter(Boolean).join(" ") || flat.name || "—";
     setText(nameEl, fullName);
     setText(titleEl, flat.title || flat.professionalHeadline || "");
-    // Avatar initials
     try {
       if (avatarEl) {
         const initials = (fullName || "")
@@ -2222,72 +2587,95 @@ async function loadProfileIntoPanel(root) {
           .join("");
         avatarEl.textContent = initials || (flat.name || flat.firstName || "—").charAt(0).toUpperCase();
       }
-    } catch (_) {}
+    } catch (_) { }
 
     const location = [flat.city, flat.country].filter(Boolean).join(", ") || "—";
-    const contactHtml = `
-      <div class="ja-profile-line ja-copyable" data-copy="${escapeHtml(location === "—" ? "" : location)}">${escapeHtml(location)}</div>
-      <div class="ja-profile-line ja-copyable" data-copy="${escapeHtml(flat.email || "")}">${escapeHtml(flat.email || "—")}</div>
-      <div class="ja-profile-line ja-copyable" data-copy="${escapeHtml(flat.phone || "")}">${escapeHtml(flat.phone || "—")}</div>
-    `;
-    setHtml(contactEl, contactHtml);
-    contactEl?.querySelectorAll(".ja-copyable").forEach((node) => {
-      makeCopyable(node, node.dataset.copy ?? node.innerText.trim());
-    });
+    const contactRows = [
+      { icon: PROFILE_TAB_ICONS.mapPin, key: "Location", copy: location === "—" ? "" : location, display: location },
+      { icon: PROFILE_TAB_ICONS.mail, key: "Email", copy: flat.email || "", display: flat.email || "—" },
+      { icon: PROFILE_TAB_ICONS.phone, key: "Phone", copy: flat.phone || "", display: flat.phone || "—" },
+      { icon: PROFILE_TAB_ICONS.linkedin, key: "LinkedIn", copy: flat.linkedin || "", display: flat.linkedin || "—" },
+      { icon: PROFILE_TAB_ICONS.github, key: "GitHub", copy: flat.github || "", display: flat.github || "—" },
+      { icon: PROFILE_TAB_ICONS.globe, key: "Portfolio", copy: flat.portfolio || "", display: flat.portfolio || "—" },
+    ];
+    setHtml(
+      contactEl,
+      `<div class="ja-prof-contact-grid">${contactRows
+        .map(
+          (r) => `
+      <div class="ja-prof-contact-row">
+        <span class="ja-prof-contact-ico">${r.icon}</span>
+        <span class="ja-prof-contact-val" title="${escapeHtml(r.display)}">${escapeHtml(r.display)}</span>
+        <button type="button" class="ja-prof-copy" data-copy="${escapeHtml(r.copy)}" aria-label="Copy ${escapeHtml(r.key)}">${PROFILE_TAB_ICONS.copy}</button>
+      </div>`
+        )
+        .join("")}</div>`
+    );
 
     const educations = detail?.educations ?? flat.educations ?? [];
     if (educations.length) {
       const eduHtml = educations
-        .map(
-          (e) => `
-        <div class="ja-edu-item ja-copyable" data-copy="${escapeHtml(
-          `${e.institution || ""}\n${e.degree || ""} ${e.fieldOfStudy || ""}\n${e.startYear || ""} - ${e.endYear || ""}`
-        )}">
-          <div class="ja-edu-institution">${escapeHtml(e.institution || "—")}</div>
-          <div class="ja-edu-degree">${escapeHtml(e.degree || "")}${e.fieldOfStudy ? " · " + escapeHtml(e.fieldOfStudy) : ""}</div>
-          <div class="ja-edu-meta">${escapeHtml(e.startYear || "")} — ${escapeHtml(e.endYear || "")}</div>
-        </div>
-      `
-        )
+        .map((e) => {
+          const dates = [e.startYear, e.endYear].filter(Boolean).join(" — ");
+          const degreeLine = [e.degree, e.fieldOfStudy].filter(Boolean).join(" · ");
+          const gpa = e.grade ? `<span class="ja-prof-badge ja-prof-badge-muted">GPA: ${escapeHtml(e.grade)}</span>` : "";
+          return `
+        <div class="ja-prof-edu-card">
+          <p class="ja-prof-edu-school">${escapeHtml(e.institution || "—")}</p>
+          <p class="ja-prof-edu-degree">${escapeHtml(degreeLine || "—")}</p>
+          <div class="ja-prof-edu-meta">
+            <span class="ja-prof-edu-dates">${escapeHtml(dates || "—")}</span>
+            ${gpa}
+          </div>
+        </div>`;
+        })
         .join("");
       setHtml(educationEl, eduHtml);
-      educationEl?.querySelectorAll(".ja-edu-item").forEach((node) => {
-        makeCopyable(node, node.dataset.copy || node.innerText);
-      });
     } else {
-      setText(educationEl, flat.education || "—");
+      setHtml(educationEl, `<p class="ja-prof-empty">${escapeHtml(flat.education || "—")}</p>`);
     }
 
     const experiences = detail?.experiences ?? flat.experiences ?? [];
     if (experiences.length) {
       const expHtml = experiences
-        .map(
-          (e) => {
-            const metaParts = [e.companyName, e.location, `${e.startDate || ""} — ${e.endDate || ""}`].filter(Boolean);
-            const bullets = (e.description || "")
-              .split(/\n|•/)
-              .map((s) => s.trim())
-              .filter(Boolean)
-              .map((b) => `<li>${escapeHtml(b)}</li>`)
-              .join("");
-            const copyText = `${e.jobTitle || ""} at ${e.companyName || ""}\n${e.startDate || ""} — ${e.endDate || ""}\n${e.description || ""}`;
-            return `
-          <div class="ja-exp-item ja-copyable" data-copy="${escapeHtml(copyText)}">
-            <div class="ja-exp-role">${escapeHtml(e.jobTitle || "—")}</div>
-            <div class="ja-exp-company">${e.companyName ? escapeHtml(e.companyName) : ""}</div>
-            <div class="ja-exp-meta">${escapeHtml(metaParts.join(" · "))}</div>
-            ${bullets ? `<ul class="ja-exp-bullets">${bullets}</ul>` : ""}
-          </div>
-        `;
-          }
-        )
+        .map((e) => {
+          const locDate = [e.location, [e.startDate, e.endDate].filter(Boolean).join(" — ")].filter(Boolean).join(" · ");
+          const bullets = (e.description || "")
+            .split(/\n|•/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .map((b) => `<li class="ja-prof-exp-li"><span class="ja-prof-exp-dot"></span><span>${escapeHtml(b)}</span></li>`)
+            .join("");
+          const typeBadge = escapeHtml(e.employmentType || "Full-time");
+          return `
+          <div class="ja-prof-exp-card">
+            <div class="ja-prof-exp-top">
+              <p class="ja-prof-exp-title">${escapeHtml(e.jobTitle || "—")}</p>
+              <span class="ja-prof-badge ja-prof-badge-muted">${typeBadge}</span>
+            </div>
+            <p class="ja-prof-exp-company">${escapeHtml(e.companyName || "")}</p>
+            <p class="ja-prof-exp-meta">${escapeHtml(locDate || "—")}</p>
+            ${bullets ? `<ul class="ja-prof-exp-bullets">${bullets}</ul>` : ""}
+          </div>`;
+        })
         .join("");
       setHtml(experienceEl, expHtml);
-      experienceEl?.querySelectorAll(".ja-exp-item").forEach((node) => {
-        makeCopyable(node, node.dataset.copy || node.innerText);
-      });
     } else {
-      setText(experienceEl, (flat.experience || flat.professionalSummary || "—").slice(0, 800) + (flat.experience && flat.experience.length > 800 ? "…" : ""));
+      setHtml(experienceEl, `<p class="ja-prof-empty">${escapeHtml((flat.experience || flat.professionalSummary || "—").slice(0, 800))}</p>`);
+    }
+
+    const certs = flat.certifications || flat.certifications_list || [];
+    const certList = Array.isArray(certs) ? certs.map((c) => (typeof c === "string" ? c : c.name || c.title || "")).filter(Boolean) : [];
+    const certBlock = root?.querySelector("#ja-profile-cert-block");
+    if (certList.length && certificationsEl) {
+      if (certBlock) certBlock.style.display = "";
+      setHtml(
+        certificationsEl,
+        `<div class="ja-prof-cert-wrap">${certList.map((c) => `<span class="ja-prof-cert-pill">${PROFILE_TAB_ICONS.awardSm}<span>${escapeHtml(c)}</span></span>`).join("")}</div>`
+      );
+    } else {
+      if (certBlock) certBlock.style.display = "none";
+      if (certificationsEl) setHtml(certificationsEl, "");
     }
 
     const resumeName = ctx.resumeName || ctx.resumeFileName || (ctx.resumeUrl || "").split("/").pop() || "Resume";
@@ -2295,82 +2683,93 @@ async function loadProfileIntoPanel(root) {
     const hasResume = !!(ctx.resumeUrl || ctx.resumeFileName);
     const uploadsHtml = hasResume
       ? `
-      <div class="ja-upload-row">
-        <div>
-          <span class="ja-upload-label">Resume</span>
-          ${resumeDate ? `<div class="ja-upload-meta">Uploaded: ${escapeHtml(resumeDate)}</div>` : ""}
+      <div class="ja-prof-upload-card">
+        <div class="ja-prof-upload-left">
+          <div class="ja-prof-upload-icon">${PROFILE_TAB_ICONS.fileText}</div>
+          <div>
+            <p class="ja-prof-upload-name">${escapeHtml(resumeName)}</p>
+            <p class="ja-prof-upload-meta">${resumeDate ? `${escapeHtml(resumeDate)}` : "Resume on file"}</p>
+          </div>
         </div>
-        <button type="button" class="ja-upload-preview" data-has-resume="true">Preview</button>
-      </div>
-    `
-      : "No uploads";
+        <div class="ja-prof-upload-actions">
+          <button type="button" class="ja-prof-file-btn" id="ja-profile-upload-preview" title="Preview">${PROFILE_TAB_ICONS.eyeFile}</button>
+          <button type="button" class="ja-prof-file-btn" id="ja-profile-upload-download" title="Download">${PROFILE_TAB_ICONS.downloadFile}</button>
+        </div>
+      </div>`
+      : `<p class="ja-prof-empty">No uploads</p>`;
     setHtml(uploadsEl, uploadsHtml);
     if (hasResume) {
-      uploadsEl?.querySelector(".ja-upload-preview")?.addEventListener("click", async (ev) => {
-        ev.preventDefault();
+      const runResume = async (mode) => {
         try {
-          const resumeUrl = ctx?.resumeUrl || ctx?.resume_url;
-          const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
-          if (!resumeFilename) return;
-          const apiBase = await getApiBase();
-          const headers = await getAuthHeaders();
-          const res = await fetchWithAuthRetry(
-            `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
-            { headers }
-          );
-          if (res.ok) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            window.open(url, "_blank");
+          const got = await fetchProfileResumeBlob(ctx);
+          if (!got) return;
+          const url = URL.createObjectURL(got.blob);
+          if (mode === "open") window.open(url, "_blank");
+          else {
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = got.filename || "resume.pdf";
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
           }
-        } catch (_) {}
-      });
+        } catch (_) { }
+      };
+      const pPrev = uploadsEl.querySelector("#ja-profile-upload-preview");
+      const pDown = uploadsEl.querySelector("#ja-profile-upload-download");
+      if (pPrev) pPrev.onclick = () => runResume("open");
+      if (pDown) pDown.onclick = () => runResume("download");
     }
 
-    const links = [];
-    if (flat.linkedin || detail?.links?.linkedInUrl) links.push({ label: "LinkedIn", url: flat.linkedin || detail?.links?.linkedInUrl });
-    if (flat.github || detail?.links?.githubUrl) links.push({ label: "Github", url: flat.github || detail?.links?.githubUrl });
-    if (detail?.links?.portfolioUrl) links.push({ label: "Portfolio", url: detail.links.portfolioUrl });
-    (detail?.links?.otherLinks || []).forEach((o) => {
-      if (o?.url) links.push({ label: o.label || "Link", url: o.url });
-    });
-    if (links.length) {
+    let techSkills = Array.isArray(flat.tech_skills_list) ? [...flat.tech_skills_list] : [];
+    let softSkills = Array.isArray(flat.soft_skills_list) ? [...flat.soft_skills_list] : [];
+    if (!techSkills.length && !softSkills.length && Array.isArray(flat.skills_list) && flat.skills_list.length) {
+      techSkills = [...flat.skills_list];
+    } else if (!techSkills.length && !softSkills.length && flat.skills) {
+      techSkills = String(flat.skills).split(",").map((s) => s.trim()).filter(Boolean);
+    }
+
+    if (techSkills.length) {
       setHtml(
-        linksEl,
-        links.map((l) => `<div class="ja-link-row"><span class="ja-link-label">${escapeHtml(l.label)}</span><span class="ja-link-url ja-copyable" data-copy="${escapeHtml(l.url)}">${escapeHtml(l.url)}</span></div>`).join("")
+        techSkillsEl,
+        `<div class="ja-prof-skill-wrap">${techSkills.map((s) => `<button type="button" class="ja-prof-chip ja-prof-chip-tech ja-prof-skill-copy" data-copy="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}</div>`
       );
-      linksEl?.querySelectorAll(".ja-link-url").forEach((node) => makeCopyable(node, node.dataset.copy));
+      techSkillsEl?.querySelectorAll(".ja-prof-skill-copy").forEach((node) => {
+        node.addEventListener("click", () => navigator.clipboard.writeText(node.getAttribute("data-copy") || node.textContent || "").catch(() => { }));
+      });
     } else {
-      setText(linksEl, "—");
+      setHtml(techSkillsEl, `<p class="ja-prof-empty">—</p>`);
+    }
+    if (techCountEl) techCountEl.textContent = `${techSkills.length} skills`;
+
+    if (softSkills.length) {
+      setHtml(
+        softSkillsEl,
+        `<div class="ja-prof-skill-wrap">${softSkills.map((s) => `<span class="ja-prof-chip ja-prof-chip-soft">${escapeHtml(s)}</span>`).join("")}</div>`
+      );
+    } else {
+      setHtml(softSkillsEl, `<p class="ja-prof-empty">—</p>`);
     }
 
-    const skills = [];
-    (detail?.techSkills || []).forEach((s) => skills.push(s.name));
-    (detail?.softSkills || []).forEach((s) => skills.push(s.name));
-    if (skills.length === 0 && Array.isArray(flat.skills_list) && flat.skills_list.length) {
-      skills.push(...flat.skills_list);
-    } else if (skills.length === 0 && flat.skills) {
-      skills.push(...String(flat.skills).split(",").map((s) => s.trim()).filter(Boolean));
-    }
-    if (skills.length) {
-      const chips = skills.map((s) => `<span class="ja-skill-chip ja-copyable" data-copy="${escapeHtml(s)}">${escapeHtml(s)}</span>`).join("");
-      setHtml(skillsEl, `<div class="ja-skill-list">${chips}</div>`);
-      skillsEl?.querySelectorAll(".ja-skill-chip").forEach((node) => makeCopyable(node, node.dataset.copy));
+    const langs = Array.isArray(flat.languages_list) ? flat.languages_list : detail?.willingToWorkIn || [];
+    if (langs.length) {
+      setHtml(
+        languagesEl,
+        `<div class="ja-prof-skill-wrap">${langs.map((l) => `<span class="ja-prof-chip ja-prof-chip-lang">${escapeHtml(l)}</span>`).join("")}</div>`
+      );
     } else {
-      setText(skillsEl, "—");
+      setHtml(languagesEl, `<p class="ja-prof-empty">—</p>`);
     }
-
-    const langs = detail?.willingToWorkIn || [];
-    setHtml(languagesEl, langs.length ? `<div class="ja-skill-list">${langs.map((l) => `<span class="ja-skill-chip">${escapeHtml(l)}</span>`).join("")}</div>` : (flat.country ? escapeHtml(flat.country) : "—"));
   } catch (_) {
+    clearStats();
     setText(nameEl, "Sign in to load profile");
-    setHtml(contactEl, "<div class=\"ja-profile-line\">—</div>");
-    setText(educationEl, "—");
-    setText(experienceEl, "—");
-    setText(uploadsEl, "—");
-    setText(linksEl, "—");
-    setText(skillsEl, "—");
-    setText(languagesEl, "—");
+    setHtml(contactEl, "");
+    setHtml(educationEl, "—");
+    setHtml(experienceEl, "—");
+    setHtml(uploadsEl, "—");
+    setHtml(root?.querySelector("#ja-profile-certifications"), "");
+    setHtml(techSkillsEl, "—");
+    setHtml(softSkillsEl, "—");
+    setHtml(languagesEl, "—");
   }
 }
 
@@ -2400,7 +2799,7 @@ function extractCompanyAndPosition() {
     if (company) {
       company = company.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     }
-  } catch (_) {}
+  } catch (_) { }
 
   // 2. Try JSON-LD JobPosting on page
   if (!company || !position) {
@@ -2418,7 +2817,7 @@ function extractCompanyAndPosition() {
               : loc.name || "";
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     });
   }
 
@@ -2566,6 +2965,7 @@ async function fetchResumesFromApi() {
   const res = await fetchWithAuthRetry(`${apiBase}/resume/workspace`, { headers });
   if (!res.ok) return [];
   const data = await res.json();
+  console.log(data);
   return data.resumes || [];
 }
 
@@ -2642,7 +3042,7 @@ async function loadKeywordsIntoPanel(root) {
         const errData = await res.json();
         errMsg = errData.detail || errMsg;
         if (typeof errMsg === "object" && errMsg.msg) errMsg = errMsg.msg;
-      } catch (_) {}
+      } catch (_) { }
       container.innerHTML = `<p class="ja-score-text">${escapeHtml(String(errMsg))}</p>`;
       if (keywordsListEl) keywordsListEl.innerHTML = "";
       if (card) card.classList.remove("ja-loading");
@@ -2656,54 +3056,95 @@ async function loadKeywordsIntoPanel(root) {
     const percent = data.percent || 0;
     const highMatched = high.filter((i) => i.matched).length;
     const lowMatched = low.filter((i) => i.matched).length;
-    const statusLabel = total === 0 ? "No skills found" : percent >= 70 ? "Great match" : "Needs Work";
-    const statusClass = total === 0 ? "" : percent >= 70 ? "ja-status-great" : "ja-status-needs-work";
     const apiMessage = data.message || "";
-    const renderItem = (item) =>
-      `<div class="ja-kw-item"><span class="ja-kw-check ${item.matched ? "ja-matched" : "ja-unmatched"}">✓</span><span class="${item.matched ? "ja-kw-matched" : "ja-kw-unmatched"}">${escapeHtml(item.keyword)}</span></div>`;
-    const highHtml = high.map(renderItem).join("");
-    const lowHtml = low.map(renderItem).join("");
-    container.innerHTML = `
-      <div class="ja-kw-match-header">
-        <div class="ja-kw-match-title-row">
-          <h4 class="ja-kw-match-title">Keyword Match – <span class="ja-kw-status-label ${statusClass}">${statusLabel}</span></h4>
-        </div>
-        ${total === 0 ? `<p class="ja-score-text">${escapeHtml(apiMessage || "No technical skills found in the job description. Scroll down for the full requirements section.")}</p>` : `
-        <div class="ja-kw-score-row">
-          <div class="ja-kw-score-text-wrap">
-            <p class="ja-score-text">Your resume has <strong>${matched} out of ${total}</strong> keywords that appear in the job description.</p>
-          </div>
-          <div class="ja-kw-gauge-wrap">
-            <svg class="ja-kw-gauge" viewBox="0 0 100 55" preserveAspectRatio="xMidYMid meet">
-              <path class="ja-kw-gauge-bg" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke-width="14" stroke-linecap="round"/>
-              <path class="ja-kw-gauge-fill" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke-width="14" stroke-linecap="round" stroke-dasharray="125.6" style="stroke-dashoffset: ${125.6 * (1 - Math.min(100, percent) / 100)}"/>
-            </svg>
-            <div class="ja-kw-gauge-value">${Math.round(percent)}%</div>
-          </div>
-        </div>
-        <div class="ja-kw-tip-card">
-          <span class="ja-kw-tip-icon">💡</span>
-          <span>Try to get your score above <strong>70%</strong> to increase your chances!</span>
-        </div>`}
-      </div>
-    `;
+    const theme = keywordMatchTheme(percent, total);
+    const dashArr = keywordGaugeDashArray(percent);
+    const pctRounded = Math.round(percent);
+    const highHtml = high.map(renderKeywordMatchChip).join("");
+    const lowHtml = low.map(renderKeywordMatchChip).join("");
+    const quickFromApi = Array.isArray(data.quick_suggestions) ? data.quick_suggestions.filter(Boolean) : [];
+    const quickPills =
+      quickFromApi.length > 0
+        ? quickFromApi.slice(0, 8)
+        : high.filter((k) => !k.matched).slice(0, 4).map((k) => k.keyword);
+    const suggestionsHtml = quickPills
+      .map((kw) => `<button type="button" class="ja-kw-suggest-pill">+ ${escapeHtml(typeof kw === "string" ? kw : kw.keyword || String(kw))}</button>`)
+      .join("");
+
+    container.innerHTML =
+      total === 0
+        ? `<div class="ja-kw-score-card-inner ja-kw-score-empty">
+            <p class="ja-score-text">${escapeHtml(apiMessage || "No technical skills found in the job description. Scroll down for the full requirements section.")}</p>
+          </div>`
+        : `<div class="ja-kw-score-card-inner">
+            <div class="ja-kw-score-main">
+              <div class="ja-kw-gauge-circle-wrap" aria-hidden="true">
+                <svg class="ja-kw-gauge-circle" viewBox="0 0 80 80">
+                  <circle cx="40" cy="40" r="34" fill="none" stroke="#e5e7eb" stroke-width="6" />
+                  <circle
+                    cx="40" cy="40" r="34" fill="none"
+                    stroke="${theme.stroke}" stroke-width="6" stroke-linecap="round"
+                    stroke-dasharray="${dashArr}"
+                    transform="rotate(-90 40 40)"
+                  />
+                </svg>
+                <div class="ja-kw-gauge-circle-label">
+                  <span class="ja-kw-pct-num" style="color:${theme.color}">${pctRounded}%</span>
+                  <span class="ja-kw-pct-sub">MATCH</span>
+                </div>
+              </div>
+              <div class="ja-kw-score-copy">
+                <div class="ja-kw-badge-row">
+                  <span class="ja-kw-status-badge" style="color:${theme.color};background:${theme.badgeBg}">${theme.label}</span>
+                </div>
+                <p class="ja-kw-line ja-kw-line-muted">
+                  <strong class="ja-kw-strong">${matched}</strong> of <strong class="ja-kw-strong">${total}</strong> keywords matched from the job description.
+                </p>
+                <div class="ja-kw-hilo">
+                  <span class="ja-kw-hilo-item">High: <strong class="ja-kw-strong">${highMatched}/${high.length}</strong></span>
+                  <span class="ja-kw-hilo-item">Low: <strong class="ja-kw-strong">${lowMatched}/${low.length}</strong></span>
+                </div>
+              </div>
+            </div>
+            <div class="ja-kw-tip-bar">
+              ${KEYWORD_TAB_ICONS.lightbulb}
+              <p class="ja-kw-tip-text">Aim for <strong>70%+</strong> match rate. Click &quot;Tailor&quot; to auto-optimize your resume for this role.</p>
+            </div>
+          </div>`;
+
     if (keywordsListEl) {
-      keywordsListEl.innerHTML = high.length || low.length ? `
-      ${high.length ? `<div class="ja-kw-priority-section">
-        <div class="ja-kw-priority-header">
-          <span class="ja-kw-priority-title">High Priority Keywords</span>
-          <span class="ja-kw-priority-count"><span class="ja-kw-check-icon">✓</span> ${highMatched}/${high.length}</span>
+      if (!high.length && !low.length) {
+        keywordsListEl.innerHTML = "";
+      } else {
+        keywordsListEl.innerHTML = `
+      ${high.length ? `<div class="ja-kw-priority-block">
+        <div class="ja-kw-priority-head">
+          <span class="ja-kw-priority-head-left"><span class="ja-kw-dot ja-kw-dot-high"></span><span class="ja-kw-priority-name">High Priority</span></span>
+          <span class="ja-kw-priority-meta">${highMatched}/${high.length} matched</span>
         </div>
-        <div class="ja-kw-grid">${highHtml}</div>
+        <div class="ja-kw-chip-grid">${highHtml}</div>
       </div>` : ""}
-      ${low.length ? `<div class="ja-kw-priority-section">
-        <div class="ja-kw-priority-header">
-          <span class="ja-kw-priority-title">Low Priority Keywords</span>
-          <span class="ja-kw-priority-count"><span class="ja-kw-check-icon">✓</span> ${lowMatched}/${low.length}</span>
+      ${low.length ? `<div class="ja-kw-priority-block">
+        <div class="ja-kw-priority-head">
+          <span class="ja-kw-priority-head-left"><span class="ja-kw-dot ja-kw-dot-low"></span><span class="ja-kw-priority-name">Low Priority</span></span>
+          <span class="ja-kw-priority-meta">${lowMatched}/${low.length} matched</span>
         </div>
-        <div class="ja-kw-grid">${lowHtml}</div>
+        <div class="ja-kw-chip-grid">${lowHtml}</div>
       </div>` : ""}
-      ` : "";
+      ${
+        suggestionsHtml
+          ? `<div class="ja-kw-suggest-card">
+        <div class="ja-kw-suggest-head">
+          ${KEYWORD_TAB_ICONS.trendingUp}
+          <span class="ja-kw-suggest-title">Quick Suggestions</span>
+        </div>
+        <p class="ja-kw-suggest-sub">Add these missing keywords to boost your score:</p>
+        <div class="ja-kw-suggest-pills">${suggestionsHtml}</div>
+      </div>`
+          : ""
+      }
+      `;
+      }
     }
     if (root && data.job_id != null) {
       root.dataset.lastJobId = String(data.job_id);
@@ -2985,7 +3426,7 @@ async function updateWidgetAuthUI(root) {
   if (!isHireMateOrigin && data.loginPageUrl) {
     try {
       isHireMateOrigin = new URL(data.loginPageUrl).origin === window.location.origin;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // 1) If no token in chrome.storage, try localStorage (when on HireMate frontend - same origin)
@@ -3038,6 +3479,8 @@ async function updateWidgetAuthUI(root) {
       }
     };
   });
+
+  void updateAutofillFooterStats(root);
 }
 
 function mountInPageUI() {
@@ -3050,7 +3493,7 @@ function mountInPageUI() {
     updateSavedTimeDisplay(existing);
     return;
   }
-  
+
   const root = document.createElement("div");
   root.id = INPAGE_ROOT_ID;
   root.innerHTML = `
@@ -3080,15 +3523,42 @@ function mountInPageUI() {
         max-height: calc(100vh - 140px);
       }
       #${INPAGE_ROOT_ID} .ja-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px 14px;
-        background: #fff;
-        border-bottom: 1px solid #e5e7eb;
-        cursor: move;
-        user-select: none;
+         display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding-left: 16px;   /* px-4 */
+  padding-right: 16px;
+  padding-top: 12px;    /* py-3 */
+   padding-bottom: 12px;
+
+  border-bottom: 1px solid #e5e7eb; /* border-border */
+  background-color: #ffffff;        /* bg-card */
       }
+  #${INPAGE_ROOT_ID} .icon-btn {
+  width: 28px;
+  height: 28px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 8px; /* rounded-lg */
+
+  color: #6b7280; /* muted text */
+  background: transparent;
+  border: none;
+  cursor: pointer;
+
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+  #${INPAGE_ROOT_ID} .icon-btn:hover {
+  background-color: #f3f4f6; /* muted background */
+}
+  #${INPAGE_ROOT_ID} .icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
       #${INPAGE_ROOT_ID} .ja-logo-wrap {
         display: flex;
         align-items: center;
@@ -3127,44 +3597,67 @@ function mountInPageUI() {
         gap: 4px;
       }
       #${INPAGE_ROOT_ID} .ja-head-btn:hover { color: #111; }
-      #${INPAGE_ROOT_ID} .ja-close {
-        width: 28px;
-        height: 28px;
-        border-radius: 50%;
-        padding: 0;
-        justify-content: center;
-        font-size: 18px;
-      }
+     #${INPAGE_ROOT_ID} .ja-close {
+  width: 28px;
+  height: 28px;
+
+  padding: 0;              /* IMPORTANT: remove extra padding */
+  border-radius: 8px;
+  display: flex;
+ align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+  #${INPAGE_ROOT_ID} .ja-close:hover {
+  background-color: #f3f4f6;
+  color: #111;
+}
+  #${INPAGE_ROOT_ID} .ja-close svg {
+  width: 16px;
+  height: 16px;
+}
       #${INPAGE_ROOT_ID} .ja-tabs {
-        display: flex;
-        padding: 0 10px 0 14px;
-        gap: 4px;
-        border-bottom: 1px solid #e5e7eb;
-        background: #fafafa;
-      }
+  display: flex;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff; /* bg-card */
+}
       #${INPAGE_ROOT_ID} .ja-tab {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 10px 12px;
-        font-size: 13px;
-        font-weight: 500;
-        color: #6b7280;
-        background: none;
-        border: none;
-        border-bottom: 2px solid transparent;
-        margin-bottom: -1px;
-        cursor: pointer;
-      }
-      #${INPAGE_ROOT_ID} .ja-tab:hover { color: #374151; }
-      #${INPAGE_ROOT_ID} .ja-tab.active {
-        color: #0ea5e9;
-        background: rgba(14, 165, 233, 0.08);
-        border-bottom-color: #0ea5e9;
-      }
-      #${INPAGE_ROOT_ID} .ja-tab svg { width: 16px; height: 16px; flex-shrink: 0; }
+  flex: 1; /* equal width like flex-1 */
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  padding: 10px 0; /* py-2.5 */
+  font-size: 12px; /* text-xs */
+  font-weight: 600;
+
+  color: #6b7280; /* muted */
+  background: none;
+  border: none;
+
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+
+  transition: all 0.2s ease;
+  position: relative;
+}
+    #${INPAGE_ROOT_ID} .ja-tab:hover {
+  color: #111827; /* hover:text-foreground */
+  background-color: rgba(243, 244, 246, 0.6); /* hover:bg-muted/30 */
+}
+  
+     #${INPAGE_ROOT_ID} .ja-tab.active {
+  color: #2563eb; /* primary */
+  border-bottom-color: #2563eb;
+}
+     #${INPAGE_ROOT_ID} .ja-tab svg {
+  width: 14px;
+  height: 14px;
+}
       #${INPAGE_ROOT_ID} .ja-body {
-        padding: 14px 16px;
+        padding: 6px 8px 10px;
         overflow-y: scroll;
         overflow-x: hidden;
         flex: 1;
@@ -3172,6 +3665,7 @@ function mountInPageUI() {
         -webkit-overflow-scrolling: touch;
         scrollbar-width: thin;
         scrollbar-color: #cbd5e1 #f1f5f9;
+        
       }
       #${INPAGE_ROOT_ID} .ja-body::-webkit-scrollbar { width: 6px; }
       #${INPAGE_ROOT_ID} .ja-body::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
@@ -3179,14 +3673,19 @@ function mountInPageUI() {
       #${INPAGE_ROOT_ID} .ja-body::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
       #${INPAGE_ROOT_ID} .ja-panel { display: none; }
       #${INPAGE_ROOT_ID} .ja-panel.active { display: block; }
-      #${INPAGE_ROOT_ID} .ja-autofill-box {
-        background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 50%, #3b82f6 100%);
-        border-radius: 10px;
-        padding: 14px 16px;
-        color: #fff;
-        margin-bottom: 12px;
-      }
-      #${INPAGE_ROOT_ID} .ja-autofill-box h3 {
+#${INPAGE_ROOT_ID} .ja-signin-cta.ja-autofill-box {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  border-radius: 16px;
+  padding: 18px;
+  color: #fff;
+  margin: 4px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+}
+      #${INPAGE_ROOT_ID} .ja-signin-cta.ja-autofill-box h3 {
         margin: 0 0 6px 0;
         font-size: 14px;
         font-weight: 600;
@@ -3195,146 +3694,313 @@ function mountInPageUI() {
         align-items: center;
         gap: 6px;
       }
-      #${INPAGE_ROOT_ID} .ja-autofill-box p {
-        margin: 0 0 12px 0;
-        font-size: 13px;
-        opacity: 0.95;
+      #${INPAGE_ROOT_ID} .ja-signin-cta.ja-autofill-box::before,
+      #${INPAGE_ROOT_ID} .ja-signin-cta.ja-autofill-box::after {
+        content: "";
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.08);
       }
-      #${INPAGE_ROOT_ID} .ja-status-area { display: flex; flex-direction: column; align-items: center; margin-bottom: 12px; }
+      #${INPAGE_ROOT_ID} .ja-signin-cta.ja-autofill-box::before {
+        width: 120px;
+        height: 120px;
+        top: -40px;
+        right: -40px;
+      }
+      #${INPAGE_ROOT_ID} .ja-signin-cta.ja-autofill-box::after {
+        width: 90px;
+        height: 90px;
+        bottom: -30px;
+        right: -20px;
+      }
+
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-wrap { padding: 2px 0 0; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero {
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 55%, #1d4ed8 100%);
+        border-radius: 12px;
+        padding: 12px;
+        color: #fff;
+        position: relative;
+        overflow: hidden;
+      }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-deco {
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.08);
+        pointer-events: none;
+      }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-deco-1 { width: 96px; height: 96px; top: -24px; right: -24px; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-deco-2 { width: 64px; height: 64px; bottom: -32px; right: -8px; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-inner { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 10px; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-title {
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #fff;
+        line-height: 1.25;
+      }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-title-ico { display: inline-flex; width: 16px; height: 16px; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero-title-ico .ja-hero-ico { width: 16px; height: 16px; stroke: currentColor; }
+      #${INPAGE_ROOT_ID} .ja-autofill-fields-badge {
+        font-size: 10px;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.2);
+        color: #fff;
+        white-space: nowrap;
+      }
+      #${INPAGE_ROOT_ID} .ja-status-area { display: flex; flex-direction: column; align-items: center; gap: 4px; }
       #${INPAGE_ROOT_ID} .ja-status-loader {
         width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.3);
         border-top-color: #fff; border-radius: 50%; animation: ja-spin 0.8s linear infinite;
-        margin-bottom: 8px; display: none;
+        margin-bottom: 4px; display: none;
       }
       #${INPAGE_ROOT_ID} .ja-status-area.loading .ja-status-loader { display: block; }
       @keyframes ja-spin { to { transform: rotate(360deg); } }
-      #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status { color: rgba(255,255,255,0.95); margin-bottom: 8px; min-height: 18px; font-size: 13px; text-align: center; font-weight: 600; }
-      #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status ul { margin: 0; padding-left: 18px; text-align: left; }
-      #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status li { margin: 4px 0; }
-      #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status .ja-note { color: #fef08a; font-weight: 500; }
-      #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status.loading { color: #fef08a; }
-      #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status.success { color: #86efac; font-weight: 600; }
-      #${INPAGE_ROOT_ID} .ja-autofill-box .ja-status.error { color: #fca5a5; font-weight: 600; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero .ja-status.ja-autofill-hero-sub {
+        color: rgba(255,255,255,0.88);
+        margin: 0;
+        min-height: 18px;
+        font-size: 11px;
+        text-align: center;
+        font-weight: 500;
+        line-height: 1.45;
+        width: 100%;
+      }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero .ja-status ul { margin: 0; padding-left: 18px; text-align: left; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero .ja-status li { margin: 4px 0; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero .ja-status .ja-note { color: #fef08a; font-weight: 500; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero .ja-status.loading { color: #fef9c3; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero .ja-status.success { color: #bbf7d0; font-weight: 600; }
+      #${INPAGE_ROOT_ID} .ja-autofill-hero .ja-status.error { color: #fecaca; font-weight: 600; }
       #${INPAGE_ROOT_ID} .ja-failed-field-link { background: none; border: none; padding: 0; margin: 2px 0; color: #fef08a; cursor: pointer; font-size: inherit; font-weight: 500; text-align: left; text-decoration: underline; }
       #${INPAGE_ROOT_ID} .ja-failed-field-link:hover { color: #fff; }
       #${INPAGE_ROOT_ID} .ja-failed-fields-list { margin: 4px 0 0 12px; padding-left: 0; list-style: none; }
       #${INPAGE_ROOT_ID} .ja-fields-need-attention { display: block; margin-bottom: 4px; }
-      #${INPAGE_ROOT_ID} .ja-progress {
-        width: 100%;
-        height: 4px;
-        background: rgba(255,255,255,0.3);
-        border-radius: 2px;
-        margin-bottom: 10px;
-        overflow: cover;
+
+      #${INPAGE_ROOT_ID} .ja-autofill-progress-block { margin-top: 2px; }
+      #${INPAGE_ROOT_ID} .ja-progress-label-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 10px;
+        margin-bottom: 6px;
       }
-      #${INPAGE_ROOT_ID} .ja-progress-bar {
+      #${INPAGE_ROOT_ID} .ja-progress-label-row .ja-progress-label { font-weight: 600; color: rgba(255,255,255,0.72); }
+      #${INPAGE_ROOT_ID} .ja-progress-label-row .ja-progress-pct { font-weight: 700; color: #fff; font-size: 10px; }
+      #${INPAGE_ROOT_ID} .ja-autofill-progress-track {
+        height: 6px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.22);
+        overflow: hidden;
+      }
+      #${INPAGE_ROOT_ID} .ja-autofill-progress-bar {
         height: 100%;
         width: 0%;
         background: #fff;
+        border-radius: 999px;
         transition: width 0.3s ease;
       }
-      #${INPAGE_ROOT_ID} .ja-action {
+
+      #${INPAGE_ROOT_ID} .ja-autofill-actions { display: flex; flex-direction: column; gap: 8px; }
+      #${INPAGE_ROOT_ID} .ja-btn-hero-fill {
         width: 100%;
-        padding: 10px 16px;
-        background: #fff;
-        color: #1d4ed8;
+        height: 36px;
         border: none;
-        border-radius: 8px;
-        font-size: 14px;
+        border-radius: 10px;
+        background: #fff;
+        color: #2563eb;
+        font-size: 13px;
         font-weight: 600;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.12);
+        transition: background 0.2s ease, opacity 0.2s ease;
       }
-      #${INPAGE_ROOT_ID} .ja-action-row { display: flex; gap: 8px; }
+      #${INPAGE_ROOT_ID} .ja-btn-hero-fill:hover:not(:disabled) { background: rgba(255,255,255,0.92); }
+      #${INPAGE_ROOT_ID} .ja-btn-hero-fill:disabled { opacity: 0.85; cursor: not-allowed; }
+      #${INPAGE_ROOT_ID} .ja-btn-fill-inner { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+      #${INPAGE_ROOT_ID} .ja-btn-fill-icon { display: inline-flex; width: 16px; height: 16px; color: #2563eb; }
+      #${INPAGE_ROOT_ID} .ja-btn-fill-icon .ja-hero-ico { width: 16px; height: 16px; stroke: currentColor; }
+      #${INPAGE_ROOT_ID} .ja-hero-ico { stroke: currentColor; }
+
+     #${INPAGE_ROOT_ID} .ja-action {
+  width: 100%;
+  height: 44px;
+
+  background: #ffffff;
+  color: #2563eb;
+
+  border: none;
+  border-radius: 12px;
+
+  font-size: 14px;
+  font-weight: 600;
+
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  transition: all 0.2s ease;
+}
+
+#${INPAGE_ROOT_ID} .ja-action:hover {
+  background: rgba(255,255,255,0.9);
+}
+      #${INPAGE_ROOT_ID} .ja-action-row { display: flex; gap: 8px; margin-top: 6px;}
       #${INPAGE_ROOT_ID} .ja-action { flex: 1; }
       #${INPAGE_ROOT_ID} .ja-action:hover { background: #f0fdfa; }
       #${INPAGE_ROOT_ID} .ja-action:disabled { opacity: 0.6; cursor: not-allowed; }
-      #${INPAGE_ROOT_ID} .ja-fill-controls { display: none; gap: 8px; align-items: center; margin-top: 8px; }
+      #${INPAGE_ROOT_ID} .ja-fill-controls { display: none; flex-direction: column; gap: 6px; margin-top: 0; }
       #${INPAGE_ROOT_ID} .ja-fill-controls.visible { display: flex; }
       #${INPAGE_ROOT_ID} .ja-fill-controls .ja-fill-label { font-size: 12px; color: rgba(255,255,255,0.9); font-weight: 600; }
+      #${INPAGE_ROOT_ID} .ja-fill-controls-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
       #${INPAGE_ROOT_ID} .ja-stop { padding: 8px 14px; background: #dc2626; color: #fff; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; }
       #${INPAGE_ROOT_ID} .ja-stop:hover { background: #b91c1c; }
       #${INPAGE_ROOT_ID} .ja-skip-next { padding: 8px 14px; background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; }
       #${INPAGE_ROOT_ID} .ja-skip-next:hover { background: rgba(255,255,255,0.3); }
-      #${INPAGE_ROOT_ID} .ja-continue-fill { width: 100%; padding: 10px 16px; background: #16a34a; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; }
+      #${INPAGE_ROOT_ID} .ja-continue-fill { width: 100%; padding: 10px 16px; background: #16a34a; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 0; }
       #${INPAGE_ROOT_ID} .ja-continue-fill:hover { background: #15803d; }
-      #${INPAGE_ROOT_ID} .ja-auto-advance { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: rgba(255,255,255,0.9); cursor: pointer; }
+      #${INPAGE_ROOT_ID} .ja-auto-advance { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.88); cursor: pointer; }
       #${INPAGE_ROOT_ID} .ja-auto-advance input { cursor: pointer; }
-      #${INPAGE_ROOT_ID} .ja-cache-enable { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.9); cursor: pointer; }
+    #${INPAGE_ROOT_ID} .ja-cache-enable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255,255,255,0.88);
+  font-size: 11px;
+  margin-top: 2px;
+}
       #${INPAGE_ROOT_ID} .ja-cache-enable input { cursor: pointer; }
-      #${INPAGE_ROOT_ID} .ja-footer-links {
+
+      #${INPAGE_ROOT_ID} .ja-autofill-footer-stats {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-top: 12px;
-        padding-top: 10px;
+        gap: 8px;
+        padding: 8px 6px;
+        font-size: 10px;
+        color: #64748b;
+        background: rgba(241, 245, 249, 0.65);
         border-top: 1px solid #e5e7eb;
       }
-      #${INPAGE_ROOT_ID} .ja-footer-link {
-        background: none;
-        border: none;
-        color: #0284c7;
-        font-size: 13px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0;
-      }
-      #${INPAGE_ROOT_ID} .ja-footer-link:hover { text-decoration: underline; }
-      #${INPAGE_ROOT_ID} .ja-accordions {
-        margin-bottom: 12px;
-        margin-top: 12px;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        overflow: hidden;
-        background: #fff;
-      }
-      #${INPAGE_ROOT_ID} .ja-accordion-item {
-        border-bottom: 1px solid #e5e7eb;
-      }
+      #${INPAGE_ROOT_ID} .ja-autofill-footer-item { display: inline-flex; align-items: center; gap: 4px; }
+      #${INPAGE_ROOT_ID} .ja-autofill-footer-ico { display: inline-flex; width: 12px; height: 12px; }
+      #${INPAGE_ROOT_ID} .ja-autofill-footer-ico .ja-q-svg { width: 12px; height: 12px; stroke: #64748b; }
+  #${INPAGE_ROOT_ID} .ja-footer-links {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 0;
+  border-top: 1px solid #e5e7eb;
+}
+  #${INPAGE_ROOT_ID} .ja-footer-link:not(:last-child) {
+  border-right: 1px solid #e5e7eb;
+}
+     #${INPAGE_ROOT_ID} .ja-footer-link {
+  min-height: 36px;
+  padding: 10px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2563eb;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+  #${INPAGE_ROOT_ID} .ja-footer-link:hover {
+  background-color: rgba(37, 99, 235, 0.08);
+  text-decoration: none;
+}
+      #${INPAGE_ROOT_ID} .ja-footer-link-ico {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+}
+      #${INPAGE_ROOT_ID} .ja-footer-link-ico svg {
+  width: 12px;
+  height: 12px;
+}
+#${INPAGE_ROOT_ID} .ja-accordions {
+  margin: 6px 0 0;
+  background: #ffffff;
+  border-top: 1px solid #e5e7eb;
+}
+        
+     #${INPAGE_ROOT_ID} .ja-accordion-item {
+  border-bottom: 1px solid #e5e7eb;
+}
       #${INPAGE_ROOT_ID} .ja-accordion-item:last-child { border-bottom: none; }
-      #${INPAGE_ROOT_ID} .ja-accordion-header {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 14px;
-        background: none;
-        border: none;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: 500;
-        color: #374151;
-        text-align: left;
-      }
-      #${INPAGE_ROOT_ID} .ja-accordion-header:hover { background: #f9fafb; }
-      #${INPAGE_ROOT_ID} .ja-accordion-icon {
-        width: 36px;
-        height: 36px;
-        border-radius: 8px;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      #${INPAGE_ROOT_ID} .ja-accordion-icon svg {
-        width: 20px;
-        height: 20px;
-        fill: none;
-        stroke: #374151;
-        stroke-width: 2;
-      }
+     #${INPAGE_ROOT_ID} .ja-accordion-header {
+  width: 100%;
+
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  padding: 10px 8px;
+
+  background: transparent;
+  border: none;
+
+  cursor: pointer;
+  text-align: left;
+
+  transition: background-color 0.2s ease;
+}
+     #${INPAGE_ROOT_ID} .ja-accordion-header:hover {
+  background-color: rgba(243, 244, 246, 0.6); /* muted/30 */
+}
+     #${INPAGE_ROOT_ID} .ja-accordion-icon {
+  width: 32px;
+  height: 32px;
+
+  border-radius: 8px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  flex-shrink: 0;
+}
+     #${INPAGE_ROOT_ID} .ja-accordion-icon svg {
+  width: 16px;
+  height: 16px;
+
+  stroke: #374151;
+  stroke-width: 2;
+}
+  #${INPAGE_ROOT_ID} .ja-icon-zap { 
+  color:#ffffff;
+}
+
       #${INPAGE_ROOT_ID} .ja-accordion-title-wrap {
         flex: 1;
         display: flex;
         align-items: center;
         gap: 6px;
       }
-      #${INPAGE_ROOT_ID} .ja-accordion-title { font-weight: 500; }
+      #${INPAGE_ROOT_ID} .ja-accordion-title { font-weight: 600; color: #111827; }
       #${INPAGE_ROOT_ID} .ja-accordion-help {
         width: 18px;
         height: 18px;
@@ -3350,46 +4016,358 @@ function mountInPageUI() {
       #${INPAGE_ROOT_ID} .ja-accordion-status {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
         font-size: 12px;
         color: #9ca3af;
         font-weight: 400;
       }
+      #${INPAGE_ROOT_ID} .ja-accordion-status-text {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 9999px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #6b7280;
+        background: #f3f4f6;
+      }
       #${INPAGE_ROOT_ID} .ja-accordion-check {
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: #9ca3af;
-        color: #fff;
-        font-size: 10px;
-        display: flex;
+        display: inline-flex;
         align-items: center;
         justify-content: center;
+        flex-shrink: 0;
+        line-height: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-accordion-check .ja-resume-check-img {
+        width: 14px;
+        height: 14px;
+        display: block;
       }
       #${INPAGE_ROOT_ID} .ja-accordion-chevron {
         font-size: 10px;
         color: #6b7280;
         transition: transform 0.2s;
       }
+/* container like Tailwind: rounded + overflow hidden */
+.ja-resume-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+  margin-top: 12px;
+}
+
+.ja-resume-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  gap: 10px;
+}
+
+.ja-resume-row:not(:last-child) {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+/* left label */
+.ja-resume-label {
+  color: #6b7280;
+  font-weight: 500;
+  min-width: 130px;  /* 🔥 fixed label width */
+}
+
+/* right side */
+.ja-resume-value-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+  flex: 1;
+}
+
+/* ✅ NO MULTILINE EVER */
+.ja-resume-value {
+  color: #111827;
+  font-weight: 600;
+  font-size: 13px;
+
+  white-space: nowrap;   /* 🔥 SINGLE LINE */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ✅ ICON ALWAYS VISIBLE */
+.ja-check-icon {
+  flex-shrink: 0;
+}
+
+.ja-check-icon img,
+.ja-check-icon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.ja-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Shared base (IMPORTANT - avoids duplication) */
+.ja-btn,
+.ja-btn-icon {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Main buttons */
+.ja-btn {
+  flex: 1;
+  height: 30px;
+  font-size: 14px;
+  gap: 4px;
+  color: #111827;
+  font-weight: 600;
+}
+
+.ja-btn:hover {
+  background: #f3f4f6; /* slightly better than fafb */
+}
+
+/* Icon only button */
+.ja-btn-icon {
+  width: 28px;
+  height: 28px;
+  font-weight: 600;
+}
+
+.ja-btn-icon:hover {
+  background: #f3f4f6;
+}
+
+/* Icon */
+.ja-icon {
+  width: 18px;
+  height: 18px;
+
+  stroke-width: 2; /* 🔥 important for lucide look */
+}
+
+
       #${INPAGE_ROOT_ID} .ja-accordion-item.expanded .ja-accordion-chevron { transform: rotate(180deg); }
       #${INPAGE_ROOT_ID} .ja-accordion-body { border-top: 1px solid #e5e7eb; }
       #${INPAGE_ROOT_ID} .ja-resume-accordion-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
       #${INPAGE_ROOT_ID} .ja-resume-accordion-row .ja-resume-select { flex: 1; padding: 6px 10px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 13px; }
       #${INPAGE_ROOT_ID} .ja-resume-preview-hint { font-size: 11px; color: #6b7280; margin: 4px 0 0 0; }
-      #${INPAGE_ROOT_ID} .ja-cover-letter-preview { margin-bottom: 10px; padding: 8px; background: #f9fafb; border-radius: 6px; max-height: 200px; overflow-y: auto; font-size: 12px; line-height: 1.5; }
-      #${INPAGE_ROOT_ID} .ja-cover-letter-job { font-weight: 600; margin: 0 0 6px 0; font-size: 12px; }
-      #${INPAGE_ROOT_ID} .ja-cover-letter-text { white-space: pre-wrap; word-break: break-word; }
-      #${INPAGE_ROOT_ID} .ja-questions-list { max-height: 240px; overflow-y: auto; }
-      #${INPAGE_ROOT_ID} .ja-question-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid #f3f4f6; font-size: 12px; }
-      #${INPAGE_ROOT_ID} .ja-question-label { flex: 0 0 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #374151; }
-      #${INPAGE_ROOT_ID} .ja-question-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6b7280; }
-      #${INPAGE_ROOT_ID} .ja-field-type-badge { flex-shrink: 0; font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
-      #${INPAGE_ROOT_ID} .ja-field-type-select   { background: #dbeafe; color: #1d4ed8; }
-      #${INPAGE_ROOT_ID} .ja-field-type-date      { background: #fef9c3; color: #854d0e; }
-      #${INPAGE_ROOT_ID} .ja-field-type-textarea  { background: #dcfce7; color: #166534; }
-      #${INPAGE_ROOT_ID} .ja-field-type-input     { background: #f3f4f6; color: #4b5563; }
+/* Container (your Tailwind equivalent) */
+#${INPAGE_ROOT_ID} .ja-cover-box {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f9fafb;
+  margin-bottom: 10px;
+}
+
+/* Job title */
+#${INPAGE_ROOT_ID} .ja-cover-letter-job {
+  font-weight: 600;
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  color: #111827;
+}
+
+/* Letter text */
+#${INPAGE_ROOT_ID} .ja-cover-letter-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #374151;
+
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+      /* Unique Questions — card stack (Tailwind: space-y-2, rounded-lg border p-3) */
+      #${INPAGE_ROOT_ID} .ja-uq-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 280px;
+        overflow-y: auto;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        background: #fff;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-qrow {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-help {
+        flex-shrink: 0;
+        margin-top: 2px;
+        color: #a855f7;
+        display: flex;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-help .ja-q-svg { width: 14px; height: 14px; }
+      #${INPAGE_ROOT_ID} .ja-uq-question {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 600;
+        color: #111827;
+        line-height: 1.35;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-body {
+        margin-top: 8px;
+        margin-left: 22px;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-body-empty {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+        margin-left: 22px;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-answer {
+        margin: 0 0 6px 0;
+        font-size: 12px;
+        color: #6b7280;
+        line-height: 1.5;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-foot {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      #${INPAGE_ROOT_ID} .ja-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 0 6px;
+        height: 16px;
+        border-radius: 6px;
+      }
+      #${INPAGE_ROOT_ID} .ja-badge-ai {
+        background: #f3f4f6;
+        color: #4b5563;
+        border: none;
+      }
+      #${INPAGE_ROOT_ID} .ja-badge-ai .ja-q-svg-tiny { width: 10px; height: 10px; stroke-width: 2; }
+      #${INPAGE_ROOT_ID} .ja-badge-need {
+        background: transparent;
+        color: #d97706;
+        border: 1px solid rgba(217, 119, 6, 0.35);
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-textbtn {
+        border: none;
+        background: none;
+        padding: 0;
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 600;
+        color: #2563eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-textbtn:hover { text-decoration: underline; }
+      #${INPAGE_ROOT_ID} .ja-uq-textbtn-wand {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+      }
+      #${INPAGE_ROOT_ID} .ja-uq-textbtn-wand .ja-q-svg-tiny { width: 10px; height: 10px; }
+
+      /* Common Questions — bordered list + footer (muted/30 bar) + meta row */
+      #${INPAGE_ROOT_ID} .ja-cq-shell {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fff;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        font-size: 12px;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-row-b { border-bottom: 1px solid #e5e7eb; }
+      #${INPAGE_ROOT_ID} .ja-cq-q {
+        flex: 1;
+        min-width: 0;
+        color: #6b7280;
+        line-height: 1.35;
+        padding-right: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-ans {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-val {
+        font-weight: 500;
+        color: #111827;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-ico { display: flex; }
+      #${INPAGE_ROOT_ID} .ja-cq-ico .ja-q-svg { width: 12px; height: 12px; }
+      #${INPAGE_ROOT_ID} .ja-cq-ico .ja-cq-state { color: #22c55e; }
+      #${INPAGE_ROOT_ID} .ja-cq-ico .ja-cq-warn { color: #d97706; }
+      #${INPAGE_ROOT_ID} .ja-cq-editbar {
+        padding: 8px 12px;
+        background: rgba(243, 244, 246, 0.85);
+        border-top: 1px solid #e5e7eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-editall {
+        border: none;
+        background: none;
+        padding: 0;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        color: #2563eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-editall:hover { text-decoration: underline; }
+      #${INPAGE_ROOT_ID} .ja-cq-editall .ja-q-svg-tiny { width: 10px; height: 10px; }
+      #${INPAGE_ROOT_ID} .ja-cq-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid #e5e7eb;
+        font-size: 11px;
+        color: #9ca3af;
+      }
+      #${INPAGE_ROOT_ID} .ja-cq-meta-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      #${INPAGE_ROOT_ID} .ja-q-meta { width: 12px; height: 12px; stroke-width: 2; }
       #${INPAGE_ROOT_ID} .ja-accordion-content {
-        padding: 12px 14px;
+        padding: 10px 8px;
         font-size: 13px;
         color: #6b7280;
       }
@@ -3408,8 +4386,8 @@ function mountInPageUI() {
         padding: 8px 10px;
         background: #f9fafb;
         border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        margin-bottom: 10px;
+        
+        
       }
       #${INPAGE_ROOT_ID} .ja-resume-row span { flex: 1; font-size: 13px; color: #374151; }
       #${INPAGE_ROOT_ID} .ja-resume-row button {
@@ -3428,19 +4406,25 @@ function mountInPageUI() {
         background: #fff;
         margin-bottom: 10px;
       }
-      #${INPAGE_ROOT_ID} .ja-update-jd-btn {
+      #${INPAGE_ROOT_ID} .ja-kw-update-jd-btn {
         width: 100%;
-        padding: 10px;
-        background: #e0f2fe;
-        color: #0369a1;
-        border: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 8px 12px;
+        margin-top: 0;
+        background: #fff;
+        color: #111827;
+        border: 1px solid #e5e7eb;
         border-radius: 8px;
-        font-size: 14px;
+        font-size: 12px;
         font-weight: 600;
         cursor: pointer;
-        margin-top: 8px;
+        transition: background 0.15s, border-color 0.15s;
       }
-      #${INPAGE_ROOT_ID} .ja-update-jd-btn:hover { background: #bae6fd; }
+      #${INPAGE_ROOT_ID} .ja-kw-update-jd-btn .ja-kw-ico { width: 12px; height: 12px; flex-shrink: 0; }
+      #${INPAGE_ROOT_ID} .ja-kw-update-jd-btn:hover { background: #f9fafb; border-color: #d1d5db; }
       #${INPAGE_ROOT_ID} .ja-job-form input, #${INPAGE_ROOT_ID} .ja-job-form select, #${INPAGE_ROOT_ID} .ja-job-form textarea {
         width: 100%;
         padding: 8px 10px;
@@ -3456,371 +4440,544 @@ function mountInPageUI() {
       #${INPAGE_ROOT_ID} .ja-job-form-actions button { flex: 1; padding: 10px; border-radius: 8px; font-weight: 600; cursor: pointer; }
       #${INPAGE_ROOT_ID} .ja-go-back-btn { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
       #${INPAGE_ROOT_ID} .ja-save-job-btn { background: #2563eb; color: #fff; border: none; }
-      #${INPAGE_ROOT_ID} .ja-tailor-btn {
-        width: 100%;
-        padding: 10px;
-        background: #e0f2fe;
-        color: #0369a1;
+      /* Keywords tab — layout + score card + chip grid (Tailwind/shadcn-style) */
+      #${INPAGE_ROOT_ID} .ja-kw-tab {
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-active-resume-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-active-resume-field {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-label-upper {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #9ca3af;
+        margin: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-resume-select {
+        height: 32px;
+        padding: 4px 8px;
+        font-size: 12px;
+        margin-bottom: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-tailor-btn {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        height: 32px;
+        margin-top: 18px;
+        padding: 0 12px;
+        background: #2563eb;
+        color: #fff;
         border: none;
         border-radius: 8px;
-        font-size: 14px;
+        font-size: 12px;
         font-weight: 600;
         cursor: pointer;
-        margin-bottom: 12px;
+        transition: background 0.15s;
       }
-      #${INPAGE_ROOT_ID} .ja-tailor-btn:hover { background: #bae6fd; }
+      #${INPAGE_ROOT_ID} .ja-kw-tailor-btn .ja-kw-ico { width: 12px; height: 12px; stroke-width: 2; }
+      #${INPAGE_ROOT_ID} .ja-kw-tailor-btn:hover { background: #1d4ed8; }
       #${INPAGE_ROOT_ID} .ja-keyword-card {
         background: #fff;
         border: 1px solid #e5e7eb;
         border-radius: 10px;
-        padding: 12px 14px;
-        margin-bottom: 12px;
+        margin-bottom: 0;
       }
-      #${INPAGE_ROOT_ID} .ja-keyword-card.ja-loading { position: relative; }
+      #${INPAGE_ROOT_ID} .ja-kw-score-card { padding: 0; overflow: hidden; }
+      #${INPAGE_ROOT_ID} .ja-keyword-card.ja-loading { position: relative; min-height: 80px; }
       #${INPAGE_ROOT_ID} .ja-keyword-card.ja-loading::after {
         content: ""; position: absolute; top: 50%; left: 50%; margin: -12px 0 0 -12px;
         width: 24px; height: 24px; border: 2px solid #e5e7eb; border-top-color: #2563eb;
         border-radius: 50%; animation: ja-spin 0.8s linear infinite;
       }
-      #${INPAGE_ROOT_ID} .ja-keyword-card h4 {
-        margin: 0 0 8px 0;
-        font-size: 13px;
+      #${INPAGE_ROOT_ID} .ja-keyword-card .ja-score-text { font-size: 12px; color: #6b7280; margin-bottom: 0; padding: 12px 14px; }
+      #${INPAGE_ROOT_ID} .ja-kw-score-empty { padding: 12px 14px; }
+      #${INPAGE_ROOT_ID} .ja-kw-score-main {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 16px;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge-circle-wrap {
+        position: relative;
+        width: 80px;
+        height: 80px;
+        flex-shrink: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge-circle {
+        width: 80px;
+        height: 80px;
+        display: block;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-gauge-circle-label {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-pct-num {
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-pct-sub {
+        font-size: 8px;
         font-weight: 600;
-        color: #111;
+        color: #9ca3af;
+        margin-top: 2px;
+        letter-spacing: 0.02em;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-score-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+      #${INPAGE_ROOT_ID} .ja-kw-badge-row { display: flex; align-items: center; gap: 6px; }
+      #${INPAGE_ROOT_ID} .ja-kw-status-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 6px;
+        border: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-line { margin: 0; font-size: 12px; line-height: 1.45; }
+      #${INPAGE_ROOT_ID} .ja-kw-line-muted { color: #6b7280; }
+      #${INPAGE_ROOT_ID} .ja-kw-strong { color: #111827; font-weight: 600; }
+      #${INPAGE_ROOT_ID} .ja-kw-hilo { display: flex; gap: 12px; font-size: 10px; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-kw-tip-bar {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 16px;
+        border-top: 1px solid #e5e7eb;
+        background: rgba(37, 99, 235, 0.04);
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-tip-bar .ja-kw-ico-tip {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        margin-top: 2px;
+        color: #2563eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-tip-text { margin: 0; font-size: 11px; color: #111827; line-height: 1.4; }
+      #${INPAGE_ROOT_ID} .ja-keyword-keywords-list {
+        margin-top: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        max-height: 320px;
+        overflow-y: auto;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-priority-block { display: flex; flex-direction: column; gap: 8px; }
+      #${INPAGE_ROOT_ID} .ja-kw-priority-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-priority-head-left {
         display: flex;
         align-items: center;
         gap: 6px;
       }
-      #${INPAGE_ROOT_ID} .ja-keyword-card .ja-score-text { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
-      #${INPAGE_ROOT_ID} .ja-kw-match-header { margin-bottom: 14px; }
-      #${INPAGE_ROOT_ID} .ja-kw-match-title-row { margin-bottom: 10px; }
-      #${INPAGE_ROOT_ID} .ja-kw-match-title { margin: 0; font-size: 14px; font-weight: 700; color: #0f172a; }
-      #${INPAGE_ROOT_ID} .ja-kw-status-label.ja-status-needs-work { color: #d97706; font-weight: 700; }
-      #${INPAGE_ROOT_ID} .ja-kw-status-label.ja-status-great { color: #16a34a; font-weight: 700; }
-      #${INPAGE_ROOT_ID} .ja-kw-score-row { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 10px; }
-      #${INPAGE_ROOT_ID} .ja-kw-score-text-wrap { flex: 1; min-width: 0; }
-      #${INPAGE_ROOT_ID} .ja-kw-gauge-wrap { position: relative; flex-shrink: 0; width: 90px; height: 50px; }
-      #${INPAGE_ROOT_ID} .ja-kw-gauge { width: 90px; height: 48px; display: block; }
-      #${INPAGE_ROOT_ID} .ja-kw-gauge-bg { stroke: #e5e7eb; }
-      #${INPAGE_ROOT_ID} .ja-kw-gauge-fill { stroke: #2563eb; transition: stroke-dashoffset 0.4s ease; }
-      #${INPAGE_ROOT_ID} .ja-kw-gauge-value { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); font-size: 15px; font-weight: 700; color: #1e40af; }
-      #${INPAGE_ROOT_ID} .ja-keyword-keywords-list { margin-top: 16px; }
-      #${INPAGE_ROOT_ID} .ja-kw-progress-bar { height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin: 10px 0 0 0; }
-      #${INPAGE_ROOT_ID} .ja-kw-progress-fill { height: 100%; background: #2563eb; border-radius: 4px; transition: width 0.4s ease; }
-      #${INPAGE_ROOT_ID} .ja-kw-tip-card { display: flex; align-items: flex-start; gap: 8px; width: 100%; margin-top: 0; padding: 10px 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; font-size: 12px; color: #1e40af; }
-      #${INPAGE_ROOT_ID} .ja-kw-tip-icon { font-size: 16px; flex-shrink: 0; }
-      #${INPAGE_ROOT_ID} .ja-kw-priority-count .ja-kw-check-icon { color: #2563eb; font-weight: 700; margin-right: 2px; }
-      #${INPAGE_ROOT_ID} .ja-keyword-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px 10px;
-        font-size: 12px;
-      }
-      #${INPAGE_ROOT_ID} .ja-kw-matched { color: #2563eb; font-weight: 500; }
-      #${INPAGE_ROOT_ID} .ja-kw-unmatched { color: #6b7280; }
-      /* High/Low Priority sections - professional card style */
-      #${INPAGE_ROOT_ID} .ja-kw-priority-section {
-        margin-bottom: 14px;
-        background: #fff;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
-        overflow: hidden;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-      }
-      #${INPAGE_ROOT_ID} .ja-kw-priority-section:last-child { margin-bottom: 0; }
-      #${INPAGE_ROOT_ID} .ja-kw-priority-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 10px 14px;
-        background: #f8fafc;
-        border-bottom: 1px solid #e5e7eb;
-      }
-      #${INPAGE_ROOT_ID} .ja-kw-priority-title {
-        font-size: 13px;
-        font-weight: 600;
-        color: #0f172a;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-      }
-      #${INPAGE_ROOT_ID} .ja-kw-priority-count {
-        font-size: 13px;
-        font-weight: 600;
-        color: #2563eb;
-      }
-      #${INPAGE_ROOT_ID} .ja-kw-grid {
+      #${INPAGE_ROOT_ID} .ja-kw-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+      #${INPAGE_ROOT_ID} .ja-kw-dot-high { background: #ef4444; }
+      #${INPAGE_ROOT_ID} .ja-kw-dot-low { background: #f59e0b; }
+      #${INPAGE_ROOT_ID} .ja-kw-priority-name { font-size: 12px; font-weight: 700; color: #111827; }
+      #${INPAGE_ROOT_ID} .ja-kw-priority-meta { font-size: 10px; font-weight: 600; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-kw-chip-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 8px 14px;
-        font-size: 12px;
-        padding: 12px 14px;
+        gap: 6px;
       }
-      #${INPAGE_ROOT_ID} .ja-kw-item {
+      #${INPAGE_ROOT_ID} .ja-kw-chip {
         display: flex;
         align-items: center;
         gap: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+        background: #fff;
+        transition: background 0.15s;
       }
-      #${INPAGE_ROOT_ID} .ja-kw-check {
+      #${INPAGE_ROOT_ID} .ja-kw-chip--on {
+        border-color: rgba(34, 197, 94, 0.35);
+        background: rgba(34, 197, 94, 0.06);
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-chip--off:hover { background: rgba(243, 244, 246, 0.7); }
+      #${INPAGE_ROOT_ID} .ja-kw-chip-box {
         width: 16px;
         height: 16px;
-        border-radius: 3px;
+        border-radius: 4px;
         flex-shrink: 0;
         display: flex;
         align-items: center;
         justify-content: center;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-chip--on .ja-kw-chip-box {
+        background: #22c55e;
         color: #fff;
-        font-size: 10px;
-        font-weight: bold;
       }
-      #${INPAGE_ROOT_ID} .ja-kw-check.ja-matched {
-        background: #2563eb;
+      #${INPAGE_ROOT_ID} .ja-kw-chip--off .ja-kw-chip-box {
+        background: #e5e7eb;
       }
-      #${INPAGE_ROOT_ID} .ja-kw-check.ja-unmatched {
-        background: #6b7280;
+      #${INPAGE_ROOT_ID} .ja-kw-chip-check { width: 10px; height: 10px; stroke: currentColor; }
+      #${INPAGE_ROOT_ID} .ja-kw-chip-name {
+        flex: 1;
+        min-width: 0;
+        font-size: 11px;
+        line-height: 1.25;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
-      #${INPAGE_ROOT_ID} .ja-panel-profile .ja-profile-authenticated {
-        padding-bottom: 16px;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-cards {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
-        margin-bottom: 16px;
-        margin-left:10px;
-        margin-right:10px;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
+      #${INPAGE_ROOT_ID} .ja-kw-chip--on .ja-kw-chip-name { color: #111827; font-weight: 600; }
+      #${INPAGE_ROOT_ID} .ja-kw-chip--off .ja-kw-chip-name { color: #9ca3af; font-weight: 400; }
+      #${INPAGE_ROOT_ID} .ja-kw-chip-freq { font-size: 9px; font-weight: 600; color: #9ca3af; flex-shrink: 0; }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-card {
+        border: 1px solid #e5e7eb;
         border-radius: 10px;
-        padding: 14px 16px;
+        padding: 12px;
+        background: #fff;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-head .ja-kw-ico { width: 14px; height: 14px; color: #2563eb; }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-title { font-size: 12px; font-weight: 700; color: #111827; }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-sub { margin: 0 0 8px 0; font-size: 11px; color: #6b7280; }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 8px;
+        font-size: 10px;
+        font-weight: 500;
+        color: #374151;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 9999px;
+        cursor: default;
+      }
+      #${INPAGE_ROOT_ID} .ja-kw-suggest-pill:hover {
+        background: rgba(37, 99, 235, 0.06);
+        color: #2563eb;
+        border-color: rgba(37, 99, 235, 0.25);
+      }
+      /* Profile tab — stats, hero, contact rows, sections (Tailwind/shadcn-style) */
+      #${INPAGE_ROOT_ID} .ja-panel-profile .ja-profile-authenticated { padding: 0; }
+      #${INPAGE_ROOT_ID} .ja-profile-tab {
+        border-top: 1px solid #e5e7eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-profile-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-profile-stat {
+        text-align: center;
+        padding: 12px 8px;
+        border-right: 1px solid #e5e7eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-profile-stat:last-child { border-right: none; }
+      #${INPAGE_ROOT_ID} .ja-profile-stat-val {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+        color: #111827;
+        line-height: 1.2;
+      }
+      #${INPAGE_ROOT_ID} .ja-profile-stat-success { color: #16a34a; }
+      #${INPAGE_ROOT_ID} .ja-profile-stat-primary { color: #2563eb; }
+      #${INPAGE_ROOT_ID} .ja-profile-stat-label {
+        margin: 4px 0 0 0;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #9ca3af;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-hero-wrap {
+        padding: 16px;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-hero {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      #${INPAGE_ROOT_ID} .ja-avatar.ja-avatar-gradient {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #2563eb 0%, #60a5fa 100%);
+        color: #fff;
+        font-weight: 700;
+        font-size: 14px;
+        flex-shrink: 0;
+        box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-hero-text { flex: 1; min-width: 0; }
+      #${INPAGE_ROOT_ID} .ja-profile-name { margin: 0; font-size: 14px; font-weight: 700; color: #111827; line-height: 1.25; }
+      #${INPAGE_ROOT_ID} .ja-profile-title { margin: 2px 0 0 0; font-size: 12px; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-prof-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-act-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 24px;
+        padding: 0 8px;
+        font-size: 10px;
+        font-weight: 600;
+        color: #374151;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
         cursor: pointer;
         transition: background 0.15s, border-color 0.15s;
       }
-      #${INPAGE_ROOT_ID} .ja-profile-card:hover {
-        background: #f1f5f9;
-        border-color: #cbd5e1;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-card h4 { margin: 0 0 6px 0; font-size: 14px; font-weight: 600; color: #0f172a; }
-      #${INPAGE_ROOT_ID} .ja-profile-card p { margin: 0; font-size: 12px; color: #64748b; line-height: 1; }
-      #${INPAGE_ROOT_ID} .ja-copy-tip {
-        background: #f8fafc;
-        color: #64748b;
-        padding: 10px 14px;
-        margin: 0 10px 14px 10px;
-        border-radius: 8px;
-        font-size: 11px;
-        line-height: 1.4;
-        border: 1px solid #e2e8f0;
-      }
-      /* Profile card container: clean SaaS look */
-      #${INPAGE_ROOT_ID} .ja-profile-card-container {
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 20px;
-        box-shadow: 0 1px 3px rgba(15,23,42,0.08);
-        border: 1px solid #e2e8f0;
-        margin: 0 10px 16px 10px;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-section {
-        padding: 14px 0;
-        border-bottom: 1px solid #e2e8f0;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-section:first-child { padding-top: 4px; }
-      #${INPAGE_ROOT_ID} .ja-profile-section:last-child { border-bottom: none; padding-bottom: 4px; }
-      #${INPAGE_ROOT_ID} .ja-profile-section h4 {
-        margin: 0 0 8px 0;
-        font-size: 13px;
-        font-weight: 600;
-        color: #334155;
-        letter-spacing: 0.01em;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-section .ja-value {
-        font-size: 13px;
-        color: #1e293b;
-        line-height: 1;
-        word-break: break-word;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-main { margin-top: 4px; margin-bottom:20px }
-      #${INPAGE_ROOT_ID} .ja-profile-main .ja-profile-card-container { display: flex; flex-direction: column; gap: 14px; }
-      #${INPAGE_ROOT_ID} .ja-profile-header {
+      #${INPAGE_ROOT_ID} .ja-prof-act-btn:hover { background: #f9fafb; border-color: #d1d5db; }
+      #${INPAGE_ROOT_ID} .ja-prof-act-btn .ja-prof-btn-ico { width: 10px; height: 10px; flex-shrink: 0; }
+      #${INPAGE_ROOT_ID} .ja-prof-contact-grid { display: flex; flex-direction: column; gap: 2px; }
+      #${INPAGE_ROOT_ID} .ja-prof-contact-row {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 8px;
-        flex-wrap: wrap;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-name { font-size: 18px; font-weight: 700; color: #0f172a; line-height:1; }
-      #${INPAGE_ROOT_ID} .ja-profile-title { font-size: 13px; color: #64748b; margin-top: 2px; }
-      #${INPAGE_ROOT_ID} .ja-avatar {
-        width: 48px;
-        height: 48px;
-        border-radius: 50%;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: linear-gradient(135deg,#2563eb 0%,#3b82f6 100%);
-        color: white;
-        font-weight: 700;
-        font-size: 16px;
-        flex-shrink: 0;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-header-actions { display: flex; gap: 6px; }
-      #${INPAGE_ROOT_ID} .ja-profile-btn {
-        font-size: 11px;
-        padding: 4px 10px;
-        border: 1px solid #cbd5e1;
-        background: #fff;
-        color: #475569;
-        border-radius: 6px;
-        cursor: pointer;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
-      #${INPAGE_ROOT_ID} .ja-profile-contact {
-        font-size: 13px;
-        color: #475569;
-        line-height: 1.4;
-        margin-bottom: 20px;
-        padding-bottom: 20px;
-        border-bottom: 1px solid #e2e8f0;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-contact .ja-profile-line { margin: 2px 0; }
-      #${INPAGE_ROOT_ID} .ja-profile-block {
-        margin-bottom: 20px;
-        padding-bottom: 20px;
-        border-bottom: 1px solid #e2e8f0;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-block:last-child {
-        margin-bottom: 0;
-        padding-bottom: 0;
-        border-bottom: none;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-block-title {
-        font-size: 12px;
-        font-weight: 600;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin-bottom: 10px;
-      }
-      #${INPAGE_ROOT_ID} .ja-profile-block-content { font-size: 13px; color: #1e293b; line-height: 1.55; margin: 0; }
-      #${INPAGE_ROOT_ID} .ja-profile-block-content .ja-copyable { cursor: pointer; }
-      #${INPAGE_ROOT_ID} .ja-profile-block-content .ja-copyable:hover { background: #f1f5f9; border-radius: 4px; }
-      /* Experience & Education: card-style entries with clear hierarchy */
-      #${INPAGE_ROOT_ID} .ja-exp-item, #${INPAGE_ROOT_ID} .ja-edu-item {
-        margin-bottom: 16px;
-        padding: 14px 0;
-        border-bottom: 1px solid #e2e8f0;
+        padding: 6px 10px;
+        border-radius: 8px;
         transition: background 0.15s;
       }
-      #${INPAGE_ROOT_ID} .ja-exp-item:last-child, #${INPAGE_ROOT_ID} .ja-edu-item:last-child {
-        margin-bottom: 0;
-        padding-bottom: 0;
-        border-bottom: none;
-      }
-      #${INPAGE_ROOT_ID} .ja-exp-item:hover, #${INPAGE_ROOT_ID} .ja-edu-item:hover {
-        background: linear-gradient(90deg, transparent, rgba(15,23,42,0.02) 8%, transparent);
-      }
-      #${INPAGE_ROOT_ID} .ja-exp-role {
-        font-size: 15px;
-        font-weight: 600;
-        color: #0f172a;
-        margin-bottom: 4px;
-        line-height: 1.3;
-      }
-      #${INPAGE_ROOT_ID} .ja-exp-company {
-        font-size: 13px;
-        font-weight: 500;
-        color: #475569;
-        margin-bottom: 6px;
-      }
-      #${INPAGE_ROOT_ID} .ja-exp-meta {
-        font-size: 11px;
-        color: #94a3b8;
-        margin-bottom: 8px;
-        letter-spacing: 0.02em;
-      }
-      #${INPAGE_ROOT_ID} .ja-exp-bullets {
-        padding-left: 18px;
-        margin: 8px 0 0 0;
-        color: #334155;
-        font-size: 13px;
-        line-height: 1.5;
-      }
-      #${INPAGE_ROOT_ID} .ja-exp-bullets li { margin: 4px 0; }
-      #${INPAGE_ROOT_ID} .ja-edu-institution {
-        font-size: 14px;
-        font-weight: 600;
-        color: #0f172a;
-        margin-bottom: 4px;
-      }
-      #${INPAGE_ROOT_ID} .ja-edu-degree {
-        font-size: 13px;
-        color: #475569;
-        margin-bottom: 4px;
-      }
-      #${INPAGE_ROOT_ID} .ja-edu-meta {
-        font-size: 11px;
-        color: #94a3b8;
-      }
-      /* Skill chips: professional pill styling with consistent spacing */
-      #${INPAGE_ROOT_ID} .ja-skill-list {
+      #${INPAGE_ROOT_ID} .ja-prof-contact-row:hover { background: rgba(243, 244, 246, 0.7); }
+      #${INPAGE_ROOT_ID} .ja-prof-contact-ico {
+        flex-shrink: 0;
+        color: #9ca3af;
         display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        align-items: center;
-        padding: 2px 0;
       }
-      #${INPAGE_ROOT_ID} .ja-skill-chip {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 4px 8px;
+      #${INPAGE_ROOT_ID} .ja-prof-svg { width: 12px; height: 12px; stroke-width: 2; }
+      #${INPAGE_ROOT_ID} .ja-prof-svg-sec { color: #2563eb; }
+      #${INPAGE_ROOT_ID} .ja-prof-contact-val {
+        flex: 1;
+        min-width: 0;
         font-size: 12px;
-        font-weight: 500;
-        background: #f1f5f9;
-        color: #334155;
-        border: 1px solid #e2e8f0;
-        border-radius: 6px;
-        cursor: default;
+        color: #111827;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
       }
-      #${INPAGE_ROOT_ID} .ja-profile-block-content .ja-skill-chip.ja-copyable:hover {
-        background: #e2e8f0;
-        border-color: #cbd5e1;
-      }
-      #${INPAGE_ROOT_ID} .ja-link-row {
+      #${INPAGE_ROOT_ID} .ja-prof-copy {
+        flex-shrink: 0;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: #9ca3af;
+        cursor: pointer;
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin-bottom: 8px;
-        flex-wrap: wrap;
+        justify-content: center;
+        transition: color 0.15s, background 0.15s;
       }
-      #${INPAGE_ROOT_ID} .ja-link-row:last-child { margin-bottom: 0; }
-      #${INPAGE_ROOT_ID} .ja-link-label { font-weight: 500; color: #334155; min-width: 60px; }
-      #${INPAGE_ROOT_ID} .ja-link-url { color: #0284c7; word-break: break-all; }
-      #${INPAGE_ROOT_ID} .ja-link-url:hover { text-decoration: underline; }
-      #${INPAGE_ROOT_ID} .ja-upload-row {
+      #${INPAGE_ROOT_ID} .ja-prof-copy:hover { color: #2563eb; background: rgba(243, 244, 246, 0.9); }
+      #${INPAGE_ROOT_ID} .ja-prof-copy--done { color: #16a34a; }
+      #${INPAGE_ROOT_ID} .ja-prof-copy-ico { width: 12px; height: 12px; }
+      #${INPAGE_ROOT_ID} .ja-prof-copy-check { stroke: #16a34a; }
+      #${INPAGE_ROOT_ID} .ja-prof-block {
+        padding: 16px;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-block:last-child { border-bottom: none; }
+      #${INPAGE_ROOT_ID} .ja-prof-sec-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-sec-head-row {
+        justify-content: space-between;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-sec-head-left {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-sec-title {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #6b7280;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-sec-count { font-size: 10px; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-prof-empty { margin: 0; font-size: 12px; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-prof-edu-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        background: #fff;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-edu-school { margin: 0 0 4px 0; font-size: 12px; font-weight: 700; color: #111827; }
+      #${INPAGE_ROOT_ID} .ja-prof-edu-degree { margin: 0 0 6px 0; font-size: 11px; color: #6b7280; }
+      #${INPAGE_ROOT_ID} .ja-prof-edu-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      #${INPAGE_ROOT_ID} .ja-prof-edu-dates { font-size: 10px; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-prof-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 9px;
+        font-weight: 600;
+        padding: 0 6px;
+        height: 16px;
+        border-radius: 9999px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-badge-muted { background: #f3f4f6; color: #111827; }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 8px;
+        background: #fff;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-card:last-child { margin-bottom: 0; }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-title { margin: 0; font-size: 12px; font-weight: 700; color: #111827; }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-company { margin: 4px 0 0 0; font-size: 11px; font-weight: 500; color: #2563eb; }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-meta { margin: 4px 0 0 0; font-size: 10px; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-bullets {
+        list-style: none;
+        padding: 0;
+        margin: 8px 0 0 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-li {
+        display: flex;
+        gap: 8px;
+        font-size: 11px;
+        color: #6b7280;
+        line-height: 1.45;
+        margin-bottom: 4px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-exp-dot {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: rgba(37, 99, 235, 0.45);
+        flex-shrink: 0;
+        margin-top: 6px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-cert-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+      #${INPAGE_ROOT_ID} .ja-prof-cert-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        font-size: 10px;
+        font-weight: 500;
+        color: #374151;
+        border: 1px solid #e5e7eb;
+        border-radius: 9999px;
+        background: #fff;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-award-sm { width: 10px; height: 10px; flex-shrink: 0; }
+      #${INPAGE_ROOT_ID} .ja-prof-upload-card {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        padding: 8px 0;
-        flex-wrap: wrap;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        background: #fff;
       }
-      #${INPAGE_ROOT_ID} .ja-upload-label { font-weight: 500; }
-      #${INPAGE_ROOT_ID} .ja-upload-meta { font-size: 12px; color: #64748b; }
-      #${INPAGE_ROOT_ID} .ja-upload-preview {
-        font-size: 12px;
-        color: #0284c7;
-        cursor: pointer;
-        background: none;
-        border: none;
+      #${INPAGE_ROOT_ID} .ja-prof-upload-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+      #${INPAGE_ROOT_ID} .ja-prof-upload-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: rgba(239, 68, 68, 0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #dc2626;
+        flex-shrink: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-upload-icon .ja-prof-svg { width: 16px; height: 16px; }
+      #${INPAGE_ROOT_ID} .ja-prof-upload-name { margin: 0; font-size: 12px; font-weight: 600; color: #111827; }
+      #${INPAGE_ROOT_ID} .ja-prof-upload-meta { margin: 2px 0 0 0; font-size: 10px; color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-prof-upload-actions { display: flex; gap: 4px; flex-shrink: 0; }
+      #${INPAGE_ROOT_ID} .ja-prof-file-btn {
+        width: 28px;
+        height: 28px;
         padding: 0;
-        text-decoration: underline;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: #6b7280;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
-      #${INPAGE_ROOT_ID} .ja-upload-preview:hover { color: #0369a1; }
+      #${INPAGE_ROOT_ID} .ja-prof-file-btn:hover { background: #f3f4f6; color: #111827; }
+      #${INPAGE_ROOT_ID} .ja-prof-file-act { width: 14px; height: 14px; }
+      #${INPAGE_ROOT_ID} .ja-prof-skill-wrap { display: flex; flex-wrap: wrap; gap: 4px; }
+      #${INPAGE_ROOT_ID} .ja-prof-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 8px;
+        font-size: 10px;
+        font-weight: 400;
+        border-radius: 6px;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-chip-tech {
+        background: #f3f4f6;
+        color: #374151;
+        border: none;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-chip-tech:hover { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
+      #${INPAGE_ROOT_ID} .ja-prof-chip-soft {
+        border: 1px solid #e5e7eb;
+        background: #fff;
+        color: #4b5563;
+      }
+      #${INPAGE_ROOT_ID} .ja-prof-chip-lang {
+        background: #f3f4f6;
+        color: #374151;
+      }
       #${INPAGE_ROOT_ID}.collapsed .ja-card { display: none; }
       #${INPAGE_ROOT_ID}.collapsed {
         width: 56px;
@@ -3856,8 +5013,27 @@ function mountInPageUI() {
           <img class="ja-logo-icon" src="${chrome.runtime.getURL('logo.png')}" alt="OpsBrain" />
         </div>
         <div class="ja-head-actions">
+        <button class="icon-btn">
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    stroke-width="2" 
+    stroke-linecap="round" 
+    stroke-linejoin="round"
+  >
+    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+    <path d="M3 3v5h5"/>
+  </svg>
+</button>
 
-          <button type="button" class="ja-close ja-head-btn" id="ja-close" title="Close">×</button>
+         <button type="button" class="ja-close ja-head-btn" id="ja-close" title="Close">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+    <line x1="18" y1="6" x2="6" y2="18"></line>
+    <line x1="6" y1="6" x2="18" y2="18"></line>
+  </svg>
+</button>
         </div>
       </div>
       <div class="ja-tabs">
@@ -3882,38 +5058,78 @@ function mountInPageUI() {
             <button type="button" class="ja-action ja-signin-to-autofill" id="ja-signin-to-autofill">Log in to apply</button>
           </div>
           <div class="ja-autofill-authenticated" id="ja-autofill-authenticated">
-          <div class="ja-autofill-box">
-            <h3>Autofill this job application!</h3>
-            <div class="ja-status-area" id="ja-status-area">
-              <div class="ja-status-loader" id="ja-status-loader"></div>
-              <p class="ja-status" id="ja-status">You have saved 4 minutes by autofilling so far 🔥</p>
+            <div class="ja-autofill-tab">
+              <div class="ja-autofill-hero-wrap">
+                <div class="ja-autofill-hero">
+                  <div class="ja-autofill-hero-deco ja-autofill-hero-deco-1" aria-hidden="true"></div>
+                  <div class="ja-autofill-hero-deco ja-autofill-hero-deco-2" aria-hidden="true"></div>
+                  <div class="ja-autofill-hero-inner">
+                    <div class="ja-autofill-hero-head">
+                      <p class="ja-autofill-hero-title">
+                        <span class="ja-autofill-hero-title-ico" aria-hidden="true">${AUTOFILL_TAB_ICONS.zap}</span>
+                        Autofill Application
+                      </p>
+                      <span id="ja-fields-count" class="ja-autofill-fields-badge">8/8 fields</span>
+                    </div>
+                    <div class="ja-status-area" id="ja-status-area">
+                      <div class="ja-status-loader" id="ja-status-loader"></div>
+                      <div class="ja-status ja-autofill-hero-sub" id="ja-status">One-click fill for this job application</div>
+                    </div>
+                    <div class="ja-autofill-progress-block">
+                      <div class="ja-progress-label-row">
+                        <span class="ja-progress-label">Progress</span>
+                        <span id="ja-progress-text" class="ja-progress-pct">0%</span>
+                      </div>
+                      <div class="ja-autofill-progress-track">
+                        <div id="ja-progress" class="ja-autofill-progress-bar" style="width:0%"></div>
+                      </div>
+                    </div>
+                    <div class="ja-autofill-actions">
+                      <button type="button" class="ja-btn-hero-fill" id="ja-run">
+                        <span class="ja-btn-fill-inner" id="ja-run-inner">
+                          <span class="ja-btn-fill-icon" aria-hidden="true">${AUTOFILL_TAB_ICONS.sparkles}</span>
+                          <span class="ja-btn-fill-label">Autofill this page</span>
+                        </span>
+                      </button>
+                      <div class="ja-fill-controls" id="ja-fill-controls" aria-hidden="true">
+                        <span class="ja-fill-label">Autofilling</span>
+                        <div class="ja-fill-controls-row">
+                          <button type="button" class="ja-stop" id="ja-stop">Stop</button>
+                          <button type="button" class="ja-skip-next" id="ja-skip-next">⏭ Skip to next input</button>
+                        </div>
+                      </div>
+                      <button type="button" class="ja-continue-fill" id="ja-continue-fill" style="display:none">Continue filling</button>
+                    </div>
+                    <label class="ja-cache-enable" id="ja-cache-enable-wrap">
+                      <input type="checkbox" id="ja-cache-enable" checked />
+                      <span>Use cached answers for faster fills</span>
+                    </label>
+                    <label class="ja-auto-advance" id="ja-auto-advance-wrap">
+                      <input type="checkbox" id="ja-auto-advance" />
+                      Auto-advance through all steps
+                    </label>
+                  </div>
+                </div>
+              </div>
+              <div class="ja-footer-links">
+                <button type="button" class="ja-footer-link" id="ja-save-job">
+                  <span class="ja-footer-link-ico" aria-hidden="true">${QUESTION_UI_ICONS.download}</span>
+                  Save Job
+                </button>
+                <button type="button" class="ja-footer-link" id="ja-referrals">
+                  <span class="ja-footer-link-ico" aria-hidden="true">${QUESTION_UI_ICONS.users}</span>
+                  Referrals
+                </button>
+              </div>
+              <div class="ja-accordions" id="ja-autofill-accordions"></div>
+              <div class="ja-autofill-footer-stats">
+                <span class="ja-autofill-footer-item" id="ja-autofill-last-fill"><span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.clock}</span> Last fill: —</span>
+                <span class="ja-autofill-footer-item" id="ja-autofill-apps-filled"><span class="ja-autofill-footer-ico" aria-hidden="true">${QUESTION_UI_ICONS.layers}</span> — applications filled</span>
+              </div>
             </div>
-            <div class="ja-progress"><div class="ja-progress-bar" id="ja-progress"></div></div>
-            <div class="ja-action-row">
-              <button type="button" class="ja-action" id="ja-run">Autofill this page</button>
-            </div>
-            <label class="ja-cache-enable" id="ja-cache-enable-wrap">
-              <input type="checkbox" id="ja-cache-enable" checked /> Use cache for faster fills
-            </label>
             <div class="ja-quick-save-row" id="ja-quick-save-row" style="display:none;margin-top:10px;">
               <button type="button" class="ja-action ja-save-applied" id="ja-save-applied">Save & Mark Applied</button>
             </div>
-            <div class="ja-fill-controls" id="ja-fill-controls">
-              <span class="ja-fill-label">Autofilling</span>
-              <button type="button" class="ja-stop" id="ja-stop">Stop</button>
-              <button type="button" class="ja-skip-next" id="ja-skip-next">⏭ Skip to next input</button>
-            </div>
-            <button type="button" class="ja-continue-fill" id="ja-continue-fill" style="display:none">Continue filling</button>
-            <label class="ja-auto-advance" id="ja-auto-advance-wrap">
-              <input type="checkbox" id="ja-auto-advance" /> Auto-advance through all steps
-            </label>
-          </div>
-          <div class="ja-footer-links">
-            <button type="button" class="ja-footer-link" id="ja-save-job-instead">Save Job Instead</button>
-            <button type="button" class="ja-footer-link">Get referrals →</button>
-          </div>
-          <div class="ja-accordions" id="ja-autofill-accordions"></div>
-          
           </div>
         </div>
         <div class="ja-panel" id="ja-panel-keywords">
@@ -3924,21 +5140,24 @@ function mountInPageUI() {
           </div>
           <div class="ja-keywords-authenticated" id="ja-keywords-authenticated">
           <div class="ja-keywords-view" id="ja-keywords-view">
-          <div class="ja-keywords-section">
-            <label>Resume</label>
-            <select class="ja-resume-select" id="ja-resume-select">
-              <option value="">Loading resumes...</option>
-            </select>
-            <button type="button" class="ja-tailor-btn" id="ja-tailor-resume-btn">Tailor Resume</button>
-            <p style="font-size:11px;color:#9ca3af;margin:0 0 8px 0;">Bold % indicates keyword coverage.</p>
-          </div>
-          <div class="ja-keyword-card" id="ja-keyword-card">
-            <div id="ja-keyword-analysis">
-              <p class="ja-score-text">Loading keyword analysis...</p>
+          <div class="ja-kw-tab">
+            <div class="ja-kw-active-resume-row">
+              <div class="ja-kw-active-resume-field">
+                <label class="ja-kw-label-upper" for="ja-resume-select">Active Resume</label>
+                <select class="ja-resume-select ja-kw-resume-select" id="ja-resume-select">
+                  <option value="">Loading resumes...</option>
+                </select>
+              </div>
+              <button type="button" class="ja-kw-tailor-btn" id="ja-tailor-resume-btn">${KEYWORD_TAB_ICONS.target}<span>Tailor</span></button>
             </div>
+            <div class="ja-keyword-card ja-kw-score-card" id="ja-keyword-card">
+              <div id="ja-keyword-analysis">
+                <p class="ja-score-text">Loading keyword analysis...</p>
+              </div>
+            </div>
+            <div id="ja-keyword-keywords-list" class="ja-keyword-keywords-list"></div>
+            <button type="button" class="ja-kw-update-jd-btn" id="ja-update-jd-btn">${KEYWORD_TAB_ICONS.refreshCw}<span>Update Job Description</span></button>
           </div>
-          <div id="ja-keyword-keywords-list" class="ja-keyword-keywords-list"></div>
-          <button type="button" class="ja-update-jd-btn" id="ja-update-jd-btn">Update Job Description</button>
           </div>
           <div class="ja-job-form-panel" id="ja-job-form-panel" style="display:none">
             <h4 style="margin:0 0 10px 0;font-size:14px;">Edit Job Description</h4>
@@ -4005,51 +5224,66 @@ function mountInPageUI() {
             <button type="button" class="ja-action ja-signin-to-autofill">Log in to apply</button>
           </div>
           <div class="ja-profile-authenticated" id="ja-profile-authenticated">
-            <div class="ja-profile-cards">
-              <div class="ja-profile-card"><h4>Job Matches</h4><p>Fill out my preferences →</p></div>
-              <div class="ja-profile-card"><h4>Job Tracker</h4><p>Add your first job! →</p></div>
-            </div>
-            <div class="ja-copy-tip">Click any block of text below to copy it — handy when filling applications.</div>
-            <div class="ja-profile-main" id="ja-profile-main">
-              <div class="ja-profile-card-container">
-                <div class="ja-profile-header">
-                  <div style="display:flex;align-items:center;gap:12px">
-                    <div class="ja-avatar" id="ja-profile-avatar">—</div>
-                    <div>
-                      <div class="ja-profile-name" id="ja-profile-name">—</div>
-                      <div class="ja-profile-title" id="ja-profile-title"></div>
+            <div class="ja-profile-tab">
+              <div class="ja-profile-stats">
+                <div class="ja-profile-stat">
+                  <p class="ja-profile-stat-val" id="ja-profile-stat-apps">—</p>
+                  <p class="ja-profile-stat-label">Applications</p>
+                </div>
+                <div class="ja-profile-stat">
+                  <p class="ja-profile-stat-val ja-profile-stat-success" id="ja-profile-stat-interviews">—</p>
+                  <p class="ja-profile-stat-label">Interviews</p>
+                </div>
+                <div class="ja-profile-stat">
+                  <p class="ja-profile-stat-val ja-profile-stat-primary" id="ja-profile-stat-fill">—</p>
+                  <p class="ja-profile-stat-label">Fill Rate</p>
+                </div>
+              </div>
+              <div class="ja-prof-hero-wrap">
+                <div class="ja-prof-hero">
+                  <div class="ja-avatar ja-avatar-gradient" id="ja-profile-avatar">—</div>
+                  <div class="ja-prof-hero-text">
+                    <h3 class="ja-profile-name" id="ja-profile-name">—</h3>
+                    <p class="ja-profile-title" id="ja-profile-title"></p>
+                    <div class="ja-prof-actions">
+                      <button type="button" class="ja-prof-act-btn" id="ja-profile-refresh">${PROFILE_TAB_ICONS.refreshCwSm}<span>Sync</span></button>
+                      <button type="button" class="ja-prof-act-btn" id="ja-profile-edit">${PROFILE_TAB_ICONS.editSm}<span>Edit</span></button>
+                      <button type="button" class="ja-prof-act-btn" id="ja-profile-preview">${PROFILE_TAB_ICONS.eyeSm}<span>Preview</span></button>
                     </div>
-                  </div>
-                  <div class="ja-profile-header-actions">
-                    <button type="button" class="ja-profile-btn" id="ja-profile-refresh" title="Refresh">Refresh</button>
-                    <button type="button" class="ja-profile-btn" id="ja-profile-edit" title="Edit">Edit</button>
                   </div>
                 </div>
                 <div class="ja-profile-contact" id="ja-profile-contact"></div>
-                <div class="ja-profile-block" id="ja-profile-education-block">
-                  <h4 class="ja-profile-block-title">Education</h4>
-                  <div class="ja-profile-block-content" id="ja-profile-education"></div>
+              </div>
+              <div class="ja-prof-block">
+                <div class="ja-prof-sec-head">${PROFILE_TAB_ICONS.graduationCap}<span class="ja-prof-sec-title">Education</span></div>
+                <div id="ja-profile-education"></div>
+              </div>
+              <div class="ja-prof-block">
+                <div class="ja-prof-sec-head">${PROFILE_TAB_ICONS.briefcase}<span class="ja-prof-sec-title">Experience</span></div>
+                <div id="ja-profile-experience"></div>
+              </div>
+              <div class="ja-prof-block" id="ja-profile-cert-block" style="display:none">
+                <div class="ja-prof-sec-head">${PROFILE_TAB_ICONS.award}<span class="ja-prof-sec-title">Certifications</span></div>
+                <div id="ja-profile-certifications"></div>
+              </div>
+              <div class="ja-prof-block">
+                <div class="ja-prof-sec-head">${PROFILE_TAB_ICONS.upload}<span class="ja-prof-sec-title">Uploads</span></div>
+                <div class="ja-prof-upload-inner" id="ja-profile-uploads"></div>
+              </div>
+              <div class="ja-prof-block">
+                <div class="ja-prof-sec-head ja-prof-sec-head-row">
+                  <span class="ja-prof-sec-head-left">${PROFILE_TAB_ICONS.code}<span class="ja-prof-sec-title">Technical Skills</span></span>
+                  <span class="ja-prof-sec-count" id="ja-profile-tech-count">0 skills</span>
                 </div>
-                <div class="ja-profile-block" id="ja-profile-experience-block">
-                  <h4 class="ja-profile-block-title">Experience</h4>
-                  <div class="ja-profile-block-content" id="ja-profile-experience"></div>
-                </div>
-                <div class="ja-profile-block" id="ja-profile-uploads-block">
-                  <h4 class="ja-profile-block-title">Uploads</h4>
-                  <div class="ja-profile-block-content ja-upload-box-up" id="ja-profile-uploads" ></div>
-                </div>
-                <div class="ja-profile-block" id="ja-profile-links-block">
-                  <h4 class="ja-profile-block-title">Links</h4>
-                  <div class="ja-profile-block-content" id="ja-profile-links"></div>
-                </div>
-                <div class="ja-profile-block" id="ja-profile-skills-block">
-                  <h4 class="ja-profile-block-title">Skills</h4>
-                  <div class="ja-profile-block-content" id="ja-profile-skills"></div>
-                </div>
-                <div class="ja-profile-block" id="ja-profile-languages-block">
-                  <h4 class="ja-profile-block-title">Languages</h4>
-                  <div class="ja-profile-block-content" id="ja-profile-languages" ></div>
-                </div>
+                <div id="ja-profile-tech-skills"></div>
+              </div>
+              <div class="ja-prof-block">
+                <div class="ja-prof-sec-head">${PROFILE_TAB_ICONS.messageSquare}<span class="ja-prof-sec-title">Soft Skills</span></div>
+                <div id="ja-profile-soft-skills"></div>
+              </div>
+              <div class="ja-prof-block">
+                <div class="ja-prof-sec-head">${PROFILE_TAB_ICONS.globe}<span class="ja-prof-sec-title">Languages</span></div>
+                <div id="ja-profile-languages"></div>
               </div>
             </div>
           </div>
@@ -4070,8 +5304,8 @@ function mountInPageUI() {
     renderAccordions(accordionsContainer, [
       { id: "resume", iconBg: "#e9d5ff", iconSvg: ACCORDION_ICONS.document, title: "Resume", showHelpIcon: true },
       { id: "cover-letter", iconBg: "#fed7aa", iconSvg: ACCORDION_ICONS.coverLetter, title: "Cover Letter", statusText: "No Field Found" },
-      { id: "unique-questions", iconBg: "#fef08a", iconSvg: ACCORDION_ICONS.star, title: "Unique Questions", statusText: "Filled (0/0)", statusCheckmark: true },
-      { id: "common-questions", iconBg: "#99f6e4", iconSvg: ACCORDION_ICONS.person, title: "Common Questions", statusText: "Filled (0/0)", statusCheckmark: true },
+      { id: "unique-questions", iconBg: "#ede9fe", iconColor: "#7c3aed", iconSvg: ACCORDION_ICONS.star, title: "Unique Questions", statusText: "0/0", statusCheckmark: true },
+      { id: "common-questions", iconBg: "#d1fae5", iconColor: "#15803d", iconSvg: ACCORDION_ICONS.person, title: "Common Questions", statusText: "0/0", statusCheckmark: true },
     ], root);
   }
 
@@ -4140,6 +5374,28 @@ function mountInPageUI() {
     const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
     chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url: `${base}/profile` });
   });
+  root.querySelector("#ja-profile-preview")?.addEventListener("click", async () => {
+    const ctx = root._profileCtx;
+    if (!ctx) return;
+    try {
+      const got = await fetchProfileResumeBlob(ctx);
+      if (!got) return;
+      const url = URL.createObjectURL(got.blob);
+      window.open(url, "_blank");
+    } catch (_) { }
+  });
+  root.addEventListener("click", (e) => {
+    const btn = e.target.closest(".ja-prof-copy");
+    if (!btn || !root.contains(btn)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const text = btn.getAttribute("data-copy") || "";
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.classList.add("ja-prof-copy--done");
+      setTimeout(() => btn.classList.remove("ja-prof-copy--done"), 1500);
+    }).catch(() => { });
+  });
 
   // Resume select change -> re-run keyword analysis
   root.addEventListener("change", (e) => {
@@ -4180,12 +5436,15 @@ function mountInPageUI() {
     if (!statusEl) return;
     if (asHtml) statusEl.innerHTML = text;
     else statusEl.textContent = text;
-    statusEl.className = `ja-status ${type}`.trim();
+    statusEl.className = `ja-status ja-autofill-hero-sub ${type}`.trim();
     statusArea?.classList.toggle("loading", type === "loading");
   };
 
   const setProgress = (percent) => {
-    if (progressBar) progressBar.style.width = `${percent}%`;
+    const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    if (progressBar) progressBar.style.width = `${p}%`;
+    const pctEl = root.querySelector("#ja-progress-text");
+    if (pctEl) pctEl.textContent = `${p}%`;
   };
 
   // Dragging (vertical only, stays on right side)
@@ -4245,7 +5504,7 @@ function mountInPageUI() {
       logInfo("runOneStep: refreshTokenViaApi");
       await refreshTokenViaApi();
       logInfo("runOneStep: refreshToken done", { ms: Date.now() - t0 });
-    } catch (_) {}
+    } catch (_) { }
     logInfo("runOneStep: getAutofillContextFromApi");
     const context = await getAutofillContextFromApi();
     logInfo("runOneStep: context loaded", { profileKeys: Object.keys(context?.profile || {}).length, ms: Date.now() - t0 });
@@ -4298,7 +5557,7 @@ function mountInPageUI() {
       try {
         const res = await chrome.runtime.sendMessage({ type: "GET_CACHED_MAPPINGS_BY_FP", payload: { fps, domain } });
         if (res?.ok && res.data) cachedByFp = res.data;
-      } catch (_) {}
+      } catch (_) { }
     }
     const missFields = fields.filter((f) => !cachedByFp[f.fingerprint]);
     let mappings = {};
@@ -4319,7 +5578,7 @@ function mountInPageUI() {
           if (m && m.value !== undefined) toCache[f.fingerprint] = m;
         }
         if (Object.keys(toCache).length > 0) {
-          chrome.runtime.sendMessage({ type: "SET_CACHED_MAPPINGS_BY_FP", payload: { mappingsByFp: toCache, domain } }).catch(() => {});
+          chrome.runtime.sendMessage({ type: "SET_CACHED_MAPPINGS_BY_FP", payload: { mappingsByFp: toCache, domain } }).catch(() => { });
         }
       }
     }
@@ -4365,7 +5624,7 @@ function mountInPageUI() {
     scrollFieldIntoView(field);
     try {
       field.focus();
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const runFlow = async (isContinueFromErrors = false) => {
@@ -4596,7 +5855,7 @@ function mountInPageUI() {
 
   stopBtn?.addEventListener("click", () => {
     abortRequested = true;
-    chrome.runtime.sendMessage({ type: "STOP_WORKDAY_AUTOFILL" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "STOP_WORKDAY_AUTOFILL" }).catch(() => { });
     window.__OPSBRAIN_WORKDAY_STEPS__?.stopWatching();
   });
 
@@ -4626,7 +5885,7 @@ function syncTokenFromWebsite() {
       chrome.storage.local.set({ accessToken: token });
       logInfo("Token synced from website");
     }
-  } catch (e) {}
+  } catch (e) { }
 }
 if (LOGIN_PAGE_ORIGINS.some((o) => window.location.origin === o)) {
   syncTokenFromWebsite();
@@ -4636,7 +5895,7 @@ if (LOGIN_PAGE_ORIGINS.some((o) => window.location.origin === o)) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   logInfo("Received message", { type: msg?.type || "unknown" });
-  
+
   if (msg.type === "SHOW_WIDGET") {
     mountInPageUI();
     if (isCareerPage() && !/workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(window.location.href)) {
@@ -4650,7 +5909,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
-  
+
   if (msg.type === "STOP_WORKDAY_AUTOFILL") {
     window.__OPSBRAIN_WORKDAY_STEPS__?.stopWatching();
     sendResponse({ ok: true });
@@ -4765,7 +6024,7 @@ window.addEventListener("message", (e) => {
   else if (phase === "retry") text = `Retrying: ${text}`;
   else if (phase === "error") text = `⚠ ${text}${error ? `: ${error}` : ""}`;
   statusEl.textContent = text;
-  statusEl.className = `ja-status ${phase === "error" ? "error" : phase === "filled" || phase === "review" ? "success" : "loading"}`.trim();
+  statusEl.className = `ja-status ja-autofill-hero-sub ${phase === "error" ? "error" : phase === "filled" || phase === "review" ? "success" : "loading"}`.trim();
   statusArea?.classList.toggle("loading", phase === "starting" || phase === "filling" || phase === "retry");
 });
 
@@ -4826,13 +6085,13 @@ function isIntermediateStep() {
   if (confirmSignals.some((s) => bodyText.includes(s))) return false;
   const nextButtonExists = !!document.querySelector(
     'button[type="submit"][data-automation-id*="next"], ' +
-      '[data-automation-id="continueButton"], [data-automation-id*="continue"], ' +
-      'button[aria-label*="Next"], button[aria-label*="Continue"], ' +
-      ".next-button, #nextButton, [data-testid='next-btn']"
+    '[data-automation-id="continueButton"], [data-automation-id*="continue"], ' +
+    'button[aria-label*="Next"], button[aria-label*="Continue"], ' +
+    ".next-button, #nextButton, [data-testid='next-btn']"
   );
   const hasStepIndicator = !!document.querySelector(
     ".progress-steps, .step-indicator, [aria-label*='Step '], " +
-      ".wday-wizard-step, [data-automation-id*='progress'], [data-automation-id*='wizard']"
+    ".wday-wizard-step, [data-automation-id*='progress'], [data-automation-id*='wizard']"
   );
   const isWorkdayUrl = /workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(location.href);
   if (isWorkdayUrl && (nextButtonExists || hasStepIndicator)) return true;
@@ -4861,7 +6120,7 @@ async function captureAndStoreCurrentStepFeedback() {
       try {
         const sel = f.selector || (f.selectors?.[0]?.selector);
         if (sel && doc.querySelector(sel)) overlappingCount++;
-      } catch (_) {}
+      } catch (_) { }
     }
     if (overlappingCount < 2) continue;
     const currentPageFields = lastFill.fields.map((f) => {
@@ -4869,7 +6128,7 @@ async function captureAndStoreCurrentStepFeedback() {
       try {
         const sel = f.selector || (f.selectors?.[0]?.selector);
         if (sel) el = doc.querySelector(sel);
-      } catch (_) {}
+      } catch (_) { }
       const domValue = el ? (el.value ?? el.textContent ?? "").trim() : null;
       const autofillVal = lastFill.mappings[f.fingerprint]?.value ?? lastFill.mappings[String(f.index)]?.value;
       return {
@@ -4924,7 +6183,7 @@ async function handleFormSubmitForFeedback(e) {
     try {
       const sel = f.selector || (f.selectors?.[0]?.selector);
       if (sel && document.querySelector(sel)) overlappingCount++;
-    } catch (_) {}
+    } catch (_) { }
   }
   if (overlappingCount < 2) return;
   const currentPageFields = lastFill.fields.map((f) => {
@@ -4932,7 +6191,7 @@ async function handleFormSubmitForFeedback(e) {
     try {
       const sel = f.selector || (f.selectors?.[0]?.selector);
       if (sel) el = document.querySelector(sel);
-    } catch (_) {}
+    } catch (_) { }
     const domValue = el ? (el.value ?? el.textContent ?? "").trim() : null;
     const autofillVal = lastFill.mappings[f.fingerprint]?.value ?? lastFill.mappings[String(f.index)]?.value;
     return {
@@ -4992,7 +6251,7 @@ async function handleFormSubmitForFeedback(e) {
     if (cacheManager) await cacheManager.clearPendingSubmission();
     window.__OPSBRAIN_SESSION_ID__ = null;
     window.__OPSBRAIN_LAST_FILL__ = null;
-    chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => { });
   } catch (err) {
     const retryCount = (pending?.retryCount || 0) + 1;
     if (retryCount <= 3 && cacheManager) {
@@ -5033,8 +6292,8 @@ async function retryPendingSubmission() {
       }),
     });
     await cacheManager.clearPendingSubmission();
-    if (res.ok) chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
-  } catch (_) {}
+    if (res.ok) chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => { });
+  } catch (_) { }
 }
 
 function tryAutoOpenPopup() {
@@ -5069,7 +6328,7 @@ window.addEventListener("message", (e) => {
   if (e.source !== window || e.data?.type !== "HIREMATE_PROFILE_SAVED") return;
   const origin = window.location.origin;
   if (LOGIN_PAGE_ORIGINS.some((o) => origin === o || origin.startsWith(o.replace(/\/$/, "") + "/"))) {
-    chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "INVALIDATE_MAPPING_CACHE" }).catch(() => { });
     logInfo("Profile saved — mapping cache invalidated");
   }
 });
@@ -5077,7 +6336,7 @@ window.addEventListener("message", (e) => {
 window.addEventListener("HIREMATE_RESUME_SAVED", (e) => {
   const resumeId = e.detail?.resumeId;
   if (resumeId != null) {
-    chrome.runtime.sendMessage({ type: "RESUME_SAVED_FROM_TAILOR", resumeId }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "RESUME_SAVED_FROM_TAILOR", resumeId }).catch(() => { });
   }
 });
 
