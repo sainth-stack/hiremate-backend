@@ -13,6 +13,28 @@ const CONTENT_SCRIPT_FILES = [
   "content-script/fieldScraper.js",
   "content-script/humanFiller.js",
   "content-script/workday-step-manager.js",
+  "content-script/consts.js",
+  "content-script/icons.js",
+  "content-script/utils.js",
+  "content-script/dom-utils.js",
+  "content-script/features/keyword-match.js",
+  "content-script/features/autofill-stats.js",
+  "content-script/features/accordion.js",
+  "content-script/services/form-learning.js",
+  "content-script/services/api-service.js",
+  "content-script/services/autofill-context.js",
+  "content-script/features/page-detection.js",
+  "content-script/features/scrape-fields.js",
+  "content-script/features/fill-engine.js",
+  "content-script/features/keyword-analysis.js",
+  "content-script/features/profile-panel.js",
+  "content-script/features/job-form.js",
+  "content-script/features/activity-tracking.js",
+  "content-script/features/widget-auth.js",
+  "content-script/ui/widget-styles-base.js",
+  "content-script/ui/widget-styles-components.js",
+  "content-script/ui/widget-html.js",
+  "content-script/features/submit-feedback.js",
   "content.js",
 ];
 const HIREMATE_ORIGINS = [
@@ -599,13 +621,14 @@ chrome.action.onClicked.addListener(async (tab) => {
     // Try to send message to content script
     await chrome.tabs.sendMessage(tab.id, { type: "SHOW_WIDGET" });
   } catch (error) {
-    // Content script not injected, inject it first
+    // Content script not injected, inject it first (full chain; Preact build may include content-ui.js last).
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ["content.js"]
-      });
-      // Retry after injection
+      const withPreact = [...CONTENT_SCRIPT_FILES, "content-ui.js"];
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: withPreact });
+      } catch (_) {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: CONTENT_SCRIPT_FILES });
+      }
       await chrome.tabs.sendMessage(tab.id, { type: "SHOW_WIDGET" });
     } catch (err) {
       console.error("[Background] Failed to show widget:", err);
