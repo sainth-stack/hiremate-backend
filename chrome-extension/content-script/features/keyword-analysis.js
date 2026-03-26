@@ -10,6 +10,114 @@
 
 const KEYWORD_MATCH_ROOT_ID = "ja-keyword-match-root";
 
+// ─── Searchable resume dropdown helpers ────────────────────────────────────
+
+/**
+ * Populate the custom dropdown list and sync its trigger label.
+ * @param {Element} root - widget root
+ * @param {{ id: number, resume_name?: string, is_default?: boolean }[]} resumes
+ * @param {string} selectedValue - currently selected option value (string)
+ */
+function populateResumeDropdown(root, resumes, selectedValue) {
+  const list = root?.querySelector("#ja-rs-list");
+  const triggerText = root?.querySelector("#ja-rs-trigger-text");
+  const empty = root?.querySelector("#ja-rs-empty");
+  if (!list) return;
+
+  list.innerHTML = "";
+  resumes.forEach((r) => {
+    const li = document.createElement("li");
+    li.className = "ja-rs-option" + (String(r.id) === String(selectedValue) ? " ja-rs-option--selected" : "");
+    li.setAttribute("role", "option");
+    li.dataset.value = String(r.id);
+    const name = escapeHtml(r.resume_name || `Resume ${r.id}`);
+    li.innerHTML = `<span class="ja-rs-option-name" style="overflow:hidden;text-overflow:ellipsis;flex:1">${name}</span>${r.is_default ? '<span class="ja-rs-badge-default">Default</span>' : ""}`;
+    list.appendChild(li);
+  });
+
+  if (triggerText) {
+    const sel = resumes.find((r) => String(r.id) === String(selectedValue));
+    triggerText.textContent = sel ? (sel.resume_name || `Resume ${sel.id}`) : "Select resume…";
+  }
+  if (empty) empty.hidden = resumes.length > 0;
+}
+
+/**
+ * Wire up open/close, search filtering, and item selection for the dropdown.
+ * Must be called once per widget mount (idempotent via dataset flag).
+ * @param {Element} root
+ * @param {() => void} onSelect - called when a new resume is chosen
+ */
+function initResumeDropdown(root, onSelect) {
+  const dropdown = root?.querySelector("#ja-rs-dropdown");
+  if (!dropdown || dropdown.dataset.rsInit) return;
+  dropdown.dataset.rsInit = "1";
+
+  const trigger = root.querySelector("#ja-rs-trigger");
+  const panel = root.querySelector("#ja-rs-panel");
+  const searchInput = root.querySelector("#ja-rs-search");
+  const list = root.querySelector("#ja-rs-list");
+  const emptyEl = root.querySelector("#ja-rs-empty");
+  const selectEl = root.querySelector("#ja-resume-select");
+
+  const open = () => {
+    panel.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    searchInput.value = "";
+    filterList("");
+    searchInput.focus();
+  };
+  const close = () => {
+    panel.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+  };
+  const toggle = () => (panel.hidden ? open() : close());
+
+  const filterList = (q) => {
+    const lc = q.toLowerCase();
+    let visible = 0;
+    list.querySelectorAll(".ja-rs-option").forEach((li) => {
+      const match = li.dataset.value && li.textContent.toLowerCase().includes(lc);
+      li.style.display = match ? "" : "none";
+      if (match) visible++;
+    });
+    if (emptyEl) emptyEl.hidden = visible > 0;
+  };
+
+  trigger.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+  searchInput.addEventListener("input", () => filterList(searchInput.value));
+  searchInput.addEventListener("click", (e) => e.stopPropagation());
+
+  list.addEventListener("click", (e) => {
+    const li = e.target.closest(".ja-rs-option");
+    if (!li) return;
+    const val = li.dataset.value;
+    if (!val) return;
+
+    list.querySelectorAll(".ja-rs-option").forEach((o) => o.classList.remove("ja-rs-option--selected"));
+    li.classList.add("ja-rs-option--selected");
+
+    const triggerText = root.querySelector("#ja-rs-trigger-text");
+    if (triggerText) triggerText.textContent = li.querySelector(".ja-rs-option-name")?.textContent || li.textContent.trim();
+
+    if (selectEl) {
+      selectEl.value = val;
+      try { chrome.storage.local.set({ hm_selected_resume_id: val }); } catch (_) {}
+      selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    close();
+    if (typeof onSelect === "function") onSelect(val);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!dropdown.contains(e.target)) close();
+  }, true);
+
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { close(); trigger.focus(); }
+  });
+}
+
 /** Get page HTML from all frames (main + iframes). */
 async function getPageHtmlForKeywordsApi() {
   try {
@@ -241,7 +349,7 @@ async function loadKeywordsIntoPanel(root) {
         const opt = document.createElement("option");
         opt.value = r.id;
         opt.textContent = r.resume_name || `Resume ${idx + 1}`;
-        if (r.is_default) { opt.textContent += " (default)"; defaultId = r.id; }
+        if (r.is_default) { defaultId = r.id; }
         selectEl.appendChild(opt);
       });
       const { hm_selected_resume_id } = await chrome.storage.local.get(["hm_selected_resume_id"]);
@@ -251,6 +359,10 @@ async function loadKeywordsIntoPanel(root) {
       else if (defaultId !== null) selectEl.value = String(defaultId);
       else if (resumes.length) selectEl.value = String(resumes[0].id);
     }
+
+    // Sync custom searchable dropdown UI
+    populateResumeDropdown(root, resumes, selectEl?.value || "");
+    initResumeDropdown(root, () => { /* change event on hidden select triggers reload */ });
 
     const selectedId = selectEl?.value ? parseInt(selectEl.value, 10) : null;
     const resumeId = selectedId && selectedId > 0 ? selectedId : null;

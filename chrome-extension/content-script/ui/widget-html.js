@@ -142,10 +142,22 @@ function getWidgetHTML() {
           <div class="ja-kw-tab">
             <div class="ja-kw-active-resume-row">
               <div class="ja-kw-active-resume-field">
-                <label class="ja-kw-label-upper" for="ja-resume-select">Active Resume</label>
-                <select class="ja-resume-select ja-kw-resume-select" id="ja-resume-select">
-                  <option value="">Loading resumes...</option>
-                </select>
+                <label class="ja-kw-label-upper" for="ja-rs-trigger">Active Resume</label>
+                <select class="ja-resume-select ja-kw-resume-select" id="ja-resume-select" aria-hidden="true" style="display:none"></select>
+                <div class="ja-rs-dropdown" id="ja-rs-dropdown">
+                  <button type="button" class="ja-rs-trigger" id="ja-rs-trigger" aria-haspopup="listbox" aria-expanded="false">
+                    <span class="ja-rs-trigger-text" id="ja-rs-trigger-text">Loading resumes…</span>
+                    <svg class="ja-rs-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 8l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                  <div class="ja-rs-panel" id="ja-rs-panel" hidden>
+                    <div class="ja-rs-search-wrap">
+                      <svg class="ja-rs-search-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M15 15l-2.8-2.8" stroke-linecap="round"/></svg>
+                      <input type="text" class="ja-rs-search" id="ja-rs-search" placeholder="Search resumes…" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <ul class="ja-rs-list" id="ja-rs-list" role="listbox" aria-label="Resumes"></ul>
+                    <p class="ja-rs-empty" id="ja-rs-empty" hidden>No resumes found</p>
+                  </div>
+                </div>
               </div>
               <button type="button" class="ja-kw-tailor-btn" id="ja-tailor-resume-btn">${KEYWORD_TAB_ICONS.target}<span>Tailor</span></button>
             </div>

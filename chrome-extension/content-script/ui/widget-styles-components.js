@@ -162,14 +162,155 @@ function getWidgetStylesComponents() {
         cursor: pointer;
         padding: 4px;
       }
-      #${INPAGE_ROOT_ID} .ja-resume-select {
+      #${INPAGE_ROOT_ID} .ja-resume-select { display: none !important; }
+
+      /* ── Searchable resume dropdown ─────────────────────────── */
+      #${INPAGE_ROOT_ID} .ja-rs-dropdown {
+        position: relative;
         width: 100%;
-        padding: 8px 10px;
-        font-size: 14px;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-trigger {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        height: 36px;
+        padding: 0 10px;
         background: #fff;
-        margin-bottom: 10px;
+        border: 1.5px solid #e5e7eb;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #111827;
+        cursor: pointer;
+        transition: border-color 0.15s, box-shadow 0.15s;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-trigger:hover {
+        border-color: #93c5fd;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-trigger[aria-expanded="true"] {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-trigger-text {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: left;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-chevron {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        color: #9ca3af;
+        transition: transform 0.18s;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-trigger[aria-expanded="true"] .ja-rs-chevron {
+        transform: rotate(180deg);
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-panel {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        z-index: 9999;
+        background: #fff;
+        border: 1.5px solid #e5e7eb;
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06);
+        overflow: hidden;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-search-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid #f3f4f6;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-search-ico {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        color: #9ca3af;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-search {
+        flex: 1;
+        border: none;
+        outline: none;
+        font-size: 13px;
+        color: #111827;
+        background: transparent;
+        padding: 0;
+        line-height: 1.4;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-search::placeholder { color: #9ca3af; }
+      #${INPAGE_ROOT_ID} .ja-rs-list {
+        list-style: none;
+        margin: 0;
+        padding: 4px;
+        max-height: 180px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #e5e7eb transparent;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-list::-webkit-scrollbar { width: 5px; }
+      #${INPAGE_ROOT_ID} .ja-rs-list::-webkit-scrollbar-track { background: transparent; }
+      #${INPAGE_ROOT_ID} .ja-rs-list::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 4px; }
+      #${INPAGE_ROOT_ID} .ja-rs-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 8px;
+        border-radius: 6px;
+        font-size: 13px;
+        color: #374151;
+        cursor: pointer;
+        transition: background 0.1s;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-option:hover,
+      #${INPAGE_ROOT_ID} .ja-rs-option--focus {
+        background: #f0f7ff;
+        color: #1d4ed8;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-option--selected {
+        background: #eff6ff;
+        color: #1d4ed8;
+        font-weight: 600;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-option--selected::after {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid #2563eb;
+        border-bottom: 2px solid #2563eb;
+        transform: rotate(45deg) translateY(-2px);
+        flex-shrink: 0;
+        margin-left: auto;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-badge-default {
+        font-size: 10px;
+        font-weight: 600;
+        color: #2563eb;
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 4px;
+        padding: 1px 5px;
+        flex-shrink: 0;
+      }
+      #${INPAGE_ROOT_ID} .ja-rs-empty {
+        padding: 10px 12px;
+        font-size: 12px;
+        color: #9ca3af;
+        text-align: center;
+        margin: 0;
       }
       #${INPAGE_ROOT_ID} .ja-kw-update-jd-btn {
         width: 100%;
@@ -231,12 +372,6 @@ function getWidgetStylesComponents() {
         text-transform: uppercase;
         color: #9ca3af;
         margin: 0;
-      }
-      #${INPAGE_ROOT_ID} .ja-kw-resume-select {
-        height: 32px;
-        padding: 4px 8px;
-        font-size: 13px;
-        margin-bottom: 0;
       }
       #${INPAGE_ROOT_ID} .ja-kw-tailor-btn {
         flex-shrink: 0;
