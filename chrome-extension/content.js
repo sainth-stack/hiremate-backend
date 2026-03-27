@@ -229,8 +229,12 @@ function mountInPageUILegacyInto(root) {
     root.classList.remove("collapsed");
   });
 
-  // Reload button
-  root.querySelector("#ja-reload")?.addEventListener("click", () => location.reload());
+  // Report Issue button — opens the web app in a new tab
+  root.querySelector("#ja-report-issue")?.addEventListener("click", async () => {
+    const data = await chrome.storage.local.get(["loginPageUrl"]);
+    const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
+    chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url: `${base}/report-issue` });
+  });
 
   // ─── Initial load: quick field scan + parallel API calls ─────────────────
   (async () => {

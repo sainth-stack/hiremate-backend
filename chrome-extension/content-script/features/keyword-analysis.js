@@ -3,7 +3,7 @@
 //             KEYWORD_TAB_ICONS (icons.js)
 //             logWarn, escapeHtml (utils.js)
 //             getApiBase, getAuthHeaders, fetchWithAuthRetry (api-service.js)
-//             isCareerPage, isJobDetailPage, isJobPageViaLLM (page-detection.js)
+//             isCareerPage, isJobDetailPage (page-detection.js)
 //             keywordGaugeDashArray, keywordMatchTheme, renderKeywordMatchChip (keyword-match.js)
 //             openResumeGeneratorUrl (job-form.js)
 //             fetchResumesFromApi (profile-panel.js)
@@ -165,9 +165,6 @@ async function runKeywordAnalysisAndMaybeShowWidget() {
   const urlSuggestsJob = isCareerPage(url);
   if (!urlSuggestsJob) {
     if (window.__PAGE_DETECTOR__ && !window.__PAGE_DETECTOR__.shouldShowWidget()) return;
-    const snippet = (document.body?.innerText || document.body?.textContent || "").replace(/\s+/g, " ").slice(0, 800);
-    const llmSaysJob = await isJobPageViaLLM(url, document.title, snippet);
-    if (llmSaysJob !== true) return;
   }
 
   setTimeout(async () => {

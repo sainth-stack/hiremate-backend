@@ -10,3 +10,8 @@ from backend.app.models.form_field_learning import (
     UserFieldAnswer,
     UserSubmissionHistory,
 )
+from backend.app.models.resume_version import ResumeVersion
+from backend.app.models.tailor_context import TailorContext
+from backend.app.models.user_resume_preference import UserResumePreference
+from backend.app.models.legal_policy import LegalPolicy
+from backend.app.models.issue_report import IssueReport

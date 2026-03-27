@@ -340,13 +340,52 @@ def _parse_bullets(description: str, max_bullets: int = 4) -> list[str]:
     return lines[:max_bullets]
 
 
-def _format_dates(start: str, end: str) -> str:
-    """Format start/end into 'Mon YYYY - Mon YYYY' or 'Mon YYYY - Present'."""
+_MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June',
+               'July', 'August', 'September', 'October', 'November', 'December']
+_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+
+def _parse_date_to_parts(date_str: str) -> tuple:
+    """Parse a date string into (month_1based, year) ints, or (None, None) on failure."""
+    s = (date_str or '').strip()
+    if not s:
+        return None, None
+    # "YYYY-MM"
+    m = re.match(r'^(\d{4})-(\d{2})$', s)
+    if m:
+        return int(m.group(2)), int(m.group(1))
+    # "Month YYYY" or "Mon YYYY"
+    for i, (lng, sht) in enumerate(zip(_MONTH_LONG, _MONTH_SHORT), 1):
+        m = re.match(rf'^({re.escape(lng)}|{re.escape(sht)})\s+(\d{{4}})$', s, re.I)
+        if m:
+            return i, int(m.group(2))
+    return None, None
+
+
+def _format_single_date(date_str: str, style: str) -> str:
+    """Reformat a single date string into the requested display style."""
+    s = (date_str or '').strip()
+    if not s or s.lower() in ('present', 'current'):
+        return s
+    month, year = _parse_date_to_parts(s)
+    if month is None:
+        return s  # Can't parse — return as-is
+    if style == 'Short (Jan YYYY)':
+        return f"{_MONTH_SHORT[month - 1]} {year}"
+    if style == 'Numeric (01/YYYY)':
+        return f"{month:02d}/{year}"
+    return f"{_MONTH_LONG[month - 1]} {year}"  # Long Name (January YYYY) — default
+
+
+def _format_dates(start: str, end: str, style: str = 'Long Name (January YYYY)') -> str:
+    """Format start/end into configured date style, or 'Mon YYYY - Present'."""
     if not start and not end:
         return ""
+    fmt_start = _format_single_date(start or '', style)
     if not end or end.lower() in ("present", "current"):
-        return f"{start or ''} - Present"
-    return f"{start or ''} - {end}"
+        return f"{fmt_start} - Present" if fmt_start else "Present"
+    return f"{fmt_start} - {_format_single_date(end, style)}"
 
 
 def _identity(s: str) -> str:
@@ -555,6 +594,7 @@ def build_resume_context_from_payload(
     for_html: bool = False,
     raw_awards: list | None = None,
     skip_llm: bool = False,
+    date_format_style: str = 'Long Name (January YYYY)',
 ) -> dict:
     """Build Jinja2 context directly from a ProfilePayload (no DB access needed).
     skip_llm=True: skip all LLM enhancement calls — use for live preview (~50ms response).
@@ -609,7 +649,7 @@ def build_resume_context_from_payload(
         experiences.append({
             "company": escape_fn(exp.companyName or "Company"),
             "location": escape_fn(exp.location or ""),
-            "dates": escape_fn(_format_dates(exp.startDate or "", exp.endDate or "")),
+            "dates": escape_fn(_format_dates(exp.startDate or "", exp.endDate or "", style=date_format_style)),
             "title": escape_fn(exp.jobTitle or "Role"),
             "bullets": bullets_out,
         })
@@ -623,7 +663,7 @@ def build_resume_context_from_payload(
         educations.append({
             "institution": escape_fn(edu.institution or "Institution"),
             "location": escape_fn(edu.location or ""),
-            "dates": escape_fn(_format_dates(edu.startYear or "", edu.endYear or "")),
+            "dates": escape_fn(_format_dates(edu.startYear or "", edu.endYear or "", style=date_format_style)),
             "degree": escape_fn(degree),
             "grade": escape_fn(edu.grade or ""),
         })
@@ -833,16 +873,19 @@ def generate_resume_preview_pdf(
     font_size: str | None = None,
     line_height: str | None = None,
     profile_override: dict | None = None,
+    design_config: dict | None = None,
 ) -> bytes:
     """
     Generate resume PDF without saving. Returns PDF bytes.
     When profile_override is provided (current editor state), uses it directly so the
     downloaded PDF matches the live preview exactly. Cache is bypassed for overrides.
+    design_config: full design settings applied to both HTML and WeasyPrint rendering.
     """
     ff, fs, lh = _normalize_font_params(font_family, font_size, line_height)
+    dcfg = design_config or {}
 
     # Cache only applies when using the DB profile (not a live editor override)
-    if not profile_override:
+    if not profile_override and not dcfg:
         cache_key = _preview_cache_key(user.id, template_id, ff, fs, lh, job_title or "", job_description or "")
         with _PREVIEW_CACHE_LOCK:
             if cache_key in _PREVIEW_CACHE:
@@ -853,26 +896,43 @@ def generate_resume_preview_pdf(
                     return pdf_bytes
                 del _PREVIEW_CACHE[cache_key]
 
+    date_fmt = dcfg.get('format_dates', 'Long Name (January YYYY)')
+
     if profile_override:
         try:
             payload = ProfilePayload(**profile_override)
         except Exception:
             payload = ProfilePayload()
-        context = build_resume_context_from_payload(payload, job_title or "", job_description or "", for_html=True)
+        context = build_resume_context_from_payload(
+            payload, job_title or "", job_description or "",
+            for_html=True, date_format_style=date_fmt,
+        )
     else:
         profile = ProfileService.get_or_create_profile(db, user)
         context = build_resume_context(profile, job_title or "", job_description or "", for_html=True)
+
+    _apply_design_config_to_context(context, dcfg)
 
     context["font_family"] = ff
     context["font_size"] = fs
     context["line_height"] = lh
     template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
     html_content = render_html_resume(context, template_dir, template_id=template_id)
+
+    # Inject design-config CSS overrides (WeasyPrint uses @page rules; ignores @media screen).
+    if dcfg:
+        design_css = _build_design_css_overrides(dcfg, template_id or 'classic')
+        if design_css:
+            html_content = html_content.replace("</head>", design_css + "</head>")
+        sections_order = dcfg.get('sections_order') or []
+        if sections_order:
+            html_content = _reorder_sections_html(html_content, sections_order, template_id or 'classic')
+
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
         pdf_bytes = html_to_pdf_weasyprint(html_content, work_dir)
 
-    if not profile_override:
+    if not profile_override and not dcfg:
         with _PREVIEW_CACHE_LOCK:
             while len(_PREVIEW_CACHE) >= _PREVIEW_CACHE_MAX and _PREVIEW_CACHE:
                 _PREVIEW_CACHE.popitem(last=False)
@@ -880,6 +940,161 @@ def generate_resume_preview_pdf(
             _PREVIEW_CACHE.move_to_end(cache_key)
 
     return pdf_bytes
+
+
+# ── Design-config helpers ────────────────────────────────────────────────────
+
+_SECTION_CTX_MAP = {
+    'summary': 'professional_summary',
+    'experience': 'experiences',
+    'skills': 'skills',
+    'education': 'educations',
+    'projects': 'projects',
+    'certifications': 'awards',
+}
+
+_SECTION_TITLE_PATTERNS = {
+    'summary': re.compile(r'summary', re.I),
+    'experience': re.compile(r'experience', re.I),
+    'skills': re.compile(r'skills', re.I),
+    'education': re.compile(r'education', re.I),
+    'projects': re.compile(r'projects', re.I),
+    'certifications': re.compile(r'awards|certif', re.I),
+}
+
+
+def _apply_design_config_to_context(context: dict, design_config: dict) -> dict:
+    """Hide sections not in sections_visible by clearing their context keys."""
+    sections_visible = (design_config or {}).get('sections_visible') or []
+    if not sections_visible:
+        return context  # Empty list = all sections visible
+    for key, ctx_key in _SECTION_CTX_MAP.items():
+        if key not in sections_visible:
+            val = context.get(ctx_key)
+            if isinstance(val, list):
+                context[ctx_key] = []
+            elif isinstance(val, dict):
+                context[ctx_key] = {}
+            elif isinstance(val, str):
+                context[ctx_key] = ''
+    return context
+
+
+def _reorder_sections_html(html: str, sections_order: list, template_id: str) -> str:
+    """Post-process rendered HTML to reorder section blocks per sections_order.
+    Skips two-column templates (modern, impact) where safe reordering is not possible."""
+    if not sections_order or (template_id or '').lower() in ('modern', 'impact'):
+        return html
+    body_m = re.search(r'(<body[^>]*>)(.*)(</body>)', html, re.DOTALL)
+    if not body_m:
+        return html
+    head_chunk = html[:body_m.start(2)]
+    body_content = body_m.group(2)
+    tail_chunk = html[body_m.end(2):]
+
+    # Split at each <div class="section"> boundary; parts[0] = header area
+    parts = re.split(r'(?=<div\s+class="section")', body_content)
+    if len(parts) <= 1:
+        return html
+    header_block = parts[0]
+    section_blocks = parts[1:]
+
+    def _identify_block(block: str) -> str:
+        snippet = block[:300]
+        for key, pattern in _SECTION_TITLE_PATTERNS.items():
+            if pattern.search(snippet):
+                return key
+        return 'unknown'
+
+    mapped: dict[str, str] = {}
+    unknowns: list[str] = []
+    for block in section_blocks:
+        key = _identify_block(block)
+        if key == 'unknown':
+            unknowns.append(block)
+        else:
+            mapped[key] = block
+
+    ordered = [mapped[k] for k in sections_order if k in mapped]
+    # Append any sections that exist in HTML but weren't in sections_order
+    ordered += [mapped[k] for k in mapped if k not in sections_order] + unknowns
+    return head_chunk + header_block + ''.join(ordered) + tail_chunk
+
+
+def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
+    """Generate a <style> block with CSS overrides for all active design-config settings."""
+    if not design_config:
+        return ''
+    lines: list[str] = []
+    tid = (template_id or 'classic').lower()
+
+    # ── Color scheme ─────────────────────────────────────────────────────────
+    color_scheme_id = design_config.get('color_scheme_id', '')
+    if color_scheme_id:
+        from backend.app.services.templates.registry import get_template as _get_tmpl
+        tmpl_meta = _get_tmpl(tid)
+        if tmpl_meta:
+            schemes = tmpl_meta.get('color_schemes', [])
+            scheme = next((s for s in schemes if s['id'] == color_scheme_id), None)
+            if not scheme and schemes:
+                scheme = schemes[0]  # fallback to template default
+            if scheme:
+                p = scheme['primary']
+                bg = scheme.get('bg', '#ffffff')
+                lines += [
+                    f".section-title {{ color: {p} !important; border-color: {p} !important; }}",
+                    f".header-band {{ background-color: {p} !important; }}",
+                    f"td.sidebar {{ background-color: {p} !important; }}",
+                ]
+                if bg != '#ffffff':
+                    lines.append(f"body {{ background-color: {bg}; }}")
+
+    # ── Margin size ──────────────────────────────────────────────────────────
+    margin_map = {'Small': '0.3in', 'Medium': '0.5in', 'Large': '0.75in'}
+    margin = margin_map.get(design_config.get('margin_size', 'Medium'), '0.5in')
+    lines += [
+        f"@page {{ margin: {margin} !important; }}",
+        f"@media screen {{ body {{ padding: {margin} !important; box-sizing: border-box; }} }}",
+        f"@media screen {{ .header-band {{ margin-left: -{margin} !important; "
+        f"margin-right: -{margin} !important; margin-top: -{margin} !important; }} }}",
+    ]
+
+    # ── Header alignment ─────────────────────────────────────────────────────
+    align_val = 'center' if design_config.get('header_align', 'Center') == 'Center' else 'left'
+    lines += [
+        f".header {{ text-align: {align_val} !important; }}",
+        f".header-band {{ text-align: {align_val} !important; }}",
+    ]
+
+    # ── Section spacing ──────────────────────────────────────────────────────
+    spacing_map = {'compact': '6px', 'normal': '12px', 'spacious': '20px'}
+    spacing = spacing_map.get(design_config.get('section_spacing', 'normal'), '12px')
+    lines += [
+        f".section {{ margin-top: {spacing} !important; }}",
+        f".main .section {{ margin-top: {spacing} !important; }}",
+    ]
+
+    # ── Section separator line ────────────────────────────────────────────────
+    if not design_config.get('section_separator', True):
+        lines.append(".section-title { border-bottom: none !important; }")
+
+    # ── Bullet icon ──────────────────────────────────────────────────────────
+    bullet_map = {'• Bullet': '•', '– Dash': '–', '▸ Arrow': '▸'}
+    bullet_char = bullet_map.get(design_config.get('bullet_icon', '• Bullet'), '•')
+    lines += [
+        "ul { list-style: none !important; padding-left: 1.2em !important; }",
+        f"li::before {{ content: '{bullet_char} '; }}",
+    ]
+
+    # ── Name uppercase ───────────────────────────────────────────────────────
+    if design_config.get('name_capitalize', False):
+        lines.append(".name { text-transform: uppercase !important; }")
+
+    # ── Page size ────────────────────────────────────────────────────────────
+    if design_config.get('page_size') == 'A4':
+        lines.append("@page { size: A4 !important; }")
+
+    return "<style>\n/* design-config overrides */\n" + "\n".join(lines) + "\n</style>\n"
 
 
 def generate_resume_preview_html(
@@ -892,6 +1107,7 @@ def generate_resume_preview_html(
     font_size: str | None = None,
     line_height: str | None = None,
     profile_override: dict | None = None,
+    design_config: dict | None = None,
 ) -> str:
     """
     Return rendered Jinja2 HTML string using the SAME templates as PDF generation.
@@ -899,20 +1115,30 @@ def generate_resume_preview_html(
     Fast (~50ms) — no WeasyPrint conversion needed.
     profile_override: current editor profile state passed directly from the frontend,
     bypassing the DB so live edits appear instantly without waiting for the 700ms save debounce.
+    design_config: full design settings (color scheme, margins, spacing, sections, etc.).
     """
+    dcfg = design_config or {}
+    date_fmt = dcfg.get('format_dates', 'Long Name (January YYYY)')
+
     if profile_override:
         try:
             payload = ProfilePayload(**profile_override)
         except Exception:
             payload = ProfilePayload()
         # skip_llm=True: preview must be fast (~50ms). LLM enhancement already ran at generation time.
-        context = build_resume_context_from_payload(payload, job_title or "", job_description or "", for_html=True, skip_llm=True)
+        context = build_resume_context_from_payload(
+            payload, job_title or "", job_description or "",
+            for_html=True, skip_llm=True, date_format_style=date_fmt,
+        )
     else:
         profile = ProfileService.get_or_create_profile(db, user)
         # Even without override, skip LLM for preview — this endpoint is for display only.
         context = build_resume_context_from_payload(
-            profile_model_to_payload(profile), job_title or "", job_description or "", for_html=True, skip_llm=True
+            profile_model_to_payload(profile), job_title or "", job_description or "",
+            for_html=True, skip_llm=True, date_format_style=date_fmt,
         )
+
+    _apply_design_config_to_context(context, dcfg)
 
     ff, fs, lh = _normalize_font_params(font_family, font_size, line_height)
     context["font_family"] = ff
@@ -922,19 +1148,28 @@ def generate_resume_preview_html(
     template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
     html = render_html_resume(context, template_dir, template_id=template_id)
 
-    # Inject screen-only CSS for templates that don't define their own @media screen rules.
+    # Inject baseline screen CSS for templates that don't define their own @media screen rules.
     # WeasyPrint ignores @media screen entirely, so this never affects the PDF output.
-    # Templates that already include @media screen (modern, executive, harvard) are skipped.
+    # Templates that already include @media screen (modern, executive, harvard, elegant, impact) are skipped.
     _templates_with_own_screen_css = {"modern", "executive", "harvard", "elegant", "impact"}
     if (template_id or "classic").lower() not in _templates_with_own_screen_css:
-        margin = "0.4in" if (template_id or "classic").lower() == "modern" else "0.5in"
-        screen_css = f"""<style>
-@media screen {{
-  body {{ padding: {margin} !important; box-sizing: border-box; }}
-  .header-band {{ margin-left: -{margin} !important; margin-right: -{margin} !important; margin-top: -{margin} !important; }}
-}}
+        screen_css = """<style>
+@media screen {
+  body { padding: 0.5in !important; box-sizing: border-box; }
+  .header-band { margin-left: -0.5in !important; margin-right: -0.5in !important; margin-top: -0.5in !important; }
+}
 </style>"""
         html = html.replace("</head>", screen_css + "\n</head>")
+
+    # Design-config CSS overrides injected last — takes precedence over template defaults.
+    if dcfg:
+        design_css = _build_design_css_overrides(dcfg, template_id or 'classic')
+        if design_css:
+            html = html.replace("</head>", design_css + "</head>")
+        sections_order = dcfg.get('sections_order') or []
+        if sections_order:
+            html = _reorder_sections_html(html, sections_order, template_id or 'classic')
+
     return html
 
 

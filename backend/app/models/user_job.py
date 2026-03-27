@@ -27,5 +27,8 @@ class UserJob(Base):
     application_status = Column(String(100), default="saved")
     job_posting_url = Column(String(1024), nullable=True)
 
+    # source_site: linkedin | indeed | naukri | glassdoor | generic
+    source_site = Column(String(30), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

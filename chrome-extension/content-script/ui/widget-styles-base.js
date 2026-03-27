@@ -120,8 +120,26 @@ function getWidgetStylesBase() {
   color: #111;
 }
   #${INPAGE_ROOT_ID} .ja-close svg {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
+}
+  #${INPAGE_ROOT_ID} .ja-report-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+  #${INPAGE_ROOT_ID} .ja-report-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #111827;
 }
       #${INPAGE_ROOT_ID} .ja-tabs {
   display: flex;

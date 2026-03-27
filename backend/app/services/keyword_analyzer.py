@@ -269,3 +269,89 @@ def analyze_keywords(job_description: str, resume_text: str) -> dict[str, Any]:
         int((time.monotonic() - started) * 1000),
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Deep keyword extraction + scoring (for resume generation pipeline)
+# ---------------------------------------------------------------------------
+
+_DEEP_EXTRACT_PROMPT = """Extract the most important keywords from this job description for resume optimization.
+
+Return a JSON object with a "keywords" array. Each element must have:
+- "term": the keyword string (lowercase, concise)
+- "importance": one of "critical", "important", or "nice_to_have"
+- "category": one of "technical", "soft_skill", "domain", or "tool"
+
+Maximum 40 keywords. Return ONLY valid JSON, no explanation.
+
+Job description:
+{jd}"""
+
+
+async def extract_keywords_deep(jd: str) -> list[dict]:
+    """
+    Extract ranked keywords from a JD using LLM for intelligent prioritization.
+
+    Returns a list of dicts:
+        [{"term": str, "importance": "critical"|"important"|"nice_to_have",
+          "category": "technical"|"soft_skill"|"domain"|"tool"}]
+    """
+    if not settings.openai_api_key or not jd.strip():
+        return []
+
+    client = _get_client()
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": _DEEP_EXTRACT_PROMPT.format(jd=jd[:3000]),
+            }],
+            response_format={"type": "json_object"},
+            max_tokens=800,
+            temperature=0.2,
+        )
+        raw = response.choices[0].message.content or "{}"
+        result = json.loads(raw)
+        return result.get("keywords", [])
+    except Exception:
+        logger.exception("extract_keywords_deep failed")
+        return []
+
+
+def score_keywords(resume_text: str, keywords: list[dict]) -> dict:
+    """
+    Score keyword match with weighted importance.
+
+    Returns:
+        {
+          "score": int (0-100),
+          "matched": [kw_dict, ...],
+          "missing": [kw_dict, ...],
+          "critical_missing": [kw_dict, ...],
+        }
+    """
+    text_lower = resume_text.lower()
+    _weights = {"critical": 3, "important": 2, "nice_to_have": 1}
+
+    results = []
+    for kw in keywords:
+        term = kw.get("term", "").lower()
+        # Check term and any known aliases
+        aliases = _ALIASES.get(term, [term])
+        found = any(alias in text_lower for alias in aliases)
+        results.append({**kw, "found": found})
+
+    total_weight = sum(_weights.get(k.get("importance", "nice_to_have"), 1) for k in results)
+    match_weight = sum(
+        _weights.get(k.get("importance", "nice_to_have"), 1) for k in results if k["found"]
+    )
+
+    return {
+        "score": round(match_weight / total_weight * 100) if total_weight > 0 else 0,
+        "matched": [k for k in results if k["found"]],
+        "missing": [k for k in results if not k["found"]],
+        "critical_missing": [
+            k for k in results if not k["found"] and k.get("importance") == "critical"
+        ],
+    }

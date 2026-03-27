@@ -6,29 +6,25 @@
 
 function getWidgetHTML() {
   return `
+    <button type="button" class="ja-mini" id="ja-open" title="Open OpsBrain">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 30px; height: 30px;">
+        <path d="M12 5C7 5 3 9 3 14c0 2.5 1 4.5 2.5 6L3 22l2.5-1.5C7 21.5 9.5 22 12 22c5 0 9-4 9-8s-4-9-9-9z"/>
+        <path d="M8 12h.01M12 12h.01M16 12h.01"/>
+        <circle cx="12" cy="10" r="1" fill="currentColor"/>
+        <circle cx="15" cy="11.5" r="0.8" fill="currentColor"/>
+        <circle cx="9" cy="11.5" r="0.8" fill="currentColor"/>
+      </svg>
+    </button>
     <div class="ja-card">
       <div class="ja-head" id="ja-drag-handle">
         <div class="ja-logo-wrap">
           <img class="ja-logo-icon" src="${chrome.runtime.getURL('logo.png')}" alt="OpsBrain" />
         </div>
         <div class="ja-head-actions">
-        <button class="icon-btn" id="ja-reload" title="Reload page">
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-    <path d="M3 3v5h5"/>
-  </svg>
-</button>
+        <button class="ja-report-btn" id="ja-report-issue">Report Issue</button>
 
          <button type="button" class="ja-close ja-head-btn" id="ja-close" title="Close">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
     <line x1="18" y1="6" x2="6" y2="18"></line>
     <line x1="6" y1="6" x2="18" y2="18"></line>
   </svg>

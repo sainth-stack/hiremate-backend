@@ -82,6 +82,11 @@ class PageDetector {
     const url = (window.location?.href || "").toLowerCase();
     const title = (document.title || "").toLowerCase();
 
+    if (url.includes("localhost") || url.includes("127.0.0.1")) {
+      if (window.__CONFIG__?.log) window.__CONFIG__.log("[PageDetector] Blocked: localhost");
+      return false;
+    }
+
     if (this.JOB_PAGE_PATTERNS.urls.some((p) => p.test(url))) {
       if (window.__CONFIG__?.log) window.__CONFIG__.log("[PageDetector] Job page by URL");
       return true;

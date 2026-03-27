@@ -4,7 +4,6 @@ Profile service - create/update profile and resume data
 from sqlalchemy.orm import Session
 
 from backend.app.models.profile import Profile
-from backend.app.schemas.profile import ProfilePayload
 from backend.app.models.user import User
 from backend.app.schemas.profile import ProfilePayload, payload_to_profile_dict
 
@@ -29,10 +28,15 @@ def build_resume_text_from_payload(payload: ProfilePayload) -> str:
 class ProfileService:
     @staticmethod
     def get_or_create_profile(db: Session, user: User) -> Profile:
-        """Get existing profile or create empty one for user"""
+        """Get existing profile or create one pre-seeded with the user's identity fields."""
         profile = db.query(Profile).filter(Profile.user_id == user.id).first()
         if not profile:
-            profile = Profile(user_id=user.id)
+            profile = Profile(
+                user_id=user.id,
+                first_name=user.first_name or "",
+                last_name=user.last_name or "",
+                email=user.email or "",
+            )
             db.add(profile)
             db.commit()
             db.refresh(profile)

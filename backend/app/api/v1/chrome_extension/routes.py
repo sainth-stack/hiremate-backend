@@ -1305,6 +1305,7 @@ def save_tailor_context(
             raise HTTPException(status_code=400, detail="job_description or page_html with scrapable content is required")
 
     set_tailor_context(
+        db=db,
         user_id=current_user.id,
         job_description=job_description,
         job_title=job_title,

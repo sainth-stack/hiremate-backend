@@ -173,8 +173,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try {
         const { loginPageUrl } = await chrome.storage.local.get(["loginPageUrl"]);
         const base = loginPageUrl ? new URL(loginPageUrl).origin : "http://localhost:5173";
-        const url = `${base}/resume-generator/build?tailor=1`;
-        await chrome.tabs.create({ url });
+        const tailorUrl = new URL(`${base}/resume-generator/build`);
+        tailorUrl.searchParams.set("tailor", "1");
+        tailorUrl.searchParams.set("source", "extension");
+        if (msg.jobId) tailorUrl.searchParams.set("job_id", String(msg.jobId));
+        await chrome.tabs.create({ url: tailorUrl.toString() });
         sendResponse({ ok: true });
       } catch (err) {
         sendResponse({ ok: false, error: String(err) });

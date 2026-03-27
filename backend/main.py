@@ -11,6 +11,8 @@ from backend.app.api.v1.admin import router as admin_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.chrome_extension.routes import router as chrome_extension_router
 from backend.app.api.v1.dashboard import router as dashboard_router
+from backend.app.api.v1.legal import router as legal_router
+from backend.app.api.v1.issues import router as issues_router
 from backend.app.api.v1.payment import router as payment_router
 from backend.app.api.v1.user.profile import router as profile_router
 from backend.app.api.v1.resume import router as resume_router
@@ -50,6 +52,8 @@ app.include_router(dashboard_router, prefix="/api")
 app.include_router(chrome_extension_router, prefix="/api")
 app.include_router(activity_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
+app.include_router(legal_router, prefix="/api", tags=["legal"])
+app.include_router(issues_router, prefix="/api", tags=["issues"])
 
 # Serve uploaded resumes (create dir if missing)
 upload_path = Path(settings.upload_dir)
@@ -72,6 +76,15 @@ async def on_startup():
 
     from backend.app.utils import cache
     await cache.connect()
+
+    # Seed default privacy policy if the table is empty
+    try:
+        from backend.app.db.session import SessionLocal
+        from backend.app.services.legal_service import LegalService
+        with SessionLocal() as db:
+            LegalService.seed_default_privacy_policy(db)
+    except Exception as e:
+        logger.warning("Could not seed privacy policy: %s", str(e))
 
 
 @app.get("/")

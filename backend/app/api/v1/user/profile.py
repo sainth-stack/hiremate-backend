@@ -19,9 +19,19 @@ def get_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get current user's profile. Returns empty schema if none exists."""
+    """Get current user's profile. Returns empty schema if none exists.
+    Identity fields (name, email) are back-filled from the User record when the
+    Profile row hasn't been explicitly saved with them yet (e.g. newly registered users)."""
     profile = ProfileService.get_or_create_profile(db, current_user)
-    return profile_model_to_payload(profile)
+    payload = profile_model_to_payload(profile)
+    # Back-fill identity from User model for users whose Profile was created before this fix
+    if not payload.firstName:
+        payload.firstName = current_user.first_name or ""
+    if not payload.lastName:
+        payload.lastName = current_user.last_name or ""
+    if not payload.email:
+        payload.email = current_user.email or ""
+    return payload
 
 
 @router.patch("", response_model=ProfilePayload)

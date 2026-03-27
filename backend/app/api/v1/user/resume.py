@@ -10,7 +10,7 @@ from urllib.request import urlopen
 from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
@@ -18,6 +18,7 @@ from backend.app.core.dependencies import get_current_user, get_db
 from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
 from backend.app.models.user_resume import UserResume
+from backend.app.models.resume_version import ResumeVersion
 from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
 from backend.app.services.pdf_generator import text_to_pdf_bytes
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
@@ -39,6 +40,20 @@ class ResumeUpdateIn(BaseModel):
     resume_profile_snapshot: dict | None = None
 
 
+class ResumeSnapshotUpdateIn(BaseModel):
+    resume_profile_snapshot: dict
+
+
+class ResumeRenameIn(BaseModel):
+    resume_name: str
+
+
+class DesignConfigUpdateIn(BaseModel):
+    design_config: dict
+    template_id: str | None = None
+
+
+
 class GenerateResumeIn(BaseModel):
     job_title: str = ""
     job_description: str = ""
@@ -48,6 +63,14 @@ class GenerateResumeIn(BaseModel):
     line_height: str | None = None
     # Current editor profile state — when provided, download PDF matches live preview exactly.
     profile_override: dict | None = None
+    # Full design configuration — applied to HTML and PDF rendering.
+    design_config: dict | None = None
+    # If present, tailor-more on existing resume (creates new version)
+    resume_id: int | None = None
+    target_keywords: list[str] | None = None
+    ranked_keywords: list[dict] | None = None
+    tone: str | None = None
+    version_trigger: str = "initial_generate"
 
 
 class PreviewHtmlIn(BaseModel):
@@ -57,8 +80,54 @@ class PreviewHtmlIn(BaseModel):
     font_family: str | None = None
     font_size: str | None = None
     line_height: str | None = None
+    # Full design configuration (color scheme, margins, spacing, etc.)
+    design_config: dict | None = None
     # Full profile from the editor — bypasses DB so preview reflects unsaved changes instantly.
     profile_override: dict | None = None
+
+
+def _get_next_version_number(db: Session, resume_id: int) -> int:
+    """Return the next version_number for a resume (max existing + 1, or 1 if none)."""
+    from sqlalchemy import func
+    result = db.query(func.max(ResumeVersion.version_number)).filter(
+        ResumeVersion.resume_id == resume_id
+    ).scalar()
+    return (result or 0) + 1
+
+
+def _create_resume_version(
+    db: Session,
+    resume: UserResume,
+    trigger: str = "initial_generate",
+    jd_snapshot: str = "",
+) -> ResumeVersion:
+    """Create a version record for the given resume and update current_version_id."""
+    version_number = _get_next_version_number(db, resume.id)
+    version = ResumeVersion(
+        resume_id=resume.id,
+        version_number=version_number,
+        profile_snapshot=resume.resume_profile_snapshot,
+        design_config=resume.design_config,
+        trigger=trigger,
+        keyword_score=resume.keyword_score,
+        keyword_details=resume.keyword_details,
+        jd_snapshot=jd_snapshot or resume.job_description_snippet,
+    )
+    db.add(version)
+    db.flush()  # get version.id before commit
+    resume.current_version_id = version.id
+    db.commit()
+    db.refresh(version)
+    return version
+
+
+@router.get("/templates")
+def get_resume_templates(
+    current_user: User = Depends(get_current_user),
+):
+    """List all available resume templates with metadata (ATS scores, fonts, color schemes)."""
+    from backend.app.services.templates.registry import list_templates
+    return {"templates": list_templates()}
 
 
 @router.get("/list")
@@ -79,7 +148,7 @@ def get_resume_workspace(
     Merged: resume list + tailor context (fetch-and-clear).
     """
     resumes = list_resumes_svc(db, current_user)
-    tailor_context = get_and_clear_tailor_context(current_user.id)
+    tailor_context = get_and_clear_tailor_context(db, current_user.id)
     return {
         "resumes": resumes,
         "tailor_context": tailor_context,
@@ -110,6 +179,7 @@ def preview_resume_html(
             font_size=payload.font_size or None,
             line_height=payload.line_height or None,
             profile_override=payload.profile_override or None,
+            design_config=payload.design_config or None,
         )
         return Response(content=html, media_type="text/html; charset=utf-8")
     except Exception as e:
@@ -138,6 +208,7 @@ def preview_resume(
             font_size=payload.font_size or None,
             line_height=payload.line_height or None,
             profile_override=payload.profile_override or None,
+            design_config=payload.design_config or None,
         )
         return Response(content=pdf_bytes, media_type="application/pdf")
     except ValueError as e:
@@ -157,6 +228,7 @@ def generate_resume(
     Generate a JD-optimized resume from user profile.
     Uses Jinja2 HTML template + WeasyPrint. Same user profile, bullets prioritized by JD keywords.
     Returns resume_id, resume_url, presigned_url, resume_name, resume_text (for edit popup).
+    When resume_id is provided, creates a new version record (tailor-more flow).
     """
     try:
         result = generate_resume_html(
@@ -169,12 +241,38 @@ def generate_resume(
             font_size=payload.font_size or None,
             line_height=payload.line_height or None,
         )
-        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         logger.exception("Resume generation failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Create a version record for the newly generated/tailored resume
+    resume_id = result.get("id") if isinstance(result, dict) else None
+    version_number = None
+    if resume_id:
+        try:
+            resume = db.query(UserResume).filter(
+                UserResume.id == resume_id,
+                UserResume.user_id == current_user.id,
+            ).first()
+            if resume:
+                trigger = payload.version_trigger or (
+                    "tailor_more" if payload.resume_id else "initial_generate"
+                )
+                version = _create_resume_version(
+                    db,
+                    resume,
+                    trigger=trigger,
+                    jd_snapshot=(payload.job_description or "").strip(),
+                )
+                version_number = version.version_number
+        except Exception as e:
+            logger.warning("Version record creation failed for resume_id=%s: %s", resume_id, e)
+
+    if isinstance(result, dict) and version_number is not None:
+        result["version_number"] = version_number
+    return result
 
 
 @router.get("/{resume_id}/file")
@@ -220,6 +318,255 @@ def get_resume_file(
     return FileResponse(resume_path, media_type="application/pdf", filename=filename)
 
 
+@router.get("/{resume_id}/versions")
+def get_resume_versions(
+    resume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all versions for a resume with metadata (no full snapshots)."""
+    r = db.query(UserResume).filter(
+        UserResume.id == resume_id, UserResume.user_id == current_user.id
+    ).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    versions = (
+        db.query(ResumeVersion)
+        .filter(ResumeVersion.resume_id == resume_id)
+        .order_by(ResumeVersion.version_number.desc())
+        .all()
+    )
+    return [
+        {
+            "id": v.id,
+            "version_number": v.version_number,
+            "trigger": v.trigger,
+            "keyword_score": v.keyword_score,
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+        }
+        for v in versions
+    ]
+
+
+@router.get("/{resume_id}/versions/{version_id}")
+def get_resume_version(
+    resume_id: int,
+    version_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get full snapshot for a specific version (for comparison/restore)."""
+    r = db.query(UserResume).filter(
+        UserResume.id == resume_id, UserResume.user_id == current_user.id
+    ).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    version = db.query(ResumeVersion).filter(
+        ResumeVersion.id == version_id,
+        ResumeVersion.resume_id == resume_id,
+    ).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return {
+        "id": version.id,
+        "version_number": version.version_number,
+        "trigger": version.trigger,
+        "profile_snapshot": version.profile_snapshot,
+        "design_config": version.design_config,
+        "keyword_score": version.keyword_score,
+        "keyword_details": version.keyword_details,
+        "jd_snapshot": version.jd_snapshot,
+        "created_at": version.created_at.isoformat() if version.created_at else None,
+    }
+
+
+class SectionGenerateIn(BaseModel):
+    section: str  # 'summary', 'skills', 'experience_bullet'
+    tone: str | None = None  # 'professional', 'confident', 'concise', 'detailed'
+    context: dict | None = None  # { role_index?, bullet_index?, instruction? }
+    stream: bool = True
+
+
+class KeywordsExtractIn(BaseModel):
+    job_description: str
+
+
+@router.post("/{resume_id}/section/generate")
+async def generate_resume_section(
+    resume_id: int,
+    payload: SectionGenerateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate or regenerate a single resume section with AI.
+    Supports streaming (SSE) or single JSON response.
+    """
+    from backend.app.services.section_generator import generate_section_stream, generate_section_sync
+
+    resume = db.query(UserResume).filter(
+        UserResume.id == resume_id,
+        UserResume.user_id == current_user.id,
+    ).first()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    profile = resume.resume_profile_snapshot or {}
+    jd = resume.job_description_snippet or ""
+
+    if payload.stream:
+        return StreamingResponse(
+            generate_section_stream(
+                section=payload.section,
+                profile=profile,
+                jd=jd,
+                tone=payload.tone,
+                context=payload.context,
+            ),
+            media_type="text/event-stream",
+        )
+    else:
+        try:
+            content = generate_section_sync(
+                section=payload.section,
+                profile=profile,
+                jd=jd,
+                tone=payload.tone,
+                context=payload.context,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return {"content": content}
+
+
+@router.post("/keywords/extract")
+async def extract_resume_keywords(
+    payload: KeywordsExtractIn,
+    current_user: User = Depends(get_current_user),
+):
+    """Extract ranked keywords from a JD using LLM (server-side for quality)."""
+    from backend.app.services.keyword_analyzer import extract_keywords_deep
+
+    if not payload.job_description.strip():
+        raise HTTPException(status_code=400, detail="job_description is required")
+
+    keywords = await extract_keywords_deep(payload.job_description)
+    return {"keywords": keywords}
+
+
+@router.get("/{resume_id}")
+def get_resume(
+    resume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get single resume with current snapshot and metadata."""
+    r = db.query(UserResume).filter(
+        UserResume.id == resume_id, UserResume.user_id == current_user.id
+    ).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    return {
+        "id": r.id,
+        "resume_name": r.resume_name,
+        "resume_url": r.resume_url,
+        "resume_text": r.resume_text,
+        "resume_profile_snapshot": r.resume_profile_snapshot,
+        "job_title": r.job_title or "",
+        "job_description_snippet": r.job_description_snippet or "",
+        "current_version_id": r.current_version_id,
+        "sections_order": r.sections_order or (r.design_config or {}).get("sections_order") or [],
+        "design_config": r.design_config or {},
+        "keyword_score": r.keyword_score,
+        "keyword_details": r.keyword_details,
+        "status": r.status,
+        "template_id": r.template_id,
+        "is_default": r.is_default,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+@router.patch("/{resume_id}/snapshot")
+async def save_resume_snapshot(
+    resume_id: int,
+    payload: ResumeSnapshotUpdateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Debounced save of editor profile state."""
+    if resume_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid resume id")
+    r = db.query(UserResume).filter(UserResume.id == resume_id, UserResume.user_id == current_user.id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    r.resume_profile_snapshot = payload.resume_profile_snapshot
+    db.commit()
+    from backend.app.utils import cache
+    await cache.delete(f"autofill_ctx:{current_user.id}")
+    return {
+        "id": r.id,
+        "resume_profile_snapshot": r.resume_profile_snapshot,
+    }
+
+
+@router.patch("/{resume_id}/rename")
+async def rename_resume(
+    resume_id: int,
+    payload: ResumeRenameIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Rename resume title only."""
+    name = (payload.resume_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="resume_name is required")
+    if resume_id == 0:
+        profile = ProfileService.get_or_create_profile(db, current_user)
+        if not profile.resume_url:
+            raise HTTPException(status_code=404, detail="No profile resume to rename")
+        prefs = dict(profile.preferences or {})
+        prefs["resume_display_name"] = name.replace(" (default)", "").strip()[:200]
+        profile.preferences = prefs
+        db.commit()
+        return {"id": 0, "resume_name": f"{prefs['resume_display_name']} (default)"}
+    if resume_id < 0:
+        raise HTTPException(status_code=400, detail="Invalid resume id")
+    r = db.query(UserResume).filter(UserResume.id == resume_id, UserResume.user_id == current_user.id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    r.resume_name = name
+    db.commit()
+    return {"id": r.id, "resume_name": r.resume_name}
+
+
+@router.patch("/{resume_id}/design")
+async def update_resume_design(
+    resume_id: int,
+    payload: DesignConfigUpdateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Save design config (fonts, colors, margins, template switch)."""
+    if resume_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid resume id")
+    r = db.query(UserResume).filter(UserResume.id == resume_id, UserResume.user_id == current_user.id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    r.design_config = payload.design_config
+    if payload.template_id is not None:
+        r.template_id = payload.template_id
+    # Keep sections_order column in sync with design_config so callers read one source
+    sections_order = payload.design_config.get("sections_order")
+    if sections_order is not None:
+        r.sections_order = sections_order
+    db.commit()
+    return {
+        "id": r.id,
+        "design_config": r.design_config,
+        "template_id": r.template_id,
+    }
+
+
 @router.patch("/{resume_id}")
 async def update_resume(
     resume_id: int,
@@ -227,7 +574,9 @@ async def update_resume(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update resume name and/or content. Regenerates PDF when content changes."""
+    """Update resume name and/or content. Regenerates PDF when content changes.
+    Backward-compatible generic PATCH — delegates to focused endpoints internally.
+    """
     if resume_id == 0:
         profile = ProfileService.get_or_create_profile(db, current_user)
         if not profile.resume_url:
@@ -473,6 +822,9 @@ async def upload_resume(
         )
         db.add(ur)
         db.commit()
+        db.refresh(ur)
+        # Create initial version record for uploaded resume
+        _create_resume_version(db, ur, trigger="upload")
     except Exception as e:
         logger.warning("Failed to add resume to user_resumes: %s", e)
         db.rollback()
@@ -486,6 +838,35 @@ async def upload_resume(
         unique_name,
     )
     return payload.model_dump()
+
+
+@router.get("/tailor-context/{job_id}")
+def get_tailor_context_by_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch active tailor context by job_id without clearing. For URL-based context resolution."""
+    from datetime import datetime
+    from backend.app.models.tailor_context import TailorContext
+    context = (
+        db.query(TailorContext)
+        .filter(
+            TailorContext.user_id == current_user.id,
+            TailorContext.job_id == job_id,
+            TailorContext.expires_at >= datetime.utcnow(),
+        )
+        .order_by(TailorContext.created_at.desc())
+        .first()
+    )
+    if not context:
+        raise HTTPException(status_code=404, detail="No active tailor context for this job")
+    return {
+        "job_id": context.job_id,
+        "job_description": context.job_description,
+        "job_title": context.job_title or "",
+        "source": context.source or "extension",
+    }
 
 
 @router.delete("/profile", response_model=ProfilePayload)

@@ -1,6 +1,6 @@
 // ─── Job Page Detection ────────────────────────────────────────────────────
-// Depends on: getText (utils.js)
-//             getApiBase, getAuthHeaders, fetchWithAuthRetry (api-service.js)
+// Client-side job page detection using URL patterns and content analysis
+// Depends on: (none - standalone module)
 
 function isCareerPage(urlStr = window.location.href) {
   const url = String(urlStr || "").toLowerCase();
@@ -112,18 +112,6 @@ function isJobDetailPage(urlStr = window.location.href) {
 }
 
 async function isJobPageViaLLM(url, title, snippet) {
-  try {
-    const apiBase = await getApiBase();
-    const headers = await getAuthHeaders();
-    const res = await fetchWithAuthRetry(`${apiBase}/chrome-extension/job-page-detect`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ url: url || "", title: title || "", snippet: (snippet || "").slice(0, 800) }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.is_job_page === true;
-  } catch (_) {
-    return null;
-  }
+  // LLM detection disabled - using client-side PageDetector instead
+  return null;
 }
