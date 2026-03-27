@@ -787,6 +787,7 @@ TEMPLATE_MAP = {
     "harvard": "resume_harvard.html",
     "elegant": "resume_elegant.html",
     "impact": "resume_impact.html",
+    "professional": "resume_professional.html",
 }
 
 
@@ -905,11 +906,14 @@ def generate_resume_preview_pdf(
             payload = ProfilePayload()
         context = build_resume_context_from_payload(
             payload, job_title or "", job_description or "",
-            for_html=True, date_format_style=date_fmt,
+            for_html=True, skip_llm=True, date_format_style=date_fmt,
         )
     else:
         profile = ProfileService.get_or_create_profile(db, user)
-        context = build_resume_context(profile, job_title or "", job_description or "", for_html=True)
+        context = build_resume_context_from_payload(
+            profile_model_to_payload(profile), job_title or "", job_description or "",
+            for_html=True, skip_llm=True, date_format_style=date_fmt,
+        )
 
     _apply_design_config_to_context(context, dcfg)
 
@@ -1049,14 +1053,30 @@ def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
                 if bg != '#ffffff':
                     lines.append(f"body {{ background-color: {bg}; }}")
 
-    # ── Margin size ──────────────────────────────────────────────────────────
-    margin_map = {'Small': '0.3in', 'Medium': '0.5in', 'Large': '0.75in'}
-    margin = margin_map.get(design_config.get('margin_size', 'Medium'), '0.5in')
+    # ── Margin size (per-side sliders take precedence over legacy uniform toggle) ──
+    def _to_in(v, default: int = 5) -> str:
+        """Convert slider value (1–15, tenths of an inch) to CSS inch string."""
+        try:
+            return f"{max(1, min(15, int(v))) / 10:.2f}in"
+        except (TypeError, ValueError):
+            return f"{default / 10:.2f}in"
+
+    per_side_keys = ('margin_top_in', 'margin_bottom_in', 'margin_left_in', 'margin_right_in')
+    has_per_side = any(design_config.get(k) is not None for k in per_side_keys)
+    if has_per_side:
+        mt = _to_in(design_config.get('margin_top_in'))
+        mb = _to_in(design_config.get('margin_bottom_in'))
+        ml = _to_in(design_config.get('margin_left_in'))
+        mr = _to_in(design_config.get('margin_right_in'))
+    else:
+        margin_map = {'Small': '0.30in', 'Medium': '0.50in', 'Large': '0.75in'}
+        uniform = margin_map.get(design_config.get('margin_size', 'Medium'), '0.50in')
+        mt = mb = ml = mr = uniform
     lines += [
-        f"@page {{ margin: {margin} !important; }}",
-        f"@media screen {{ body {{ padding: {margin} !important; box-sizing: border-box; }} }}",
-        f"@media screen {{ .header-band {{ margin-left: -{margin} !important; "
-        f"margin-right: -{margin} !important; margin-top: -{margin} !important; }} }}",
+        f"@page {{ margin: {mt} {mr} {mb} {ml} !important; }}",
+        f"@media screen {{ body {{ padding: {mt} {mr} {mb} {ml} !important; box-sizing: border-box; }} }}",
+        f"@media screen {{ .header-band {{ margin-left: -{ml} !important; "
+        f"margin-right: -{mr} !important; margin-top: -{mt} !important; }} }}",
     ]
 
     # ── Header alignment ─────────────────────────────────────────────────────
@@ -1093,6 +1113,31 @@ def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
     # ── Page size ────────────────────────────────────────────────────────────
     if design_config.get('page_size') == 'A4':
         lines.append("@page { size: A4 !important; }")
+
+    # ── Bullet indent ─────────────────────────────────────────────────────────
+    # Uses padding-left (not margin-left) so 0 is truly 0 regardless of bullet style.
+    # list-style-position:inside keeps disc bullets visible even at 0px indent.
+    bullet_indent = design_config.get('bullet_indent')
+    if bullet_indent is not None:
+        try:
+            indent_px = max(0, min(48, int(bullet_indent)))
+            lines += [
+                f"ul {{ margin-left: 0 !important; padding-left: {indent_px}px !important; "
+                f"list-style-position: inside !important; }}",
+            ]
+        except (ValueError, TypeError):
+            pass
+
+    # ── Item padding (vertical padding around job/project/education items) ───
+    item_padding_map = {'none': '0px', 'small': '3px', 'medium': '6px'}
+    item_padding = item_padding_map.get(design_config.get('item_padding', ''), None)
+    if item_padding is not None:
+        lines += [
+            f".job {{ padding-top: {item_padding} !important; padding-bottom: {item_padding} !important; }}",
+            f".project {{ padding-top: {item_padding} !important; padding-bottom: {item_padding} !important; }}",
+            f".education, .education-row, .edu-row {{ padding-top: {item_padding} !important; padding-bottom: {item_padding} !important; }}",
+            f".skills p {{ padding-top: {item_padding} !important; padding-bottom: {item_padding} !important; }}",
+        ]
 
     return "<style>\n/* design-config overrides */\n" + "\n".join(lines) + "\n</style>\n"
 
@@ -1151,7 +1196,7 @@ def generate_resume_preview_html(
     # Inject baseline screen CSS for templates that don't define their own @media screen rules.
     # WeasyPrint ignores @media screen entirely, so this never affects the PDF output.
     # Templates that already include @media screen (modern, executive, harvard, elegant, impact) are skipped.
-    _templates_with_own_screen_css = {"modern", "executive", "harvard", "elegant", "impact"}
+    _templates_with_own_screen_css = {"modern", "executive", "harvard", "elegant", "impact", "professional"}
     if (template_id or "classic").lower() not in _templates_with_own_screen_css:
         screen_css = """<style>
 @media screen {

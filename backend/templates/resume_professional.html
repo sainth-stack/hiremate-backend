@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+/* ===== PAGE ===== */
+@page { size: Letter; margin: 0.5in; }
+
+body {
+    font-family: "{{ font_family|default('Calibri') }}", Arial, sans-serif;
+    font-size: {{ font_size|default('10.5pt') }};
+    margin: 0;
+    padding: 0;
+    line-height: {{ line_height|default('1.25') }};
+    color: #000;
+}
+
+/* ===== HEADER ===== */
+.header { text-align: center; margin-bottom: 10px; }
+.name { font-size: 18pt; font-weight: bold; letter-spacing: 0.5px; }
+.contact { font-size: 9.5pt; margin-top: 4px; color: #111; }
+.contact a { color: #000; text-decoration: underline; }
+
+/* ===== SECTION ===== */
+.section { margin-top: 12px; }
+
+.section-title {
+    font-size: 10.5pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #1a3a5c;
+    border-bottom: 1.5px solid #1a3a5c;
+    padding-bottom: 2px;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+}
+
+/* ===== SKILLS ===== */
+.skills p { margin: 2px 0; }
+
+/* ===== EXPERIENCE ===== */
+.job { margin-bottom: 7px; }
+
+.job-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+
+.job-title-company { font-weight: bold; }
+.job-date { font-style: italic; font-size: 9.5pt; white-space: nowrap; padding-left: 8px; }
+
+ul { margin: 3px 0 3px 18px; padding: 0; list-style-type: disc; }
+li { margin-bottom: 2px; }
+
+/* ===== EDUCATION ===== */
+.edu-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 3px;
+}
+.edu-main { font-weight: bold; }
+.edu-date { font-style: italic; font-size: 9.5pt; white-space: nowrap; padding-left: 8px; }
+.edu-grade { font-size: 9.5pt; margin-top: 1px; margin-bottom: 4px; }
+
+/* ===== PROJECTS ===== */
+.project { margin-bottom: 7px; }
+.project-name { font-weight: bold; }
+.project-tech { font-style: italic; font-size: 9.5pt; margin: 1px 0 2px 0; color: #444; }
+.project-desc { margin: 0; }
+
+/* ===== AWARDS ===== */
+.awards ul { margin-top: 4px; }
+
+/* ===== SUMMARY ===== */
+.summary-text { margin: 0; font-size: 10pt; line-height: 1.35; }
+
+/* ===== SCREEN PREVIEW ===== */
+@media screen {
+    body { padding: 0.5in !important; box-sizing: border-box; }
+}
+</style>
+</head>
+<body>
+
+<!-- ================= HEADER ================= -->
+<div class="header">
+    <div class="name">{{ name }}</div>
+    <div class="contact">
+        {% set sep = joiner(" | ") %}
+        {% if phone %}{{ sep() }}{{ phone }}{% endif %}
+        {% if email %}{{ sep() }}<a href="mailto:{{ email }}">{{ email }}</a>{% endif %}
+        {% if github %}{{ sep() }}<a href="{{ github }}">GitHub</a>{% endif %}
+        {% if linkedin %}{{ sep() }}<a href="{{ linkedin }}">LinkedIn</a>{% endif %}
+        {% if portfolio %}{{ sep() }}<a href="{{ portfolio }}">Portfolio</a>{% endif %}
+    </div>
+</div>
+
+<!-- ================= PROFESSIONAL SUMMARY ================= -->
+{% if professional_summary %}
+<div class="section">
+    <div class="section-title">Professional Summary</div>
+    <p class="summary-text">{{ professional_summary }}</p>
+</div>
+{% endif %}
+
+<!-- ================= TECHNICAL SKILLS ================= -->
+{% if skills %}
+<div class="section">
+    <div class="section-title">Technical Skills</div>
+    <div class="skills">
+        {% if skills.languages %}<p><strong>Languages:</strong> {{ skills.languages }}</p>{% endif %}
+        {% if skills.frontend %}<p><strong>Frameworks &amp; Tools:</strong> {{ skills.frontend }}</p>{% endif %}
+        {% if skills.backend %}<p><strong>Backend:</strong> {{ skills.backend }}</p>{% endif %}
+        {% if skills.genai %}<p><strong>AI / ML:</strong> {{ skills.genai }}</p>{% endif %}
+        {% if skills.tools %}<p><strong>Tools &amp; Others:</strong> {{ skills.tools }}</p>{% endif %}
+        {% if skills.devops %}<p><strong>DevOps &amp; Cloud:</strong> {{ skills.devops }}</p>{% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- ================= WORK EXPERIENCE ================= -->
+{% if experiences %}
+<div class="section">
+    <div class="section-title">Work Experience</div>
+    {% for exp in experiences %}
+    <div class="job">
+        <div class="job-header">
+            <span class="job-title-company">{{ exp.title }}{% if exp.company %} | {{ exp.company }}{% endif %}{% if exp.location %}, {{ exp.location }}{% endif %}</span>
+            <span class="job-date">{{ exp.dates }}</span>
+        </div>
+        {% if exp.bullets %}
+        <ul>
+            {% for bullet in exp.bullets %}
+            <li>{{ bullet|safe }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ================= PROJECTS ================= -->
+{% if projects %}
+<div class="section">
+    <div class="section-title">Projects</div>
+    {% for proj in projects %}
+    <div class="project">
+        <div class="project-name">{{ proj.name }}</div>
+        {% if proj.techStack %}<div class="project-tech">{{ proj.techStack }}</div>{% endif %}
+        <div class="project-desc">{{ proj.description }}</div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ================= EDUCATION ================= -->
+{% if educations %}
+<div class="section">
+    <div class="section-title">Education</div>
+    {% for edu in educations %}
+    <div class="edu-row">
+        <div>
+            <span class="edu-main">{{ edu.degree }}{% if edu.institution %} | {{ edu.institution }}{% endif %}</span>
+        </div>
+        <div class="edu-date">{{ edu.dates }}</div>
+    </div>
+    {% if edu.grade %}<div class="edu-grade">{{ edu.grade }}</div>{% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- ================= CERTIFICATIONS & AWARDS ================= -->
+{% if awards %}
+<div class="section awards">
+    <div class="section-title">Certifications &amp; Awards</div>
+    <ul>
+        {% for award in awards %}
+        <li>{{ award }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+</body>
+</html>
