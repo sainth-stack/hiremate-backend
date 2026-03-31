@@ -11,6 +11,23 @@
     ? console.info(LOG, msg, meta)
     : console.info(LOG, msg);
 
+  // Only run the full step manager in the top frame.
+  // Sub-frames (iframes) get a lightweight no-op stub so content.js can
+  // call startWorkdayAutofill safely without duplicate observers or
+  // history-patching that breaks the host page's React Router.
+  if (window.self !== window.top) {
+    window.__OPSBRAIN_WORKDAY_STEPS__ = {
+      startWorkdayAutofill: async () => {},
+      handleCurrentStep: async () => {},
+      getCurrentStepInfo: () => ({}),
+      startWatching: () => {},
+      stopWatching: () => {},
+      getState: () => ({}),
+    };
+    log("Workday step manager loaded (iframe — stub only)");
+    return;
+  }
+
   // ─── STATE ────────────────────────────────────────────────────
   // Persisted across SPA navigations via closure (lives in content script)
   const state = {
@@ -369,33 +386,11 @@
       characterData: false,
     });
 
-    // 2. Also patch History API in case MutationObserver misses URL-only changes
-    const win = doc.defaultView || window;
-    const origPushState = win.history.pushState.bind(win.history);
-    const origReplaceState = win.history.replaceState.bind(win.history);
-
-    win.history.pushState = function (...args) {
-      origPushState(...args);
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        log("pushState navigation detected");
-        state.lastUrl = win.location.href;
-        state.lastStepHash = getStepKey(doc);
-        await handleCurrentStep(doc);
-      }, 600);
-    };
-
-    win.history.replaceState = function (...args) {
-      origReplaceState(...args);
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        log("replaceState navigation detected");
-        state.lastUrl = win.location.href;
-        state.lastStepHash = getStepKey(doc);
-        await handleCurrentStep(doc);
-      }, 600);
-    };
-
+    // NOTE: We intentionally do NOT patch window.history.pushState/replaceState.
+    // Content scripts share browser API objects with the page, so patching history
+    // is visible to the page's React Router and causes hydration mismatches (React
+    // error #418). The MutationObserver above already catches URL changes via DOM
+    // mutations triggered by every SPA navigation.
     log("Watching for Workday step navigation");
   }
 

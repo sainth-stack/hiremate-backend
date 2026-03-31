@@ -18,6 +18,7 @@ function mountInPageUI() {
   }
   mountInPageUILegacyInto(root);
   document.documentElement.appendChild(root);
+  initColdEmailRadio();
 }
 
 function mountInPageUILegacyInto(root) {
@@ -109,7 +110,7 @@ function mountInPageUILegacyInto(root) {
   root.querySelector("#ja-profile-refresh")?.addEventListener("click", () => loadProfileIntoPanel(root));
   root.querySelector("#ja-profile-edit")?.addEventListener("click", async () => {
     const data = await chrome.storage.local.get(["loginPageUrl"]);
-    const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
+    const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "https://opsbrainai.com";
     chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url: `${base}/profile` });
   });
   root.querySelector("#ja-profile-preview")?.addEventListener("click", async () => {
@@ -232,7 +233,7 @@ function mountInPageUILegacyInto(root) {
   // Report Issue button — opens the web app in a new tab
   root.querySelector("#ja-report-issue")?.addEventListener("click", async () => {
     const data = await chrome.storage.local.get(["loginPageUrl"]);
-    const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
+    const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "https://opsbrainai.com";
     chrome.runtime.sendMessage({ type: "OPEN_LOGIN_TAB", url: `${base}/report-issue` });
   });
 
@@ -686,7 +687,74 @@ function mountInPageUILegacyInto(root) {
   });
 }
 
+// ── Settings Panel + Cold Email Toggle ──────────────────────────────────
+function initColdEmailRadio() {
+  const STORAGE_KEY = "hm_cold_agent_mode";
+  const root = document.getElementById(INPAGE_ROOT_ID);
+  if (!root) return;
+
+  const settingsBtn = root.querySelector("#ja-open-settings");
+  const settingsPanel = root.querySelector("#ja-settings-panel");
+  const settingsBack = root.querySelector("#ja-settings-back");
+  const coldToggle = root.querySelector("#hm-cold-toggle");
+  const tabs = root.querySelector(".ja-tabs");
+  const body = root.querySelector(".ja-body");
+
+  if (!settingsBtn || !settingsPanel || !settingsBack || !coldToggle) return;
+
+  // Restore saved toggle state
+  chrome.storage.local.get([STORAGE_KEY], (result) => {
+    const mode = result[STORAGE_KEY] || "standard";
+    coldToggle.checked = mode === "cold";
+    if (mode === "cold" && window.__HM_COLD_EMAIL__?.isLinkedInMessagingPage?.()) {
+      window.__HM_COLD_EMAIL__.stopColdEmailModule();
+      window.__HM_COLD_EMAIL__.startColdEmailModule();
+    }
+  });
+
+  // Open settings
+  settingsBtn.addEventListener("click", () => {
+    settingsPanel.style.display = "flex";
+    if (tabs) tabs.style.display = "none";
+    if (body) body.style.display = "none";
+  });
+
+  // Back to main
+  settingsBack.addEventListener("click", () => {
+    settingsPanel.style.display = "none";
+    if (tabs) tabs.style.display = "";
+    if (body) body.style.display = "";
+  });
+
+  // Toggle cold email mode
+  coldToggle.addEventListener("change", () => {
+    const mode = coldToggle.checked ? "cold" : "standard";
+    chrome.storage.local.set({ [STORAGE_KEY]: mode });
+    if (mode === "cold") {
+      // Stop first to reset internal state, then start fresh
+      window.__HM_COLD_EMAIL__?.stopColdEmailModule?.();
+      window.__HM_COLD_EMAIL__?.startColdEmailModule?.();
+    } else {
+      window.__HM_COLD_EMAIL__?.stopColdEmailModule?.();
+    }
+  });
+}
+
 window.__HM_MOUNT_INPAGE_INTO__ = mountInPageUILegacyInto;
+
+// Auto-start cold email module on LinkedIn without requiring the widget to open
+if (location.hostname.includes("linkedin.com")) {
+  chrome.storage.local.get(["hm_cold_agent_mode"], function (result) {
+    if (result["hm_cold_agent_mode"] === "cold") {
+      setTimeout(function () {
+        if (window.__HM_COLD_EMAIL__) {
+          window.__HM_COLD_EMAIL__.stopColdEmailModule();
+          window.__HM_COLD_EMAIL__.startColdEmailModule();
+        }
+      }, 600);
+    }
+  });
+}
 
 // Sync token from website when user logs in on HireMate frontend.
 // Content scripts share the page's origin and can read localStorage directly—no inline script injection (avoids CSP violations).

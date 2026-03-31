@@ -66,13 +66,15 @@ const LOGIN_PAGE_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://localhost:5174",
   "http://127.0.0.1:5174",
+  "https://opsbrainai.com",
+  "https://www.opsbrainai.com",
   "https://hiremate.ai",
   "https://www.hiremate.ai",
   "https://app.hiremate.ai",
   "https://hiremate.com",
   "https://www.hiremate.com",
 ];
-const DEFAULT_LOGIN_PAGE_URL = "http://localhost:5173/login";
+const DEFAULT_LOGIN_PAGE_URL = "https://opsbrainai.com/login";
 
 // ─── Autofill Highlight ────────────────────────────────────────────────────
 

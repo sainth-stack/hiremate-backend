@@ -1,4 +1,4 @@
-"""Tests for GET /api/chrome-extension/autofill/context and POST /api/chrome-extension/cover-letter/upsert"""
+"""Tests for chrome extension endpoints: autofill, cover-letter, cold-message."""
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -134,3 +134,47 @@ def test_cover_letter_upsert_different_job_url_calls_llm_again(client, auth_head
         )
         assert r2.status_code == 200
         assert mock_gen.call_count == 2
+
+
+# --- Cold message ---
+
+def test_cold_message_generate_unauthenticated(client):
+    """401 without auth."""
+    resp = client.post(
+        "/api/chrome-extension/cold-message/generate",
+        json={"user_intent": "ask for referral"},
+    )
+    assert resp.status_code == 401
+
+
+def test_cold_message_generate_missing_intent(client, auth_headers):
+    """422 for missing required field."""
+    resp = client.post(
+        "/api/chrome-extension/cold-message/generate",
+        headers=auth_headers,
+        json={},
+    )
+    assert resp.status_code == 422
+
+
+@patch(
+    "backend.app.services.linkedin_cold_msg.cold_message_llm.generate_cold_message",
+    new_callable=AsyncMock,
+    return_value="Hi Jane, I noticed your work at Google — would love to connect!",
+)
+def test_cold_message_generate_success(mock_llm, client, auth_headers):
+    """200 with mocked LLM."""
+    resp = client.post(
+        "/api/chrome-extension/cold-message/generate",
+        headers=auth_headers,
+        json={
+            "user_intent": "ask for referral",
+            "recipient_name": "Jane Doe",
+            "company": "Google",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "message" in data
+    assert len(data["message"]) > 0
+    mock_llm.assert_called_once()

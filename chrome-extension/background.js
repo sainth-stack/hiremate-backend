@@ -22,6 +22,7 @@ const CONTENT_SCRIPT_FILES = [
   "content-script/features/accordion.js",
   "content-script/services/form-learning.js",
   "content-script/services/api-service.js",
+  "content-script/linkedin_cold_msg/cold-message-api.js",
   "content-script/services/autofill-context.js",
   "content-script/features/page-detection.js",
   "content-script/features/scrape-fields.js",
@@ -35,6 +36,7 @@ const CONTENT_SCRIPT_FILES = [
   "content-script/ui/widget-styles-components.js",
   "content-script/ui/widget-html.js",
   "content-script/features/submit-feedback.js",
+  "content-script/linkedin_cold_msg/linkedin-cold-email.js",
   "content.js",
 ];
 const HIREMATE_ORIGINS = [
@@ -42,6 +44,8 @@ const HIREMATE_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://localhost:5174",
   "http://127.0.0.1:5174",
+  "https://opsbrainai.com",
+  "https://www.opsbrainai.com",
   "https://hiremate.ai",
   "https://www.hiremate.ai",
   "https://app.hiremate.ai",
@@ -163,7 +167,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "OPEN_LOGIN_TAB") {
-    const url = msg.url || "http://localhost:5173/login";
+    const url = msg.url || "https://opsbrainai.com/login";
     chrome.tabs.create({ url }).then(() => sendResponse({ ok: true })).catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
   }
@@ -172,7 +176,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         const { loginPageUrl } = await chrome.storage.local.get(["loginPageUrl"]);
-        const base = loginPageUrl ? new URL(loginPageUrl).origin : "http://localhost:5173";
+        const base = loginPageUrl ? new URL(loginPageUrl).origin : "https://opsbrainai.com";
         const tailorUrl = new URL(`${base}/resume-generator/build`);
         tailorUrl.searchParams.set("tailor", "1");
         tailorUrl.searchParams.set("source", "extension");
@@ -606,6 +610,46 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
       })
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
+  // ── PROXY_FETCH ──────────────────────────────────────────────────────────
+  // Content script fetch() calls are subject to the host page's CSP (e.g.
+  // LinkedIn blocks connect-src to our backend). Routing through the background
+  // service worker bypasses page CSP because SW requests use the extension's
+  // own network context.
+  if (msg.type === "PROXY_FETCH") {
+    const { url, options } = msg;
+    if (!url) {
+      sendResponse({ ok: false, status: 0, error: "Missing url" });
+      return true;
+    }
+    (async () => {
+      try {
+        const fetchOptions = {};
+        if (options?.method) fetchOptions.method = options.method;
+        if (options?.headers) fetchOptions.headers = options.headers;
+        if (options?.body != null) fetchOptions.body = options.body;
+        const res = await fetch(url, fetchOptions);
+        const contentType = res.headers.get("content-type") || "";
+        // Binary responses (e.g. PDF blobs): transfer as byte array
+        if (!contentType.includes("application/json") && !contentType.includes("text/")) {
+          const buffer = await res.arrayBuffer();
+          sendResponse({
+            ok: res.ok,
+            status: res.status,
+            contentType,
+            bodyType: "arraybuffer",
+            body: Array.from(new Uint8Array(buffer)),
+          });
+        } else {
+          const text = await res.text();
+          sendResponse({ ok: res.ok, status: res.status, contentType, bodyType: "text", body: text });
+        }
+      } catch (err) {
+        sendResponse({ ok: false, status: 0, error: String(err) });
+      }
+    })();
     return true;
   }
 

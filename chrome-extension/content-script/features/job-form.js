@@ -14,7 +14,7 @@ function normalizeUrlForTailor(u) {
 
 async function openResumeGeneratorUrl() {
   const data = await chrome.storage.local.get(["loginPageUrl"]);
-  const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "http://localhost:5173";
+  const base = data.loginPageUrl ? new URL(data.loginPageUrl).origin : "https://opsbrainai.com";
   let url = `${base}/resume-generator/build?tailor=1`;
   try {
     const apiBase = await getApiBase();

@@ -4,13 +4,50 @@
 //             AUTOFILL_CTX_KEY defined in autofill-context.js (loaded after this file,
 //             but only referenced at call-time, so safe)
 
+/**
+ * proxyFetch — routes a fetch through the background service worker.
+ *
+ * Content script fetch() calls are blocked by the host page's CSP (e.g.
+ * LinkedIn's connect-src blocks requests to our backend).  The background
+ * SW is not subject to page CSP, so we relay through it via messaging.
+ *
+ * Returns a Response-compatible object with .ok, .status, .json(),
+ * .text(), and .blob() — same interface as the native Response.
+ */
+async function proxyFetch(url, options) {
+  const result = await chrome.runtime.sendMessage({
+    type: "PROXY_FETCH",
+    url,
+    options: {
+      method: (options && options.method) || "GET",
+      headers: (options && options.headers) || {},
+      body: (options && options.body != null) ? options.body : undefined,
+    },
+  });
+  if (!result) throw new Error("proxyFetch: no response from background");
+  if (!result.ok && result.error && result.status === 0) throw new Error(result.error);
+  const { ok, status, bodyType, body, contentType } = result;
+  return {
+    ok,
+    status,
+    json: async function () { return JSON.parse(body); },
+    text: async function () { return body; },
+    blob: async function () {
+      if (bodyType === "arraybuffer") {
+        return new Blob([new Uint8Array(body)], { type: contentType || "application/octet-stream" });
+      }
+      return new Blob([body], { type: contentType || "text/plain" });
+    },
+  };
+}
+
 async function getApiBase() {
   if (window.__CONFIG__?.getApiBase) return window.__CONFIG__.getApiBase();
   try {
     const data = await chrome.storage.local.get(["apiBase"]);
-    return data.apiBase || "http://localhost:8000/api";
+    return data.apiBase || "https://opsbrainai.com/api";
   } catch (_) {
-    return "http://localhost:8000/api";
+    return "https://opsbrainai.com/api";
   }
 }
 
@@ -35,7 +72,7 @@ async function refreshTokenViaApi() {
         logWarn("refreshTokenViaApi: No token in storage, cannot refresh");
         return null;
       }
-      const apiBase = data.apiBase || "http://localhost:8000/api";
+      const apiBase = data.apiBase || "https://opsbrainai.com/api";
       const baseNoApi = apiBase.replace(/\/api\/?$/, "");
       const urlsToTry = [
         getRefreshUrl(apiBase),
@@ -47,7 +84,7 @@ async function refreshTokenViaApi() {
       for (const refreshUrl of [...new Set(urlsToTry)]) {
         try {
           logInfo("Attempting token refresh", { url: refreshUrl });
-          const res = await fetch(refreshUrl, {
+          const res = await proxyFetch(refreshUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${oldToken}` },
           });
@@ -118,7 +155,7 @@ function toPlainHeaders(headers) {
 /** Fetch interceptor: on 401 → refresh token, persist, retry once with new token. */
 async function fetchWithAuthRetry(url, options = {}) {
   const t0 = Date.now();
-  let res = await fetch(url, options);
+  let res = await proxyFetch(url, options);
   logInfo("fetchWithAuthRetry: first attempt", { path: url?.split("/").slice(-2).join("/"), status: res.status, ms: Date.now() - t0 });
   if (res.status === 401) {
     logInfo("401 received, attempting token refresh", { url: url?.slice(-50) });
@@ -140,7 +177,7 @@ async function fetchWithAuthRetry(url, options = {}) {
     if (newToken) {
       const base = toPlainHeaders(options.headers);
       const retryOptions = { ...options, headers: { ...base, Authorization: `Bearer ${newToken}` } };
-      res = await fetch(url, retryOptions);
+      res = await proxyFetch(url, retryOptions);
       logInfo("fetchWithAuthRetry: retry result", { status: res.status, ms: Date.now() - t0 });
       if (res.status === 401) {
         logWarn("Retry still returned 401 after refresh");

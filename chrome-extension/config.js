@@ -24,9 +24,9 @@ class ConfigManager {
   loadConfig() {
     const configs = {
       development: {
-        apiBase: "http://localhost:8000/api",
-        loginPageUrl: "http://localhost:5173/login",
-        appUrl: "http://localhost:5173",
+        apiBase: "https://opsbrainai.com/api",
+        loginPageUrl: "https://opsbrainai.com/login",
+        appUrl: "https://opsbrainai.com",
         enableDebugLogs: true,
         enableAnalytics: false,
         cacheTTL: {
@@ -36,9 +36,9 @@ class ConfigManager {
         },
       },
       production: {
-        apiBase: "http://localhost:8000/api",
-        loginPageUrl: "http://localhost:5173/login",
-        appUrl: "http://localhost:5173",
+        apiBase: "https://opsbrainai.com/api",
+        loginPageUrl: "https://opsbrainai.com/login",
+        appUrl: "https://opsbrainai.com",
         enableDebugLogs: false,
         enableAnalytics: true,
         cacheTTL: {

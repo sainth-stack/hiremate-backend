@@ -40,8 +40,11 @@ from backend.app.services.tailor_context_store import set_tailor_context
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
 from backend.app.services.resume_service import list_resumes as list_resumes_svc
 
+from backend.app.api.v1.chrome_extension.linkedin_cold_msg.routes import router as linkedin_cold_msg_router
+
 logger = get_logger("api.chrome_extension")
 router = APIRouter(prefix="/chrome-extension", tags=["chrome-extension"])
+router.include_router(linkedin_cold_msg_router)
 
 
 # --- Schemas ---
