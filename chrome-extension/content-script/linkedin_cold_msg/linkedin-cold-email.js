@@ -155,7 +155,9 @@
       var cls = (el.className || "").toString().toLowerCase();
       if (cls.includes("msg-form") || cls.includes("msg-overlay") || cls.includes("msg-compose") ||
           cls.includes("messaging-thread") || el.id && el.id.includes("msg-")) return "message";
-      if (cls.includes("comments-reply") || cls.includes("reply-texteditor")) return "reply";
+      if (cls.includes("comments-reply") || cls.includes("reply-texteditor") ||
+          cls.includes("replies-list") || cls.includes("create-reply") ||
+          cls.includes("reply-box")) return "reply";
       if (cls.includes("comments-comment") || cls.includes("comment-texteditor") ||
           cls.includes("comment-box") || cls.includes("comments-text-editor")) return "comment";
       if (cls.includes("jobs-easy-apply") || cls.includes("application-outlet") ||
@@ -303,7 +305,14 @@
       icon.style.display = "flex";
       icon.style.position = "fixed";
       icon.style.left = (rect.left + 6) + "px";
-      icon.style.top = (rect.bottom - 38) + "px";
+      // Comments and replies: icon sits at the bottom-left inside the textarea.
+      // Messages and all others: icon sits just above the textarea (original behaviour).
+      var fieldCtx = _detectFieldContext(composer);
+      if (fieldCtx === "comment" || fieldCtx === "reply") {
+        icon.style.top = (rect.bottom - 38) + "px";
+      } else {
+        icon.style.top = (rect.top - 18) + "px";
+      }
       icon.style.zIndex = "2147483645";
     }
 
@@ -593,31 +602,76 @@
   ];
 
   function _scrapeParentComment(composer) {
-    // Walk up the DOM to find the comment text being replied to.
-    // On LinkedIn the reply box sits inside a subtree below the parent comment.
+    // LinkedIn reply DOM: the reply box sits INSIDE the parent comment-item.
+    // Strategy: walk up until we find the comment-item container, then extract
+    // text from it while EXCLUDING our own reply-box subtree.
+
+    // Helper: check if a node is an ancestor-or-self of the composer
+    function _isOwnSubtree(node) {
+      var c = composer;
+      while (c) { if (c === node) return true; c = c.parentElement; }
+      return false;
+    }
+
+    // Helper: strip noisy short tokens (Like, Reply, timestamps, emoji counts)
+    function _cleanText(t) {
+      return t
+        .replace(/\b(Like|Reply|See\s+\d+\s+replies?|Edited|Report\s+this\s+comment)\b/gi, "")
+        .replace(/^\s*[\d·•|]+\s*/gm, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    }
+
     var el = composer.parentElement;
-    for (var i = 0; i < 20; i++) {
+    for (var i = 0; i < 25; i++) {
       if (!el || el === document.body) break;
       var cls = (el.className || "").toString().toLowerCase();
-      // Look for the comment item container
-      if (cls.includes("comments-comment-item") || cls.includes("comment-item")) {
-        // The comment text is typically in a child with aria-label or a span inside
-        var textEl = el.querySelector('[class*="comment__main-content"]') ||
-                     el.querySelector('[class*="comment-text"]') ||
-                     el.querySelector('[data-test-id*="comment"]') ||
-                     el.querySelector('span[dir]');
-        if (textEl) return (textEl.textContent || "").trim().slice(0, 300);
+
+      // Found the enclosing comment item — extract text from it
+      if (cls.includes("comment-item") || cls.includes("comments-comment")) {
+        // Collect all text-bearing leaf nodes that are NOT inside our reply subtree
+        var bestText = "";
+
+        // Priority 1: spans/paragraphs with dir="ltr" (LinkedIn's comment text spans)
+        var spans = Array.from(el.querySelectorAll('span[dir="ltr"], p[dir="ltr"]'));
+        for (var k = 0; k < spans.length; k++) {
+          if (_isOwnSubtree(spans[k])) continue;
+          var t = _cleanText(spans[k].textContent || "");
+          if (t.length > bestText.length) bestText = t;
+        }
+        if (bestText.length > 20) return bestText.slice(0, 300);
+
+        // Priority 2: any class containing "comment-text", "main-content", "body"
+        var textEls = Array.from(el.querySelectorAll('[class*="comment-text"],[class*="main-content"],[class*="comment__content"],[class*="comment-body"]'));
+        for (var k = 0; k < textEls.length; k++) {
+          if (_isOwnSubtree(textEls[k])) continue;
+          var t = _cleanText(textEls[k].textContent || "");
+          if (t.length > bestText.length) bestText = t;
+        }
+        if (bestText.length > 20) return bestText.slice(0, 300);
+
+        // Priority 3: walk direct children, skip social-bar / reply-box subtrees,
+        // take the child with the most text
+        var children = Array.from(el.children);
+        for (var k = 0; k < children.length; k++) {
+          var child = children[k];
+          if (_isOwnSubtree(child)) continue;
+          var childCls = (child.className || "").toString().toLowerCase();
+          if (childCls.includes("social-bar") || childCls.includes("reply-box") ||
+              childCls.includes("reply-list") || childCls.includes("toolbar")) continue;
+          var t = _cleanText(child.textContent || "");
+          if (t.length > bestText.length) bestText = t;
+        }
+        if (bestText.length > 20) return bestText.slice(0, 300);
       }
-      // Fallback: grab the first meaningful text block in a preceding sibling
-      var siblings = el.parentElement ? Array.from(el.parentElement.children) : [];
-      var idx = siblings.indexOf(el);
-      for (var j = idx - 1; j >= 0; j--) {
-        var t = (siblings[j].textContent || "").trim();
-        if (t.length > 30) return t.slice(0, 300);
-      }
+
       el = el.parentElement;
     }
-    return "";
+
+    // Last resort: check aria-label / placeholder on the composer for the author name
+    var label = composer.getAttribute("aria-label") || composer.getAttribute("aria-placeholder") || "";
+    var m = label.match(/reply(?:\s+to)?\s+(.+?)(?:'s|$)/i);
+    return m ? "Replying to " + m[1].trim() : "";
   }
 
   function _openReplyPopup(icon, composer) {
