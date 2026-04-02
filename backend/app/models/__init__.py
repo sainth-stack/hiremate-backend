@@ -15,3 +15,5 @@ from backend.app.models.tailor_context import TailorContext
 from backend.app.models.user_resume_preference import UserResumePreference
 from backend.app.models.legal_policy import LegalPolicy
 from backend.app.models.issue_report import IssueReport
+from backend.jobradar.models.application import Application, StatusHistory, SyncStatus
+from backend.jobradar.models.nudge import Nudge

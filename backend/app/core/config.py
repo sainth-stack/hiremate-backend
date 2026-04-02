@@ -38,6 +38,20 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
+    # Google OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    google_scopes: list[str] = [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/calendar",
+    ]
+    encryption_key: str = "your-encryption-key-for-tokens"  # Fernet key
+
     # Upload & storage
     upload_dir: str = "uploads/resumes"
 
@@ -72,13 +86,46 @@ class Settings(BaseSettings):
     s3_presigned_url_expiration: int = 3600
     s3_key_prefix: str = "user-profiles"
 
-    # OpenAI
+    # ── LLM provider ──────────────────────────────────────────────────────────
+    # Set AI_PROVIDER to one of: gemini | gpt | claude | mistral
+    ai_provider: str = "gpt"
+
+    # Gemini / Vertex AI
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
+    use_vertex_ai: bool = False          # True → authenticate via ADC (no API key needed)
+    vertex_project_id: str = ""          # GCP project ID for Vertex AI
+    vertex_location: str = "us-central1" # Vertex AI region
+
+    # OpenAI GPT
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+
+    # Anthropic Claude
+    claude_api_key: str = ""
+    claude_model: str = "claude-opus-4-6"
+
+    # Mistral
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-large-latest"
 
     # Razorpay payment gateway
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
+
+    # Gmail Pub/Sub push notifications
+    gmail_push_topic: str = ""  # e.g. "projects/my-project/topics/gmail-push"
+
+    # Gmail pre-filter query — only fetch threads that look job-related
+    gmail_search_query: str = (
+        "subject:(application OR interview OR offer OR rejected OR shortlisted "
+        "OR \"next steps\" OR \"moving forward\" OR assessment OR \"hiring team\" "
+        "OR \"job offer\" OR \"thank you for applying\")"
+    )
+
+    # Scheduler defaults
+    default_sync_days: int = 7   # Look-back window for scheduled incremental sync
+    ghosted_days: int = 21       # Days of inactivity before marking as ghosted
 
     # Logging
     log_level: str = "INFO"
