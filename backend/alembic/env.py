@@ -21,6 +21,7 @@ from backend.app.db.base import Base
 
 # Import all models so they register with Base.metadata
 import backend.app.models  # noqa: F401
+import backend.jobradar.models  # noqa: F401
 
 config = context.config
 

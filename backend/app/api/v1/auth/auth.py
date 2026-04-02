@@ -3,6 +3,7 @@ Authentication endpoints - Login, Register, Get Current User, and Token Refresh
 """
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from backend.app.core.security import create_access_token
 from backend.app.models.user import User
 from backend.app.schemas.user import UserRegister, UserLogin, TokenResponse, UserResponse
 from backend.app.services.auth_service import AuthService
+from backend.app.services import google_oauth
 from fastapi.security import HTTPAuthorizationCredentials
 
 logger = get_logger("api.auth")
@@ -199,3 +201,97 @@ def refresh_access_token(
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+@router.get("/google/url")
+def get_google_auth_url():
+    """
+    Get the Google OAuth authorization URL.
+    """
+    try:
+        url, state, code_verifier = google_oauth.get_auth_url()
+        _states[state] = code_verifier  # Must store so callback can retrieve it
+        return {"url": url, "state": state}
+    except Exception as e:
+        logger.error("Failed to generate Google auth URL: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate Google auth URL: {str(e)}"
+        )
+
+
+# In-memory state store: maps state -> code_verifier (good enough for single-server dev)
+_states: dict[str, str] = {}
+
+
+@router.get("/google")
+def google_login():
+    """
+    Redirect user to Google OAuth consent page.
+    """
+    try:
+        auth_url, state, code_verifier = google_oauth.get_auth_url()
+        _states[state] = code_verifier
+        return RedirectResponse(auth_url)
+    except Exception as e:
+        logger.exception("Failed to generate Google auth URL: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not initialize Google login"
+        )
+
+
+@router.get("/google/callback")
+def google_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """
+    Handle Google OAuth callback (GET redirect from Google).
+    Exchanges code for tokens, upserts user, and redirects to frontend with JWT.
+    """
+    if not code:
+        raise HTTPException(status_code=400, detail="Code is required")
+
+    # Retrieve and remove the code_verifier for this state (CSRF check + PKCE)
+    code_verifier = _states.pop(state, None)
+    if code_verifier is None:
+        logger.warning("OAuth state mismatch or expired for state=%s", state)
+
+    try:
+        # 1. Exchange code for Google data (pass code_verifier for PKCE)
+        google_user_data = google_oauth.exchange_code(code, code_verifier=code_verifier)
+
+        # 2. Login/Register user via AuthService
+        result = AuthService.login_with_google(db, google_user_data)
+
+        if not result["success"]:
+            raise HTTPException(status_code=401, detail=result["message"])
+
+        # 3. Subscribe to Gmail watch + capture initial historyId (non-blocking)
+        user = result["user"]
+        try:
+            from backend.jobradar.services.gmail_service import subscribe_to_watch, get_latest_history_id
+            creds = google_oauth.get_credentials_for_user(db, user)
+
+            watch_result = subscribe_to_watch(creds)
+            if watch_result:
+                logger.info("Gmail watch subscribed for %s (expiry: %s)", user.email, watch_result.get("expiration"))
+
+            if not user.last_history_id:
+                history_id = get_latest_history_id(creds)
+                if history_id:
+                    user.last_history_id = str(history_id)
+                    db.commit()
+                    logger.info("Initial last_history_id=%s set for %s", history_id, user.email)
+        except Exception as watch_err:
+            logger.warning("Gmail watch setup failed for %s (non-fatal): %s", user.email, watch_err)
+
+        # 4. Redirect to frontend with JWT token
+        access_token = result["access_token"]
+        frontend_url = f"http://localhost:5173/auth/google/callback?token={access_token}"
+        return RedirectResponse(frontend_url)
+
+    except Exception as e:
+        logger.exception("Google OAuth callback error: %s", str(e))
+        return RedirectResponse(f"http://localhost:5173/login?error={str(e)}")
+
+
+
