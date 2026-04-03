@@ -12,6 +12,7 @@ from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.chrome_extension.routes import router as chrome_extension_router
 from backend.app.api.v1.dashboard import router as dashboard_router
 from backend.app.api.v1.legal import router as legal_router
+from backend.app.api.v1.company_search.routes import router as company_search_router
 from backend.app.api.v1.issues import router as issues_router
 from backend.app.api.v1.payment import router as payment_router
 from backend.app.api.v1.user.profile import router as profile_router
@@ -54,6 +55,7 @@ app.include_router(activity_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(legal_router, prefix="/api", tags=["legal"])
 app.include_router(issues_router, prefix="/api", tags=["issues"])
+app.include_router(company_search_router, prefix="/api")
 
 # Serve uploaded resumes (create dir if missing)
 upload_path = Path(settings.upload_dir)
