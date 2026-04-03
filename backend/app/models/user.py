@@ -22,6 +22,8 @@ class User(Base):
     google_refresh_token = Column(String, nullable=True)
     token_expiry = Column(DateTime, nullable=True)
     last_history_id = Column(String, nullable=True)  # Gmail incremental sync
+    # Present in DB (NOT NULL); must be set on insert — password/OAuth registration both omit Gmail until linked
+    gmail_sync_enabled = Column(Boolean, default=False, nullable=False)
     is_active = Column(Integer, default=1)
     is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

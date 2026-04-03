@@ -52,6 +52,7 @@ async def parse_company_file(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception:
+        logger.exception("parse_company_file failed user_id=%s filename=%s", current_user.id, filename)
         raise HTTPException(status_code=500, detail="Failed to parse file")
 
     return ParseResponse(companies=companies)

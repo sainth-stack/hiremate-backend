@@ -34,7 +34,9 @@ from backend.app.models.form_field_learning import (
 from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
 from backend.app.services.form_field_mapper import map_form_fields, map_form_fields_llm_for_misses
 from backend.app.utils.fingerprint import compute_field_fingerprint, normalize_label
-from backend.app.services.job_description_scraper import parse_job_description_from_html
+from backend.app.services.company_search.job_description_scraper import (
+    parse_job_description_from_html,
+)
 from backend.app.services.keyword_analyzer import analyze_keywords
 from backend.app.services.tailor_context_store import set_tailor_context
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload

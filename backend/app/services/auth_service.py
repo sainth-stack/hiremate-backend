@@ -1,13 +1,32 @@
 """
 Authentication service business logic
 """
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from backend.app.models.user import User
 from backend.app.schemas.user import UserRegister, UserLogin
 from backend.app.core.security import verify_password, get_password_hash, create_access_token
 from backend.app.core.config import settings
+from backend.app.core.logging_config import get_logger
 from datetime import timedelta
+
+logger = get_logger("services.auth")
+
+
+def _is_email_unique_violation(integrity_err: IntegrityError) -> bool:
+    """True only for duplicate-key / unique violations on users.email (not other constraints)."""
+    orig = getattr(integrity_err, "orig", None)
+    detail = (str(orig) if orig else str(integrity_err)).lower()
+    # SQLite: UNIQUE constraint failed: users.email
+    if "users.email" in detail:
+        return True
+    # PostgreSQL: ... duplicate key ... Key (email)=(...) ... or constraint name from migration
+    if "ix_users_email" in detail or "users_email_key" in detail:
+        return True
+    if "key (email)" in detail and ("already exists" in detail or "duplicate key" in detail):
+        return True
+    return False
 
 
 class AuthService:
@@ -17,8 +36,14 @@ class AuthService:
     def register_user(db: Session, user_data: UserRegister):
         """Register a new user"""
         try:
-            # Check if user already exists
-            existing_user = db.query(User).filter(User.email == user_data.email).first()
+            email_norm = (user_data.email or "").strip().lower()
+            if not email_norm:
+                return {"success": False, "message": "Email is required"}
+
+            # Case-insensitive match so we don't miss Google/OAuth rows or mixed-case DB rows
+            existing_user = (
+                db.query(User).filter(func.lower(User.email) == email_norm).first()
+            )
             if existing_user:
                 return {"success": False, "message": "Email already registered"}
             
@@ -29,7 +54,7 @@ class AuthService:
             new_user = User(
                 first_name=user_data.first_name,
                 last_name=user_data.last_name,
-                email=user_data.email,
+                email=email_norm,
                 hashed_password=hashed_password
             )
             
@@ -38,7 +63,7 @@ class AuthService:
             db.refresh(new_user)
 
             # Auto-promote admin if ADMIN_EMAIL matches
-            if settings.admin_email and new_user.email and new_user.email.strip().lower() == settings.admin_email.strip().lower():
+            if settings.admin_email and new_user.email and new_user.email == settings.admin_email.strip().lower():
                 new_user.is_admin = True
                 db.commit()
                 db.refresh(new_user)
@@ -57,15 +82,30 @@ class AuthService:
                 "access_token": access_token,
                 "token_type": "bearer"
             }
-        except IntegrityError:
+        except IntegrityError as e:
             db.rollback()
-            return {"success": False, "message": "Error registering user"}
+            orig = getattr(e, "orig", None)
+            logger.warning(
+                "Registration integrity error email=%s detail=%s",
+                (user_data.email or "").strip().lower(),
+                orig or e,
+            )
+            if _is_email_unique_violation(e):
+                return {"success": False, "message": "Email already registered"}
+            return {
+                "success": False,
+                "message": "Could not create account. If this persists, contact support.",
+            }
     
     @staticmethod
     def login_user(db: Session, login_data: UserLogin):
         """Authenticate user and return access token"""
-        # Find user by email
-        user = db.query(User).filter(User.email == login_data.email).first()
+        email_norm = (login_data.email or "").strip().lower()
+        user = (
+            db.query(User).filter(func.lower(User.email) == email_norm).first()
+            if email_norm
+            else None
+        )
         
         if not user:
             return {"success": False, "message": "Invalid email or password"}

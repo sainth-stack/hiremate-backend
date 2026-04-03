@@ -286,12 +286,12 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
 
         # 4. Redirect to frontend with JWT token
         access_token = result["access_token"]
-        frontend_url = f"http://localhost:5173/auth/google/callback?token={access_token}"
+        frontend_url = f"https://opsbrainai.com/auth/google/callback?token={access_token}"
         return RedirectResponse(frontend_url)
 
     except Exception as e:
         logger.exception("Google OAuth callback error: %s", str(e))
-        return RedirectResponse(f"http://localhost:5173/login?error={str(e)}")
+        return RedirectResponse(f"https://opsbrainai.com/login?error={str(e)}")
 
 
 
