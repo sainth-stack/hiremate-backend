@@ -98,3 +98,53 @@ class AuthService:
             "user": user,
             "message": "Login successful"
         }
+
+    @staticmethod
+    def login_with_google(db: Session, google_data: dict):
+        """Sync user from Google data and return tokens"""
+        # Try finding by google_id first
+        user = db.query(User).filter(User.google_id == google_data["google_id"]).first()
+        
+        # fallback to email if google_id not linked yet
+        if not user:
+            user = db.query(User).filter(User.email == google_data["email"]).first()
+            if user:
+                user.google_id = google_data["google_id"]
+        
+        if not user:
+            user = User(
+                email=google_data["email"],
+                first_name=google_data["first_name"],
+                last_name=google_data["last_name"],
+                google_id=google_data["google_id"],
+                avatar_url=google_data["avatar_url"],
+                is_active=1
+            )
+            db.add(user)
+        
+        user.avatar_url = google_data["avatar_url"]
+        user.google_access_token = google_data["google_access_token"]
+        if google_data["google_refresh_token"]:
+            user.google_refresh_token = google_data["google_refresh_token"]
+        user.token_expiry = google_data["token_expiry"]
+        
+        db.commit()
+        db.refresh(user)
+
+        from datetime import timedelta
+        # Access token
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        # Note: we need to make sure create_access_token is imported correctly in this scope or use the one from app.core.security
+        from backend.app.core.security import create_access_token
+        access_token = create_access_token(
+            data={"sub": str(user.id), "email": user.email},
+            expires_delta=access_token_expires
+        )
+        
+        return {
+            "success": True,
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": user,
+            "message": "Google login successful"
+        }

@@ -16,6 +16,11 @@ def setup_logging(level: str | None = None) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+    # Suppress noisy info log from google-api-python-client about file_cache
+    # (harmless: it just means file-based discovery cache isn't used)
+    logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.WARNING)
+    logging.getLogger("google_genai").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     return logging.getLogger("backend")
 
 
