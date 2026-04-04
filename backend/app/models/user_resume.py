@@ -40,4 +40,10 @@ class UserResume(Base):
     status = Column(String(20), nullable=False, default="ready")
     template_id = Column(String(50), nullable=True)
 
+    # Last user-facing edit (rename, snapshot, design, content). Null until first edit —
+    # list API exposes last_edited as updated_at or created_at.
+    updated_at = Column(DateTime, nullable=True)
+    # Studio table badge: uploaded | generated | updated (profile-only synthetic row uses "default" in API only).
+    resume_source = Column(String(20), nullable=False, default="uploaded")
+
     created_at = Column(DateTime, default=datetime.utcnow)
