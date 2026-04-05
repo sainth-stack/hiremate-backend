@@ -26,6 +26,8 @@ from backend.jobradar.api.sync import router as sync_router
 from backend.jobradar.api.chat import router as chat_router
 from backend.jobradar.api.webhooks import router as webhooks_router
 # from jobradar.api.nudges import router as nudges_router
+from backend.jobradar.api.mock_interview import router as mock_interview_router
+from backend.jobradar.api.briefing import router as briefing_router
 from backend.jobradar.api.insights import router as insights_router
 from sqlalchemy import text
 from backend.app.db.session import engine
@@ -134,6 +136,8 @@ app.include_router(sync_router, prefix="/api/sync", tags=["sync"])
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 app.include_router(webhooks_router, prefix="/api/webhooks", tags=["webhooks"])
 # app.include_router(nudges_router, prefix="/api/nudges", tags=["nudges"])
+app.include_router(mock_interview_router, prefix="/api/mock-interview", tags=["mock-interview"])
+app.include_router(briefing_router, prefix="/api/mock-interview", tags=["mock-interview"])
 app.include_router(insights_router, prefix="/api/insights", tags=["insights"])
 
 # Serve uploaded resumes (create dir if missing)

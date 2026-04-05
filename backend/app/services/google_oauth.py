@@ -91,6 +91,7 @@ def exchange_code(code: str, code_verifier: str = None) -> dict:
         "google_access_token":  encrypt(creds.token),
         "google_refresh_token": encrypt(creds.refresh_token) if creds.refresh_token else None,
         "token_expiry":         creds.expiry if creds.expiry else None,
+        "scopes":               creds.scopes,
     }
 
 def get_credentials_for_user(db, user) -> Credentials:

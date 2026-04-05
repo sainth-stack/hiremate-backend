@@ -61,6 +61,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
                 last_name=user.last_name,
                 email=user.email,
                 is_admin=getattr(user, "is_admin", False),
+                gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
             ),
             message=result["message"],
         )
@@ -117,6 +118,7 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
                 last_name=user.last_name,
                 email=user.email,
                 is_admin=getattr(user, "is_admin", False),
+                gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
             ),
         )
     except HTTPException:
@@ -147,6 +149,7 @@ def get_current_user_profile(
         last_name=current_user.last_name or "",
         email=current_user.email or "",
         is_admin=getattr(current_user, "is_admin", False),
+        gmail_sync_enabled=getattr(current_user, "gmail_sync_enabled", False),
     )
 
 
@@ -181,7 +184,14 @@ def refresh_access_token(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
         access_token = create_access_token(
-            data={"sub": str(user.id), "email": user.email},
+            data={
+                "sub": str(user.id),
+                "email": user.email,
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "gmail_sync_enabled": getattr(user, "gmail_sync_enabled", False),
+                "is_admin": getattr(user, "is_admin", False)
+            },
             expires_delta=access_token_expires,
         )
         return TokenResponse(
@@ -193,6 +203,7 @@ def refresh_access_token(
                 last_name=user.last_name or "",
                 email=user.email or "",
                 is_admin=getattr(user, "is_admin", False),
+                gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
             ),
         )
     except JWTError:
@@ -241,6 +252,24 @@ def google_login():
         )
 
 
+@router.get("/google/enable-gmail")
+def enable_gmail_tracking():
+    """
+    Redirect user to Google OAuth consent page specifically to add Gmail permissions.
+    """
+    try:
+        # We set prompt="consent" to ensure the user sees the permissions dialog again
+        auth_url, state, code_verifier = google_oauth.get_auth_url()
+        _states[state] = code_verifier
+        return RedirectResponse(auth_url)
+    except Exception as e:
+        logger.exception("Failed to generate Google auth URL for enable-gmail: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not initialize Google permission update"
+        )
+
+
 @router.get("/google/callback")
 def google_callback(code: str, state: str, db: Session = Depends(get_db)):
     """
@@ -286,12 +315,12 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
 
         # 4. Redirect to frontend with JWT token
         access_token = result["access_token"]
-        frontend_url = f"https://opsbrainai.com/auth/google/callback?token={access_token}"
+        frontend_url = f"{settings.frontend_url}/auth/google/callback?token={access_token}"
         return RedirectResponse(frontend_url)
 
     except Exception as e:
         logger.exception("Google OAuth callback error: %s", str(e))
-        return RedirectResponse(f"https://opsbrainai.com/login?error={str(e)}")
+        return RedirectResponse(f"{settings.frontend_url}/login?error={str(e)}")
 
 
 

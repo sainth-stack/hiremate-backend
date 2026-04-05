@@ -4,23 +4,30 @@ from datetime import datetime
 
 from backend.app.core.dependencies import get_current_user, get_db
 from backend.jobradar.models.application import Application, StatusHistory
+from backend.jobradar.services.classifier import classify_jd
 from backend.app.models.user import User
 
 router = APIRouter()
 
 
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 @router.get("")
 def list_applications(
+    status: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """List all Gmail-synced applications for the current user, most recent activity first."""
-    apps = (
-        db.query(Application)
-        .filter(Application.user_id == current_user.id)
-        .order_by(Application.last_activity.desc())
-        .all()
-    )
+    """List applications, with status filtering via comma-separated string."""
+    query = db.query(Application).filter(Application.user_id == current_user.id)
+    
+    if status:
+        # Senior approach: Parse comma-separated strings into a robust list
+        status_list = [s.strip() for s in status.split(',') if s.strip()]
+        query = query.filter(Application.current_status.in_(status_list))
+        
+    apps = query.order_by(Application.last_activity.desc()).all()
     return [_serialize(a) for a in apps]
 
 
@@ -86,6 +93,53 @@ def create_application(
     ))
     db.commit()
     db.refresh(new_app)
+    return _serialize(new_app)
+
+
+@router.post("/from-jd")
+def create_application_from_jd(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Extracts company and role from a JD using AI, then creates an application.
+    """
+    jd_text = payload.get("job_description", "")
+    job_url = payload.get("job_url", "")
+    
+    if not jd_text.strip() and not job_url.strip():
+        raise HTTPException(status_code=400, detail="Job description or URL required")
+
+    # 1. AI Classification
+    # If we only have a URL, we might need a scraper, but for now we rely on the text
+    # Or simplified extract from URL if possible
+    info = classify_jd(jd_text)
+    
+    company = info.company if info else "Unknown Company"
+    role = info.role if info else "Software Engineer"
+    
+    # 2. Create Application
+    new_app = Application(
+        user_id=current_user.id,
+        company=company,
+        role=role,
+        platform="Manual (AI Extracted)",
+        current_status="interview_scheduled",
+        applied_date=datetime.utcnow(),
+        job_url=job_url,
+    )
+    db.add(new_app)
+    db.flush()
+    
+    db.add(StatusHistory(
+        application_id=new_app.id,
+        status="interview_scheduled",
+        summary=f"Prep session created via AI JD Analysis. Extracted: {company} - {role}",
+    ))
+    db.commit()
+    db.refresh(new_app)
+    
     return _serialize(new_app)
 
 

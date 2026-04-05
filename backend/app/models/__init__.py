@@ -17,3 +17,5 @@ from backend.app.models.legal_policy import LegalPolicy
 from backend.app.models.issue_report import IssueReport
 from backend.jobradar.models.application import Application, StatusHistory, SyncStatus
 from backend.jobradar.models.nudge import Nudge
+from backend.jobradar.models.mock_interview import MockInterviewQuestion, MockInterviewSession, MockInterviewAnswer
+from backend.jobradar.models.briefing import CompanyBriefing
