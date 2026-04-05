@@ -25,6 +25,7 @@ try:
 except ImportError:
     ResumeTemplate = None  # Optional: LaTeX templates; HTML/WeasyPrint flow does not need it
 from backend.app.models.user_resume import UserResume
+from backend.app.services.resume_service import RESUME_SOURCE_GENERATED
 from backend.app.schemas.profile import (
     Education,
     Experience,
@@ -1292,6 +1293,7 @@ def generate_resume_html(
         resume_profile_snapshot=profile_snapshot,
         job_title=(job_title or "").strip()[:255] or None,
         job_description_snippet=(job_description or "").strip()[:1000] or None,
+        resume_source=RESUME_SOURCE_GENERATED,
     )
     db.add(ur)
     db.commit()
@@ -1430,6 +1432,7 @@ def generate_resume(
         resume_profile_snapshot=profile_snapshot2,
         job_title=(job_title or "").strip()[:255] or None,
         job_description_snippet=(job_description or "").strip()[:1000] or None,
+        resume_source=RESUME_SOURCE_GENERATED,
     )
     db.add(ur)
     db.commit()

@@ -24,7 +24,13 @@ from backend.app.services.pdf_generator import text_to_pdf_bytes
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
 from backend.app.services.resume_extractor import extract_resume_to_payload
 from backend.app.services.resume_generator import generate_resume_html, generate_resume_preview_pdf, generate_resume_preview_html
-from backend.app.services.resume_service import delete_file_from_storage, list_resumes as list_resumes_svc
+from backend.app.services.resume_service import (
+    RESUME_SOURCE_UPLOADED,
+    delete_file_from_storage,
+    list_resumes as list_resumes_svc,
+    resume_timestamps_for_api,
+    touch_resume_edit,
+)
 from backend.app.services.s3_service import upload_file_to_s3
 from backend.app.services.tailor_context_store import get_and_clear_tailor_context
 
@@ -248,7 +254,9 @@ def generate_resume(
         raise HTTPException(status_code=500, detail=str(e))
 
     # Create a version record for the newly generated/tailored resume
-    resume_id = result.get("id") if isinstance(result, dict) else None
+    resume_id = (
+        (result.get("resume_id") or result.get("id")) if isinstance(result, dict) else None
+    )
     version_number = None
     if resume_id:
         try:
@@ -466,7 +474,7 @@ def get_resume(
     ).first()
     if not r:
         raise HTTPException(status_code=404, detail="Resume not found")
-    return {
+    out = {
         "id": r.id,
         "resume_name": r.resume_name,
         "resume_url": r.resume_url,
@@ -482,8 +490,9 @@ def get_resume(
         "status": r.status,
         "template_id": r.template_id,
         "is_default": r.is_default,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
     }
+    out.update(resume_timestamps_for_api(r))
+    return out
 
 
 @router.patch("/{resume_id}/snapshot")
@@ -500,6 +509,7 @@ async def save_resume_snapshot(
     if not r:
         raise HTTPException(status_code=404, detail="Resume not found")
     r.resume_profile_snapshot = payload.resume_profile_snapshot
+    touch_resume_edit(r)
     db.commit()
     from backend.app.utils import cache
     await cache.delete(f"autofill_ctx:{current_user.id}")
@@ -535,6 +545,7 @@ async def rename_resume(
     if not r:
         raise HTTPException(status_code=404, detail="Resume not found")
     r.resume_name = name
+    touch_resume_edit(r)
     db.commit()
     return {"id": r.id, "resume_name": r.resume_name}
 
@@ -559,6 +570,7 @@ async def update_resume_design(
     sections_order = payload.design_config.get("sections_order")
     if sections_order is not None:
         r.sections_order = sections_order
+    touch_resume_edit(r)
     db.commit()
     return {
         "id": r.id,
@@ -602,16 +614,22 @@ async def update_resume(
     r = db.query(UserResume).filter(UserResume.id == resume_id, UserResume.user_id == current_user.id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Resume not found")
+    touched = False
     if payload.resume_name is not None:
         name = (payload.resume_name or "").strip()
         if name:
             r.resume_name = name
+            touched = True
     text_updated = False
     if payload.resume_text is not None:
         r.resume_text = payload.resume_text or ""
         text_updated = True
+        touched = True
     if payload.resume_profile_snapshot is not None:
         r.resume_profile_snapshot = payload.resume_profile_snapshot
+        touched = True
+    if touched:
+        touch_resume_edit(r)
     db.commit()
     if text_updated and r.resume_text:
         _regenerate_pdf_for_user_resume(db, r, current_user)
@@ -819,6 +837,7 @@ async def upload_resume(
             resume_name=f"{resume_name} (default)",
             resume_text=resume_text,
             is_default=1,
+            resume_source=RESUME_SOURCE_UPLOADED,
         )
         db.add(ur)
         db.commit()
