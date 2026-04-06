@@ -71,7 +71,14 @@ class AuthService:
             # Create access token (same as login - user is logged in after register)
             access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
             access_token = create_access_token(
-                data={"sub": str(new_user.id), "email": new_user.email},
+                data={
+                    "sub": str(new_user.id), 
+                    "email": new_user.email,
+                    "first_name": new_user.first_name or "",
+                    "last_name": new_user.last_name or "",
+                    "gmail_sync_enabled": getattr(new_user, "gmail_sync_enabled", False),
+                    "is_admin": getattr(new_user, "is_admin", False)
+                },
                 expires_delta=access_token_expires
             )
             
@@ -127,7 +134,14 @@ class AuthService:
         # Create access token
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
         access_token = create_access_token(
-            data={"sub": str(user.id), "email": user.email},
+            data={
+                "sub": str(user.id), 
+                "email": user.email,
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "gmail_sync_enabled": getattr(user, "gmail_sync_enabled", False),
+                "is_admin": getattr(user, "is_admin", False)
+            },
             expires_delta=access_token_expires
         )
         
@@ -168,6 +182,11 @@ class AuthService:
             user.google_refresh_token = google_data["google_refresh_token"]
         user.token_expiry = google_data["token_expiry"]
         
+        # Check for Gmail readonly scope
+        required_scope = "https://www.googleapis.com/auth/gmail.readonly"
+        granted_scopes = google_data.get("scopes", [])
+        user.gmail_sync_enabled = required_scope in granted_scopes
+        
         db.commit()
         db.refresh(user)
 
@@ -177,7 +196,14 @@ class AuthService:
         # Note: we need to make sure create_access_token is imported correctly in this scope or use the one from app.core.security
         from backend.app.core.security import create_access_token
         access_token = create_access_token(
-            data={"sub": str(user.id), "email": user.email},
+            data={
+                "sub": str(user.id), 
+                "email": user.email,
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "gmail_sync_enabled": getattr(user, "gmail_sync_enabled", False),
+                "is_admin": getattr(user, "is_admin", False)
+            },
             expires_delta=access_token_expires
         )
         

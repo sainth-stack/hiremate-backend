@@ -26,6 +26,7 @@ class UserResponse(BaseModel):
     last_name: str
     email: str
     is_admin: Optional[bool] = False
+    gmail_sync_enabled: Optional[bool] = False
 
     class Config:
         from_attributes = True

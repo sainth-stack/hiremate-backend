@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     app_name: str = "JobSeeker"
     app_version: str = "1.0.0"
     port: int = 8001
+    frontend_url: str = "http://localhost:5173"
 
     # Database
     database_url: str = "sqlite:///./jobseeker.db"

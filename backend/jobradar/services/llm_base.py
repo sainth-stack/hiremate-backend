@@ -9,7 +9,7 @@ import json
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict
 
-from backend.jobradar.services.classifier import ClassifierOutput, ScoreResponse
+from backend.jobradar.services.classifier import ClassifierOutput, ScoreResponse, JDClassificationOutput
 
 
 CLASSIFY_SYSTEM_PROMPT = """You are an AI assistant that reads job application email threads and extracts structured data.
@@ -28,6 +28,17 @@ Your task is to extract and return ONLY a JSON object with the following fields:
 
 If is_job_related is false, set all other fields to null except confidence.
 Return ONLY valid JSON. No explanation, no markdown, no code fences."""
+
+
+CLASSIFY_JD_SYSTEM_PROMPT = """You are an AI assistant that extracts the Company Name and Job Role from a job description.
+
+Your task is to return ONLY a JSON object with the following fields:
+- company: name of the hiring company
+- role: exact job title or role
+- confidence: float between 0 and 1 representing your classification confidence
+
+Return ONLY valid JSON. No explanation, no markdown, no code fences."""
+
 
 SCORE_RESUME_PROMPT = """You are a professional resume reviewer.
 
@@ -53,9 +64,15 @@ class LLMProvider(ABC):
     @abstractmethod
     def _complete(self, system: str, user: str) -> str:
         """
-        Make a single text completion call to the underlying LLM.
-        Return the raw string response.
+        Internal: Make a single text completion call.
         """
+
+    def generate(self, system_prompt: str, user_prompt: str = "") -> str:
+        """
+        Public API for single-turn generation.
+        Matches the (system, user) order used across this codebase.
+        """
+        return self._complete(system=system_prompt, user=user_prompt)
 
     @abstractmethod
     def chat(self, messages: List[Dict], system_instruction: str, user_id: str = None) -> str:
@@ -91,6 +108,19 @@ class LLMProvider(ABC):
         raw = self._complete(system="", user=prompt)
         data = json.loads(raw.strip())
         return ScoreResponse(**data)
+
+    def classify_jd(self, jd_text: str) -> Optional[JDClassificationOutput]:
+        """Extract company and role from JD text."""
+        raw = self._complete(
+            system=CLASSIFY_JD_SYSTEM_PROMPT,
+            user=f"Extract company and role from this job description:\n\n{jd_text[:8000]}",
+        )
+        try:
+            data = json.loads(raw.strip())
+            return JDClassificationOutput(**data)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"LLM: JD parse error — {e}")
+            return None
 
     def _format_thread(self, messages: List[Dict]) -> str:
         """Format a list of email message dicts into a readable text block."""
