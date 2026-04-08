@@ -1,0 +1,93 @@
+{
+  "title_filter": {
+    "match_all": true,
+    "positive": [],
+    "negative": [],
+    "seniority_boost": [
+      "Senior",
+      "Staff",
+      "Principal",
+      "Lead",
+      "Head",
+      "Director"
+    ]
+  },
+  "search_queries": [],
+  "tracked_companies": [
+    {
+      "name": "Tekion",
+      "careers_url": "https://tekion.com/careers",
+      "scan_method": "websearch",
+      "scan_query": "site:tekion.com/careers OR site:job-boards.greenhouse.io/tekion",
+      "notes": "Automotive retail cloud.",
+      "enabled": true
+    },
+    {
+      "name": "Stripe",
+      "careers_url": "https://stripe.com/jobs/search",
+      "website_url": "https://stripe.com/jobs",
+      "scan_method": "websearch",
+      "scan_query": "site:stripe.com/jobs",
+      "notes": "Payments.",
+      "enabled": true
+    },
+    {
+      "name": "Shopify",
+      "careers_url": "https://www.shopify.com/careers",
+      "scan_method": "websearch",
+      "scan_query": "site:shopify.com/careers OR site:shopify.com/jobs",
+      "notes": "Commerce platform.",
+      "enabled": true
+    },
+    {
+      "name": "eBay",
+      "careers_url": "https://jobs.ebayinc.com/us/en/c/engineering-jobs",
+      "scan_method": "websearch",
+      "scan_query": "site:jobs.ebayinc.com engineering",
+      "notes": "eBay careers.",
+      "enabled": true
+    }
+  ],
+  "public_urls": [
+    {
+      "name": "remotive_remote_dev",
+      "url": "https://remotive.com/api/remote-jobs",
+      "format": "json_api",
+      "enabled": true
+    }
+  ],
+  "settings": {
+    "concurrency": 5,
+    "retries": 2,
+    "company_timeout_sec": 150,
+    "job_detail_timeout_sec": 12,
+    "http_timeout_sec": 30,
+    "circuit_breaker_max_consecutive_failures": 10,
+    "listing_max_scroll_rounds": 18,
+    "listing_max_load_more_rounds": 14,
+    "listing_max_pages": 20,
+    "deep_enrich_enabled": false,
+    "deep_enrich_max_jobs": 20,
+    "unified_ingest": {
+      "concurrency": 4,
+      "portal_parallelism": 8,
+      "portal_request_pause_sec": 0.4,
+      "company_search": {
+        "role": "",
+        "skills": [],
+        "location": "",
+        "use_playwright": false
+      },
+      "sources": {
+        "career_page": true,
+        "company_search": true,
+        "company_website": true,
+        "public_feed_match": true,
+        "indeed_rss": true,
+        "linkedin": true,
+        "naukri": true
+      }
+    }
+  },
+  "_readme": "POST .../ingest/companies-unified: per company, portals run in parallel (portal_parallelism). career_page = Playwright listing (YAML caps). company_search = same URL via CareerPageScraper (HTTP + Greenhouse/Lever/Workday/… ATS adapters; set company_search.use_playwright true only if you want a second Playwright pass on that URL). Indeed RSS + LinkedIn/Naukri remain best-effort HTML."
+}

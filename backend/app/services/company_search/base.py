@@ -5,6 +5,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Iterable, Optional
 
 import requests
@@ -20,6 +21,7 @@ class JobResult:
     ats_type: str
     external_id: str
     description: Optional[str]
+    posted_at: Optional[datetime] = None
 
 
 class BaseATSScraper(ABC):

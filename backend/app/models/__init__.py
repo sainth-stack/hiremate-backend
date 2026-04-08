@@ -1,3 +1,5 @@
+from backend.app.models.job import Job
+from backend.app.models.scraper_run import ScraperRun
 from backend.app.models.user import User
 from backend.app.models.profile import Profile
 from backend.app.models.user_resume import UserResume

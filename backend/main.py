@@ -29,6 +29,7 @@ from backend.jobradar.api.webhooks import router as webhooks_router
 from backend.jobradar.api.mock_interview import router as mock_interview_router
 from backend.jobradar.api.briefing import router as briefing_router
 from backend.jobradar.api.insights import router as insights_router
+from backend.app.api.v1.jobs_ingest import router as jobs_ingest_router
 from sqlalchemy import text
 from backend.app.db.session import engine
 # Import models so they register with Base.metadata (for migrations)
@@ -88,6 +89,10 @@ async def lifespan(app: FastAPI):
             f"Database connection failed. Check DATABASE_URL in .env. Error: {e}"
         ) from e
 
+    from backend.app.services.jobscrapping.ingest_lock import clear_stale_ingest_locks_on_startup
+
+    clear_stale_ingest_locks_on_startup()
+
     # Advance Gmail history cursors so queued Pub/Sub notifications from downtime are ignored
     _advance_history_ids_on_startup()
 
@@ -139,6 +144,7 @@ app.include_router(webhooks_router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(mock_interview_router, prefix="/api/mock-interview", tags=["mock-interview"])
 app.include_router(briefing_router, prefix="/api/mock-interview", tags=["mock-interview"])
 app.include_router(insights_router, prefix="/api/insights", tags=["insights"])
+app.include_router(jobs_ingest_router, prefix="/api/v1", tags=["jobs-ingest"])
 
 # Serve uploaded resumes (create dir if missing)
 upload_path = Path(settings.upload_dir)

@@ -131,6 +131,17 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
+    # Job corpus ingestion (scheduler / internal)
+    ingest_secret: str = ""  # Required for POST /api/v1/jobs/ingest/* when set; empty = disabled in dev only
+    portals_config: str = ""  # Path to portals.yml (default: discover data/portals.example.yml upward)
+    job_sources_config: str = ""  # Optional legacy JSON (e.g. job_sources.json); public_urls merged after YAML
+    ingest_deep_enrich_enabled: bool = False  # Also set settings.deep_enrich_enabled in portals YAML
+    ingest_redis_lock_enabled: bool = True  # Per-route lock when redis_url set; fail-open without Redis
+    ingest_lock_ttl_sec: int = 1800  # Redis lock TTL (max hold if process dies before release)
+    # Clear ingest:lock:* on process start so a crashed/killed server does not block until TTL.
+    # Set false if you run multiple app instances that could ingest concurrently (same Redis).
+    ingest_clear_locks_on_startup: bool = True
+
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
         env_file_encoding="utf-8",

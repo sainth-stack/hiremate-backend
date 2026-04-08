@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -18,6 +19,295 @@ from backend.app.services.company_search.lever import LeverScraper
 from backend.app.services.company_search.workday import WorkdayScraper
 
 logger = logging.getLogger(__name__)
+
+
+def _to_naive_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _coerce_datetime_value(val: Any) -> datetime | None:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return _to_naive_utc(val)
+    if isinstance(val, (int, float)):
+        ts = float(val)
+        if ts > 1e12:
+            ts = ts / 1000.0
+        try:
+            return datetime.utcfromtimestamp(ts)
+        except (ValueError, OSError):
+            return None
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        try:
+            if s.endswith("Z") and "+00:00" not in s:
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            return _to_naive_utc(dt)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_posted_at_from_dict(obj: dict[str, Any]) -> datetime | None:
+    for k in (
+        "postedAt",
+        "postedDate",
+        "datePosted",
+        "firstPublishedAt",
+        "publishedAt",
+        "createdAt",
+        "openingDate",
+        "listedAt",
+        "updatedAt",
+    ):
+        dt = _coerce_datetime_value(obj.get(k))
+        if dt:
+            return dt
+    return None
+
+
+_JOB_TITLE_HINT_RE = re.compile(
+    r"\b(?:"
+    r"engineer(?:ing)?|developer|devops|sre|scientist|researcher|analyst|architect|designer|"
+    r"manager|management|director|(?:tech(?:nical)?|team)\s+lead|head\s+of|"
+    r"specialist|intern(?:ship)?|coordinator|associate|executive|assistant|"
+    r"representative|recruiter|writer|support|consultant|counsel|attorney|"
+    r"product\s+manager|program\s+manager|project\s+manager|account\s+manager|"
+    r"technical|technician|qa|qae|\bqa\b|sdet|test(?:er|ing)?|automation|"
+    r"machine\s+learning|\bml\b|"
+    r"security|administrator|"
+    r"dba|sales\s+engineer|solutions\s+engineer|graphic|ux|ui|"
+    r"frontend|backend|full[\s-]?stack|mobile|ios|android|"
+    r"infrastructure|platform|site\s+reliability|kubernetes|"
+    r"business\s+systems|revops|operator|nurse|physician|therapist"
+    r")\b",
+    re.I,
+)
+
+# Region / org-chart labels often mistaken for roles in SPA JSON (e.g. Stripe).
+_HUB_TITLE_EXACT = frozenset({
+    "north america",
+    "latin america",
+    "south america",
+    "middle east",
+    "asia pacific",
+    "apac",
+    "emea",
+    "europe",
+    "africa",
+    "india",
+    "united states",
+    "canada",
+    "uk",
+    "ireland",
+    "products",
+    "product",
+    "people",
+    "security",
+    "bridge",
+    "university",
+    "tech programs",
+    "risk & financial crimes",
+    "risk and financial crimes",
+    "go to market",
+    "gtm",
+    "sales",
+    "marketing",
+    "operations",
+    "finance",
+    "legal",
+    "support",
+    "corporate",
+})
+
+
+def listing_title_looks_like_job_posting(title: str) -> bool:
+    """Reject nav hubs / regions; keep real role-like titles."""
+    t = (title or "").strip()
+    if len(t) < 3:
+        return False
+    tl = t.lower()
+    if tl in _HUB_TITLE_EXACT:
+        return False
+    if _JOB_TITLE_HINT_RE.search(t):
+        return True
+    if len(t) >= 36:
+        return True
+    return False
+
+
+def embedded_record_looks_like_job_posting(obj: dict[str, Any], title: str) -> bool:
+    if listing_title_looks_like_job_posting(title):
+        return True
+    for k in ("description", "jobDescription", "content", "htmlDescription", "jobPostingDescription"):
+        v = obj.get(k)
+        if isinstance(v, str) and len(v.strip()) > 140:
+            return True
+    return False
+
+
+# Playwright: extract job links with clean titles (posting selectors + innerText first line),
+# normalize URLs (drop pagination query params), smarter location lines.
+CAREER_PLAYWRIGHT_JOB_LINKS_JS = r"""
+(args) => {
+  const base = args.base;
+  const navSkip = new Set((args.navSkip || []).map(s => s.toLowerCase()));
+  const entries = [];
+  const seen = new Set();
+  const dropQ = new Set(["page", "p", "offset", "skip", "cursor", "after", "pagenum", "_p"]);
+  function normHref(href) {
+    try {
+      const u = new URL(href);
+      const sp = new URLSearchParams(u.search);
+      for (const k of [...sp.keys()]) {
+        if (dropQ.has(k.toLowerCase())) sp.delete(k);
+      }
+      u.search = sp.toString() ? "?" + sp.toString() : "";
+      return u.href;
+    } catch (e) {
+      return href;
+    }
+  }
+  function titleFromAnchor(a) {
+    const sels = [
+      ".posting-title", ".posting-btn__title", ".posting--title", '[class*="PostingTitle"]',
+      '[class*="posting-title"]', '[class*="job-title"]', '[class*="JobCard"] h3', '[class*="JobCard"] h2',
+      '[data-testid*="job-title"]', '[class*="ashby-job-posting-brief-title"]', "h3", "h4"
+    ];
+    for (const s of sels) {
+      try {
+        const el = a.querySelector(s);
+        if (el) {
+          const t = (el.textContent || "").trim().replace(/\s+/g, " ");
+          if (t.length >= 3 && t.length <= 280) return t.slice(0, 300);
+        }
+      } catch (e) {}
+    }
+    const inner = (a.innerText || a.textContent || "").trim();
+    const lines = inner.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    if (lines.length) {
+      let t = lines[0];
+      if (t.length > 280) t = t.slice(0, 280);
+      return t.replace(/\s+/g, " ");
+    }
+    return (a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 300);
+  }
+  function locFromAnchor(a) {
+    const inner = (a.innerText || "").trim();
+    const lines = inner.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    for (let i = 1; i < Math.min(lines.length, 6); i++) {
+      const L = lines[i];
+      if (L.length < 2 || L.length > 130) continue;
+      if (/^[\$€£0-9]|\d+[Kk]\s*[–-]|–.*–|Offers Equity|^GTM\s*•|^Engineering\s*•|^Product\s*•/i.test(L)) continue;
+      if (/Remote\s*\$|^\$\d|€\d|£\d|\d+K\s*[–-]/i.test(L)) continue;
+      return L.length > 120 ? L.slice(0, 120) : L;
+    }
+    return "";
+  }
+  const as = document.querySelectorAll(
+    'a[href*="job"], a[href*="careers"], a[href*="position"], a[href*="opening"],' +
+    ' a[href*="gh_jid"], a[href*="listing"], a[href*="opportunit"], a[href*="requisition"],' +
+    ' a[href*="lever.co"], a[href*="ashbyhq.com"],' +
+    ' [class*="job"] a, [class*="position"] a, [class*="opening"] a,' +
+    ' [data-testid*="job-card"] a, [data-testid*="JobCard"] a, [class*="JobCard"] a'
+  );
+  function isJobListingPath(href) {
+    if (!href) return false;
+    let p = "";
+    let host = "";
+    try {
+      const u = new URL(href);
+      if (u.searchParams.get("gh_jid")) return true;
+      p = u.pathname.toLowerCase().replace(/\/$/, "");
+      host = u.hostname.toLowerCase();
+    } catch (e) {
+      return false;
+    }
+    if (p === "/jobs" || p === "/job" || p === "/careers" || p === "/career") return false;
+    if (p.endsWith("/search") || p.endsWith("/search/")) return false;
+    if (/\/[a-z]{2}(-[a-z]{2})?\/jobs\/search/.test(p)) return false;
+    if (p.indexOf("/listing/") >= 0) return true;
+    const parts = p.split("/").filter(Boolean);
+    if (parts.length >= 3 && (p.indexOf("/job/") >= 0 || p.indexOf("/jobs/") >= 0 || p.indexOf("/position/") >= 0 || p.indexOf("/opening/") >= 0)) return true;
+    if (parts.length >= 2 && (p.indexOf("/listing") >= 0 || /\/job\/[^/]+\/[0-9]+/.test(p))) return true;
+    if (host.indexOf("ashbyhq.com") >= 0 && parts.length >= 2) {
+      const last = parts[parts.length - 1];
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(last)) return true;
+    }
+    if (host.indexOf("lever.co") >= 0 && parts.length >= 2) {
+      const last = parts[parts.length - 1];
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(last)) return true;
+    }
+    return false;
+  }
+  for (const a of as) {
+    let href = (a.getAttribute("href") || a.href || "").trim();
+    if (!href || href.indexOf("javascript:") === 0) continue;
+    if (href.charAt(0) === "/") href = new URL(href, base).href;
+    else if (href.indexOf("http") !== 0) href = new URL(href, base).href;
+    href = normHref(href);
+    const title = titleFromAnchor(a);
+    if (title.length < 3 || title.length > 300) continue;
+    if (seen.has(href)) continue;
+    const skip = ["login", "sign in", "home", "about", "contact", "privacy", "terms", "apply now", "submit"];
+    let badSkip = false;
+    for (let j = 0; j < skip.length; j++) {
+      if (title.toLowerCase().indexOf(skip[j]) >= 0) { badSkip = true; break; }
+    }
+    if (badSkip) continue;
+    if (navSkip.has(title.toLowerCase().trim())) continue;
+    if (!isJobListingPath(href)) continue;
+    seen.add(href);
+    let loc = locFromAnchor(a);
+    if (!loc) {
+      const card = a.closest('[class*="job"], [class*="position"], [class*="opening"], li, article, tr, td');
+      if (card) {
+        const t = card.textContent || "";
+        const tl = t.toLowerCase();
+        const locWords = ["bengaluru", "bangalore", "mumbai", "delhi", "hyderabad", "chennai", "pune", "jaipur", "london", "new york", "san francisco", "poland", "germany", "ireland", "portugal", "india"];
+        for (let w = 0; w < locWords.length; w++) {
+          if (tl.indexOf(locWords[w]) >= 0) { loc = locWords[w]; break; }
+        }
+        if (!loc && tl.indexOf("remote") >= 0) loc = "Remote";
+      }
+    }
+    entries.push({ url: href, title: title.slice(0, 300), location: loc || null });
+  }
+  return entries;
+}
+"""
+
+_PAGINATION_QUERY_KEYS = frozenset({"page", "p", "offset", "skip", "cursor", "after", "pagenum", "_p"})
+
+
+def _normalize_job_listing_url(url: str) -> str:
+    """Drop pagination-related query params so the same role dedupes across listing pages."""
+    try:
+        p = urlparse(url)
+        q = [
+            (k, v)
+            for k, v in parse_qsl(p.query, keep_blank_values=True)
+            if k.lower() not in _PAGINATION_QUERY_KEYS
+        ]
+        new_query = urlencode(q)
+        return urlunparse((p.scheme, p.netloc, p.path, p.params, new_query, p.fragment))
+    except Exception:
+        return url
+
+
+def _polish_listing_title(title: str) -> str:
+    """Fix glued lines (e.g. Greenhouse cards: 'RoleDeptCity' split heuristically)."""
+    t = re.sub(r"\s+", " ", (title or "").strip())
+    if len(t) < 4:
+        return t
+    t = re.sub(r"([a-z0-9])([A-Z][a-z])", r"\1 \2", t)
+    return re.sub(r"\s+", " ", t).strip()[:300]
 
 
 class CareerPageScraper(BaseATSScraper):
@@ -1337,7 +1627,9 @@ class CareerPageScraper(BaseATSScraper):
             
             if not title:
                 continue
-            
+            if not embedded_record_looks_like_job_posting(job, str(title)):
+                continue
+
             # Generate apply URL if not provided
             if not apply_url:
                 if job_id:
@@ -1345,15 +1637,15 @@ class CareerPageScraper(BaseATSScraper):
                     apply_url = f"{base_url.rstrip('/')}/#/job/{job_id}"
                 else:
                     apply_url = base_url
-            
+
             # Ensure absolute URL
             if apply_url and not str(apply_url).startswith("http"):
                 apply_url = urljoin(base_url, str(apply_url))
-            
+
             external_id = hashlib.sha256(
                 f"{base_url}:{job_id or title}".encode("utf-8")
             ).hexdigest()
-            
+            posted = _parse_posted_at_from_dict(job)
             results.append(
                 JobResult(
                     company=company,
@@ -1363,6 +1655,7 @@ class CareerPageScraper(BaseATSScraper):
                     ats_type=self.ats_type,
                     external_id=external_id,
                     description=job.get("description") or job.get("jdDisplay"),
+                    posted_at=posted,
                 )
             )
         return results
@@ -1386,32 +1679,44 @@ class CareerPageScraper(BaseATSScraper):
                     loc = loc[0].get("city") or loc[0].get("City") or loc[0].get("name")
                 apply_url = obj.get("applyUrl") or obj.get("job_application_url") or obj.get("url") or obj.get("link") or obj.get("JobUrl")
                 if title and isinstance(title, str) and len(title) >= 2:
-                    if apply_url and isinstance(apply_url, str) and apply_url.startswith("http"):
-                        pass
-                    elif job_id is not None:
-                        apply_url = apply_url or f"{base_url.rstrip('/')}/#/careers?jd={job_id}"
-                        if apply_url and not str(apply_url).startswith("http"):
-                            apply_url = urljoin(base_url, str(apply_url))
-                    else:
-                        apply_url = apply_url or base_url
-                        if apply_url and not str(apply_url).startswith("http"):
-                            apply_url = urljoin(base_url, str(apply_url))
-                    key = (title, str(apply_url or base_url))
-                    if key not in seen_keys:
-                        seen_keys.add(key)
-                        external_id = hashlib.sha256(str(apply_url or base_url).encode("utf-8")).hexdigest()
-                        results.append(
-                            JobResult(
-                                company=company,
-                                role=title,
-                                location=str(loc) if loc else None,
-                                apply_url=str(apply_url) if apply_url else base_url,
-                                ats_type=self.ats_type,
-                                external_id=external_id,
-                                description=None,
+                    if embedded_record_looks_like_job_posting(obj, title):
+                        if apply_url and isinstance(apply_url, str) and apply_url.startswith("http"):
+                            pass
+                        elif job_id is not None:
+                            apply_url = apply_url or f"{base_url.rstrip('/')}/#/careers?jd={job_id}"
+                            if apply_url and not str(apply_url).startswith("http"):
+                                apply_url = urljoin(base_url, str(apply_url))
+                        else:
+                            apply_url = apply_url or base_url
+                            if apply_url and not str(apply_url).startswith("http"):
+                                apply_url = urljoin(base_url, str(apply_url))
+                        key = (title, str(apply_url or base_url))
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            external_id = hashlib.sha256(str(apply_url or base_url).encode("utf-8")).hexdigest()
+                            desc = (
+                                obj.get("description")
+                                or obj.get("jobDescription")
+                                or obj.get("jdDisplay")
+                                or obj.get("content")
                             )
-                        )
-                    return
+                            if isinstance(desc, str):
+                                desc = desc.strip() or None
+                            else:
+                                desc = None
+                            posted = _parse_posted_at_from_dict(obj)
+                            results.append(
+                                JobResult(
+                                    company=company,
+                                    role=title,
+                                    location=str(loc) if loc else None,
+                                    apply_url=str(apply_url) if apply_url else base_url,
+                                    ats_type=self.ats_type,
+                                    external_id=external_id,
+                                    description=desc,
+                                    posted_at=posted,
+                                )
+                            )
                 for v in obj.values():
                     try_extract(v)
 
@@ -1522,7 +1827,7 @@ class CareerPageScraper(BaseATSScraper):
         return results
 
     # Playwright: rate limit between requests (seconds)
-    _PLAYWRIGHT_SCROLL_DELAY = 1.5
+    _PLAYWRIGHT_SCROLL_DELAY = 0.55
     _PLAYWRIGHT_MAX_SCROLL_ITERATIONS = 25
     _PLAYWRIGHT_LOAD_MORE_ITERATIONS = 15
     _PLAYWRIGHT_NEXT_PAGE_ITERATIONS = 20
@@ -1535,13 +1840,153 @@ class CareerPageScraper(BaseATSScraper):
         "bridge open roles", "privy open roles", "english", "italiano", "deutsch",
         "français", "español", "nederlands", "português", "svenska", "日本語", "简体中文",
         "ไทย", "view jobs", "search jobs", "browse jobs",
+        "north america", "latin america", "middle east", "asia pacific", "europe",
+        "products", "people", "security", "bridge", "tech programs",
+        "risk & financial crimes", "emea", "apac",
     })
 
-    def _extract_jobs_with_playwright(self, careers_url: str, company: str) -> list[JobResult]:
+    def scrape_careers_listing_for_ingestion(
+        self,
+        careers_url: str,
+        company: str,
+        *,
+        max_scroll_rounds: int | None = None,
+        max_load_more_rounds: int | None = None,
+        max_next_page_rounds: int | None = None,
+        listing_max_pages: int | None = None,
+        user_agent: str | None = None,
+        default_timeout_ms: int | None = None,
+    ) -> list[JobResult]:
+        """
+        Public entry for job-corpus ingestion: Playwright listing pass with YAML-driven caps
+        (scroll / load-more / pagination). Used by `jobscrapping.scrapping_algorithms.company_careers`.
+        """
+        return self._extract_jobs_with_playwright(
+            careers_url,
+            company,
+            max_scroll_rounds=max_scroll_rounds,
+            max_load_more_rounds=max_load_more_rounds,
+            max_next_page_rounds=max_next_page_rounds,
+            listing_max_pages=listing_max_pages,
+            user_agent=user_agent,
+            default_timeout_ms=default_timeout_ms,
+        )
+
+    def extract_jobs_from_careers_url(
+        self,
+        url: str,
+        company: str,
+        *,
+        role: str = "",
+        skills: list[str] | None = None,
+        use_playwright: bool = False,
+    ) -> tuple[list[JobResult], dict[str, Any]]:
+        """
+        Company-search pipeline on a known careers URL: HTTP/JSON, iframe ATS, then ATS adapters
+        (Greenhouse, Lever, Workday, Ashby, …), optionally Playwright for generic HTML.
+
+        Used by unified job ingest alongside :meth:`scrape_careers_listing_for_ingestion` (which
+        only runs the Playwright listing pass with YAML caps). When ``use_playwright`` is False,
+        this avoids a second browser while still harvesting API-backed boards.
+        """
+        sk = skills if skills is not None else []
+        return self._extract_jobs_from_url(url, company, role, sk, use_playwright=use_playwright)
+
+    def _try_lever_public_api(self, careers_url: str, company: str) -> list[JobResult] | None:
+        """
+        Lever exposes an unauthenticated JSON API — avoids Playwright timeouts on jobs.lever.co SPAs.
+        Returns a list (possibly empty) on success, or None to fall back to the browser path.
+        """
+        try:
+            parsed = urlparse(careers_url)
+            host = (parsed.netloc or "").lower()
+            if "lever.co" not in host:
+                return None
+            parts = [p for p in (parsed.path or "").strip("/").split("/") if p]
+            if not parts:
+                return None
+            slug = parts[0]
+            api_url = f"https://api.lever.co/v0/postings/{slug}"
+            t_out = max(15, min(90, int(self.timeout_seconds)))
+            resp = requests.get(
+                api_url,
+                timeout=t_out,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; HiremateCareerIngest/1.0; +https://example.invalid)",
+                    "Accept": "application/json",
+                },
+            )
+            if resp.status_code != 200:
+                logger.info("Lever API skip slug=%s status=%s", slug, resp.status_code)
+                return None
+            data = resp.json()
+            if not isinstance(data, list):
+                return None
+            out: list[JobResult] = []
+            for posting in data:
+                if not isinstance(posting, dict):
+                    continue
+                title = (posting.get("text") or "").strip()
+                apply_url = (posting.get("hostedUrl") or "").strip() or (posting.get("applyUrl") or "").strip()
+                if not title or not apply_url:
+                    continue
+                loc: str | None = None
+                cats = posting.get("categories")
+                if isinstance(cats, dict):
+                    loc = cats.get("location")
+                    if not loc:
+                        al = cats.get("allLocations")
+                        if isinstance(al, list) and al:
+                            loc = str(al[0]).strip() or None
+                wt = posting.get("workplaceType")
+                if isinstance(wt, str) and wt.lower() == "remote" and not loc:
+                    loc = "Remote"
+                ext = hashlib.sha256(apply_url.encode("utf-8")).hexdigest()
+                out.append(
+                    JobResult(
+                        company=company,
+                        role=title[:300],
+                        location=loc,
+                        apply_url=apply_url,
+                        ats_type=self.ats_type,
+                        external_id=ext,
+                        description=None,
+                    )
+                )
+            logger.info("Lever public API slug=%s jobs=%d", slug, len(out))
+            return self.dedupe_jobs(out)
+        except Exception as exc:
+            logger.debug("Lever public API failed url=%s error=%s", careers_url, exc)
+            return None
+
+    def _extract_jobs_with_playwright(
+        self,
+        careers_url: str,
+        company: str,
+        *,
+        max_scroll_rounds: int | None = None,
+        max_load_more_rounds: int | None = None,
+        max_next_page_rounds: int | None = None,
+        listing_max_pages: int | None = None,
+        user_agent: str | None = None,
+        default_timeout_ms: int | None = None,
+    ) -> list[JobResult]:
         """
         Use a real browser (Playwright) to scrape career pages. Supports SPAs, Next.js, infinite scroll,
         and "Load more" / pagination. Structure-agnostic extraction via job-like links and repeated blocks.
+        Optional kwargs override class defaults (ingestion / portals.yml settings).
         """
+        scroll_cap = max_scroll_rounds if max_scroll_rounds is not None else self._PLAYWRIGHT_MAX_SCROLL_ITERATIONS
+        load_more_cap = max_load_more_rounds if max_load_more_rounds is not None else self._PLAYWRIGHT_LOAD_MORE_ITERATIONS
+        next_cap = max_next_page_rounds if max_next_page_rounds is not None else self._PLAYWRIGHT_NEXT_PAGE_ITERATIONS
+        url_page_cap = listing_max_pages if listing_max_pages is not None else 25
+        pw_timeout_ms = int(default_timeout_ms) if default_timeout_ms else 20000
+        ua = (
+            user_agent
+            or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        goto_timeout_ms = min(25000, max(5000, pw_timeout_ms))
+
         try:
             from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
         except ImportError:
@@ -1549,18 +1994,24 @@ class CareerPageScraper(BaseATSScraper):
             return []
 
         logger.info("Playwright extracting jobs from url=%s", careers_url)
+        lever_jobs = self._try_lever_public_api(careers_url, company)
+        if lever_jobs is not None:
+            return lever_jobs
+
         results: list[JobResult] = []
         html = ""
 
         def _nav_and_wait(page, url: str) -> bool:
             for attempt in range(2):
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=25000)
-                    page.wait_for_load_state("networkidle", timeout=10000)
+                    page.goto(url, wait_until="domcontentloaded", timeout=goto_timeout_ms)
+                    # Do not use networkidle — SPAs and analytics keep sockets open and stall for the full timeout.
+                    page.wait_for_timeout(950)
                     return True
                 except PlaywrightTimeout:
                     try:
                         page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        page.wait_for_timeout(500)
                         return True
                     except Exception:
                         pass
@@ -1577,14 +2028,99 @@ class CareerPageScraper(BaseATSScraper):
                 try:
                     context = browser.new_context(
                         viewport={"width": 1920, "height": 1080},
-                        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        user_agent=ua,
                     )
+                    # Faster loads on JS career sites: still run scripts/styles; skip heavy assets.
+                    try:
+
+                        def _route_assets(route):
+                            if route.request.resource_type in ("image", "media", "font"):
+                                route.abort()
+                            else:
+                                route.continue_()
+
+                        context.route("**/*", _route_assets)
+                    except Exception:
+                        pass
                     page = context.new_page()
-                    page.set_default_timeout(20000)
+                    page.set_default_timeout(pw_timeout_ms)
 
                     if not _nav_and_wait(page, careers_url):
                         logger.warning("Playwright navigation failed for %s", careers_url)
                         return []
+
+                    # Hash / client-side routers (e.g. /#/careers) need extra time for JS to render listings.
+                    if "#" in (page.url or "") or "#" in careers_url:
+                        page.wait_for_timeout(1800)
+                        try:
+                            page.wait_for_load_state("load", timeout=15000)
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(500)
+
+                    nav_skip_list = list(self._NAV_TITLE_SKIP)
+                    seen_urls: set[str] = set()
+
+                    def _append_entries_to_results(entries, results_list, seen_urls_set):
+                        added = 0
+                        for entry in entries if isinstance(entries, list) else []:
+                            if not isinstance(entry, dict):
+                                continue
+                            url = entry.get("url") or entry.get("href")
+                            title = entry.get("title") or ""
+                            if not isinstance(title, str):
+                                title = str(title) if title is not None else ""
+                            if not isinstance(url, str):
+                                url = str(url) if url is not None else ""
+                            url = _normalize_job_listing_url(url.strip())
+                            title = _polish_listing_title(title)
+                            if not url or not title or url in seen_urls_set:
+                                continue
+                            if title.strip().lower() in self._NAV_TITLE_SKIP:
+                                continue
+                            if not listing_title_looks_like_job_posting(title):
+                                continue
+                            parsed = urlparse(str(url))
+                            path = (parsed.path or "").rstrip("/")
+                            if path in ("/jobs", "/job", "/careers", "/career") or path.endswith("/search"):
+                                continue
+                            if re.search(r"^/[a-z]{2}(-[a-z]{2})?/jobs/search", path):
+                                continue
+                            seen_urls_set.add(url)
+                            external_id = hashlib.sha256(str(url).encode("utf-8")).hexdigest()
+                            loc = entry.get("location")
+                            if isinstance(loc, str):
+                                lclean = loc.strip()
+                                if re.search(r"Remote\s*\$|^\$|€\d|£\d|Product$|^GTM\s*•", lclean, re.I):
+                                    loc = None
+                                elif len(lclean) < 2:
+                                    loc = None
+                                else:
+                                    loc = lclean[:200]
+                            else:
+                                loc = None
+                            results_list.append(
+                                JobResult(
+                                    company=company,
+                                    role=title,
+                                    location=loc,
+                                    apply_url=url,
+                                    ats_type=self.ats_type,
+                                    external_id=external_id,
+                                    description=None,
+                                )
+                            )
+                            added += 1
+                        return added
+
+                    def _pull_dom_jobs() -> int:
+                        raw = page.evaluate(
+                            CAREER_PLAYWRIGHT_JOB_LINKS_JS,
+                            {"base": page.url, "navSkip": nav_skip_list},
+                        )
+                        return _append_entries_to_results(raw, results, seen_urls)
+
+                    _pull_dom_jobs()
 
                     # Wait for list: job card or link with job/career/position in href
                     list_selectors = [
@@ -1606,6 +2142,7 @@ class CareerPageScraper(BaseATSScraper):
                             break
                         except PlaywrightTimeout:
                             continue
+                    _pull_dom_jobs()
 
                     # Click "View Jobs" / "See Open Roles" once to land on listing, then paginate with "Load more" / "Show more"
                     cta_selectors = [
@@ -1620,15 +2157,12 @@ class CareerPageScraper(BaseATSScraper):
                             loc = page.locator(sel).first
                             if loc.count() > 0:
                                 loc.click(timeout=3000)
-                                page.wait_for_timeout(2000)
-                                try:
-                                    page.wait_for_load_state("networkidle", timeout=8000)
-                                except Exception:
-                                    pass
+                                page.wait_for_timeout(1100)
                                 logger.info("Playwright clicked CTA: %s", sel)
                                 break
                         except Exception:
                             continue
+                    _pull_dom_jobs()
 
                     # Pagination: repeatedly click "Load more" / "Show more" / "Next" until no more
                     load_more_selectors = [
@@ -1646,18 +2180,14 @@ class CareerPageScraper(BaseATSScraper):
                         '[data-testid*="load-more"]',
                         '[data-testid*="show-more"]',
                     ]
-                    for _ in range(self._PLAYWRIGHT_LOAD_MORE_ITERATIONS):
+                    for _ in range(load_more_cap):
                         clicked = False
                         for sel in load_more_selectors:
                             try:
                                 loc = page.locator(sel).first
                                 if loc.count() > 0 and loc.is_visible():
                                     loc.click(timeout=3000)
-                                    page.wait_for_timeout(2000)
-                                    try:
-                                        page.wait_for_load_state("networkidle", timeout=8000)
-                                    except Exception:
-                                        pass
+                                    page.wait_for_timeout(700)
                                     clicked = True
                                     logger.info("Playwright pagination clicked: %s", sel)
                                     break
@@ -1665,172 +2195,50 @@ class CareerPageScraper(BaseATSScraper):
                                 continue
                         if not clicked:
                             break
+                        _pull_dom_jobs()
 
-                    # Infinite scroll: scroll to bottom, wait, count job links; repeat until stable or max
+                    # Infinite scroll: merge after each round so lazy-rendered / SPA rows are not skipped.
                     prev_count = -1
                     stable_rounds = 0
-                    for _ in range(self._PLAYWRIGHT_MAX_SCROLL_ITERATIONS):
+                    min_scroll_before_stable = min(5, max(1, scroll_cap // 3))
+                    scroll_i = 0
+                    for _ in range(scroll_cap):
+                        scroll_i += 1
                         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        time.sleep(self._PLAYWRIGHT_SCROLL_DELAY)
+                        page.wait_for_timeout(int(self._PLAYWRIGHT_SCROLL_DELAY * 1000))
+                        _pull_dom_jobs()
                         count = page.evaluate(
                             """() => {
-                            const as = document.querySelectorAll('a[href*="job"], a[href*="career"], a[href*="position"], a[href*="opening"]');
+                            const as = document.querySelectorAll(
+                              'a[href*="job"], a[href*="career"], a[href*="position"], a[href*="opening"], a[href*="gh_jid"]'
+                            );
                             const seen = new Set();
-                            as.forEach(a => { if (a.href && a.textContent.trim().length > 2) seen.add(a.href); });
+                            as.forEach(a => { if (a.href && (a.textContent||'').trim().length > 2) seen.add(a.href); });
                             return seen.size;
                             }"""
                         )
                         if isinstance(count, int):
                             if count == prev_count:
                                 stable_rounds += 1
-                                if stable_rounds >= 2:
+                                if stable_rounds >= 3 and scroll_i >= min_scroll_before_stable:
                                     break
                             else:
                                 stable_rounds = 0
                             prev_count = count
+                    _pull_dom_jobs()
+                    logger.info("Playwright DOM link pass collected %d jobs (pre-pagination)", len(results))
 
-                    # Structure-agnostic: collect only job listing links (exclude nav, locale, search pages)
-                    nav_skip_list = list(self._NAV_TITLE_SKIP)
-                    job_entries = page.evaluate(
-                        """(args) => {
-                        const base = args.base;
-                        const navSkip = new Set((args.navSkip || []).map(s => s.toLowerCase()));
-                        const entries = [];
-                        const seen = new Set();
-                        const as = document.querySelectorAll('a[href*="job"], a[href*="careers"], a[href*="position"], a[href*="opening"], [class*="job"] a, [class*="position"] a, [class*="opening"] a');
-                        function isJobListingPath(path) {
-                            if (!path) return false;
-                            const p = path.toLowerCase().replace(/\\/$/, '');
-                            if (p === '/jobs' || p === '/job' || p === '/careers' || p === '/career') return false;
-                            if (p.endsWith('/search') || p.endsWith('/search/')) return false;
-                            if (/\\/[a-z]{2}(-[a-z]{2})?\\/jobs\\/search/.test(p)) return false;
-                            if (p.includes('/listing/')) return true;
-                            const parts = p.split('/').filter(Boolean);
-                            if (parts.length >= 3 && (p.includes('/job/') || p.includes('/jobs/') || p.includes('/position/') || p.includes('/opening/'))) return true;
-                            if (parts.length >= 2 && (p.includes('/listing') || /\\/job\\/[^/]+\\/[0-9]+/.test(p))) return true;
-                            return false;
-                        }
-                        for (const a of as) {
-                            let href = (a.getAttribute('href') || a.href || '').trim();
-                            if (!href || href.startsWith('javascript:')) continue;
-                            if (href.startsWith('/')) href = new URL(href, base).href;
-                            else if (!href.startsWith('http')) href = new URL(href, base).href;
-                            const title = (a.textContent || '').trim().replace(/\\s+/g, ' ');
-                            if (title.length < 3 || title.length > 200) continue;
-                            if (seen.has(href)) continue;
-                            const skip = ['login','sign in','home','about','contact','privacy','terms','apply now','submit'];
-                            if (skip.some(s => title.toLowerCase().includes(s))) continue;
-                            if (navSkip.has(title.toLowerCase().trim())) continue;
-                            const path = (new URL(href)).pathname;
-                            if (!isJobListingPath(path)) continue;
-                            seen.add(href);
-                            let loc = '';
-                            const card = a.closest('[class*="job"], [class*="position"], [class*="opening"], li, article');
-                            if (card) {
-                                const t = card.textContent || '';
-                                const locWords = ['remote','bangalore','mumbai','delhi','hyderabad','chennai','pune','london','new york','san francisco'];
-                                for (const w of locWords) { if (t.toLowerCase().includes(w)) { loc = w; break; } }
-                            }
-                            entries.push({ url: href, title: title.slice(0, 300), location: loc || null });
-                        }
-                        return entries;
-                        }""",
-                        {"base": careers_url, "navSkip": nav_skip_list},
-                    )
-
-                    def _collect_page_entries(page, base: str):
-                        nav_skip_list = list(self._NAV_TITLE_SKIP)
+                    def _collect_page_entries():
                         return page.evaluate(
-                            """(args) => {
-                            const base = args.base;
-                            const navSkip = new Set((args.navSkip || []).map(s => s.toLowerCase()));
-                            const entries = [];
-                            const seen = new Set();
-                            const as = document.querySelectorAll('a[href*="job"], a[href*="careers"], a[href*="position"], a[href*="opening"], [class*="job"] a, [class*="position"] a, [class*="opening"] a');
-                            function isJobListingPath(path) {
-                                if (!path) return false;
-                                const p = path.toLowerCase().replace(/\\/$/, '');
-                                if (p === '/jobs' || p === '/job' || p === '/careers' || p === '/career') return false;
-                                if (p.endsWith('/search') || p.endsWith('/search/')) return false;
-                                if (/\\/[a-z]{2}(-[a-z]{2})?\\/jobs\\/search/.test(p)) return false;
-                                if (p.includes('/listing/')) return true;
-                                const parts = p.split('/').filter(Boolean);
-                                if (parts.length >= 3 && (p.includes('/job/') || p.includes('/jobs/') || p.includes('/position/') || p.includes('/opening/'))) return true;
-                                if (parts.length >= 2 && (p.includes('/listing') || /\\/job\\/[^/]+\\/[0-9]+/.test(p))) return true;
-                                return false;
-                            }
-                            for (const a of as) {
-                                let href = (a.getAttribute('href') || a.href || '').trim();
-                                if (!href || href.startsWith('javascript:')) continue;
-                                if (href.startsWith('/')) href = new URL(href, base).href;
-                                else if (!href.startsWith('http')) href = new URL(href, base).href;
-                                const title = (a.textContent || '').trim().replace(/\\s+/g, ' ');
-                                if (title.length < 3 || title.length > 200) continue;
-                                if (seen.has(href)) continue;
-                                const skip = ['login','sign in','home','about','contact','privacy','terms','apply now','submit'];
-                                if (skip.some(s => title.toLowerCase().includes(s))) continue;
-                                if (navSkip.has(title.toLowerCase().trim())) continue;
-                                const path = (new URL(href)).pathname;
-                                if (!isJobListingPath(path)) continue;
-                                seen.add(href);
-                                let loc = '';
-                                const card = a.closest('[class*="job"], [class*="position"], [class*="opening"], li, article');
-                                if (card) {
-                                    const t = card.textContent || '';
-                                    const locWords = ['remote','bangalore','mumbai','delhi','hyderabad','chennai','pune','london','new york','san francisco'];
-                                    for (const w of locWords) { if (t.toLowerCase().includes(w)) { loc = w; break; } }
-                                }
-                                entries.push({ url: href, title: title.slice(0, 300), location: loc || null });
-                            }
-                            return entries;
-                            }""",
-                            {"base": base, "navSkip": nav_skip_list},
+                            CAREER_PLAYWRIGHT_JOB_LINKS_JS,
+                            {"base": page.url, "navSkip": nav_skip_list},
                         )
-
-                    def _append_entries_to_results(entries, results_list, seen_urls):
-                        added = 0
-                        for entry in entries if isinstance(entries, list) else []:
-                            if not isinstance(entry, dict):
-                                continue
-                            url = entry.get("url") or entry.get("href")
-                            title = entry.get("title") or ""
-                            if not url or not title or url in seen_urls:
-                                continue
-                            if title.strip().lower() in self._NAV_TITLE_SKIP:
-                                continue
-                            parsed = urlparse(str(url))
-                            path = (parsed.path or "").rstrip("/")
-                            if path in ("/jobs", "/job", "/careers", "/career") or path.endswith("/search"):
-                                continue
-                            if re.search(r"^/[a-z]{2}(-[a-z]{2})?/jobs/search", path):
-                                continue
-                            seen_urls.add(url)
-                            external_id = hashlib.sha256(str(url).encode("utf-8")).hexdigest()
-                            results_list.append(
-                                JobResult(
-                                    company=company,
-                                    role=title,
-                                    location=entry.get("location"),
-                                    apply_url=url,
-                                    ats_type=self.ats_type,
-                                    external_id=external_id,
-                                    description=None,
-                                )
-                            )
-                            added += 1
-                        return added
-
-                    seen_urls = set()
-                    if isinstance(job_entries, list) and job_entries:
-                        _append_entries_to_results(job_entries, results, seen_urls)
-                        logger.info("Playwright link-based extraction found %d jobs (first page)", len(results))
-                    seen_urls = {r.apply_url for r in results}
 
                     # Pagination (generic for all sites): URL params (skip / offset / page) then "Next" clicks
                     parsed_careers = urlparse(careers_url)
                     base_search = f"{parsed_careers.scheme}://{parsed_careers.netloc}{parsed_careers.path.rstrip('/') or '/'}"
                     page_size = self._PLAYWRIGHT_SKIP_PAGE_SIZE
-                    max_pages = 25
+                    max_pages = url_page_cap
 
                     # 1) URL pagination: try ?skip=, ?offset=, ?page= (generic; works for Stripe, etc.)
                     for param_name, start, step in [
@@ -1845,12 +2253,11 @@ class CareerPageScraper(BaseATSScraper):
                             url = f"{base_search}{sep}{param_name}={n}"
                             try:
                                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                                page.wait_for_load_state("networkidle", timeout=10000)
-                                page.wait_for_timeout(1000)
+                                page.wait_for_timeout(800)
                             except Exception as e:
                                 logger.debug("Pagination %s=%s failed: %s", param_name, n, e)
                                 break
-                            entries = _collect_page_entries(page, page.url())
+                            entries = _collect_page_entries()
                             added = _append_entries_to_results(entries, results, seen_urls)
                             any_added = any_added or (added > 0)
                             if added > 0:
@@ -1869,15 +2276,14 @@ class CareerPageScraper(BaseATSScraper):
                         'a[rel="next"]',
                         'nav a:has-text("Next")',
                     ]
-                    for _ in range(self._PLAYWRIGHT_NEXT_PAGE_ITERATIONS):
+                    for _ in range(next_cap):
                         clicked = False
                         for sel in next_selectors:
                             try:
                                 loc = page.locator(sel).first
                                 if loc.count() > 0 and loc.is_visible():
                                     loc.click(timeout=3000)
-                                    page.wait_for_load_state("networkidle", timeout=10000)
-                                    page.wait_for_timeout(1500)
+                                    page.wait_for_timeout(1000)
                                     clicked = True
                                     logger.info("Playwright clicked Next: %s", sel)
                                     break
@@ -1885,7 +2291,7 @@ class CareerPageScraper(BaseATSScraper):
                                 continue
                         if not clicked:
                             break
-                        entries = _collect_page_entries(page, page.url())
+                        entries = _collect_page_entries()
                         added = _append_entries_to_results(entries, results, seen_urls)
                         if added == 0:
                             break
@@ -1893,29 +2299,28 @@ class CareerPageScraper(BaseATSScraper):
                     if results:
                         logger.info("Playwright total jobs after pagination: %d", len(results))
 
-                    # If no link-based jobs, get HTML and run generic/embedded/table extraction
+                    html = page.content()
                     if not results:
-                        html = page.content()
                         iframe_results = self._extract_from_iframes(page, careers_url, company)
                         if iframe_results:
                             results.extend(iframe_results)
-                    else:
-                        html = page.content()
 
                 finally:
                     browser.close()
 
-            if not results and html:
+            # SPAs often hydrate job rows from __NEXT_DATA__ / window state — merge even when DOM links exist.
+            if html:
                 soup = BeautifulSoup(html, "html.parser")
-                generic_results = self._extract_jobs_generic(soup, careers_url, company)
-                if generic_results:
-                    results.extend(generic_results)
                 embedded_results = self._extract_jobs_from_embedded_json(soup, careers_url, company)
                 if embedded_results:
                     results.extend(embedded_results)
-                table_results = self._extract_jobs_from_tables(soup, careers_url, company)
-                if table_results:
-                    results.extend(table_results)
+                if not results:
+                    generic_results = self._extract_jobs_generic(soup, careers_url, company)
+                    if generic_results:
+                        results.extend(generic_results)
+                    table_results = self._extract_jobs_from_tables(soup, careers_url, company)
+                    if table_results:
+                        results.extend(table_results)
 
             return self.dedupe_jobs(results)
 
@@ -1962,7 +2367,7 @@ class CareerPageScraper(BaseATSScraper):
                     page = browser.new_page()
                     page.set_default_timeout(15000)
                     page.goto(job_url, wait_until="domcontentloaded", timeout=20000)
-                    page.wait_for_load_state("networkidle", timeout=10000)
+                    page.wait_for_timeout(1200)
                     desc_selectors = [
                         "[data-job-description]",
                         ".job-description",
@@ -2006,7 +2411,11 @@ class CareerPageScraper(BaseATSScraper):
                     continue
                 
                 try:
-                    iframe.wait_for_load_state("networkidle", timeout=5000)
+                    try:
+                        iframe.wait_for_load_state("domcontentloaded", timeout=5000)
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(600)
                     iframe_html = iframe.content()
                     
                     if len(iframe_html) > 1000:  # Only process substantial iframes
@@ -2047,7 +2456,9 @@ class CareerPageScraper(BaseATSScraper):
                 # Skip non-job rows
                 if any(skip in title.lower() for skip in ["apply now", "apply", "login", "search"]):
                     continue
-                
+                if not listing_title_looks_like_job_posting(title):
+                    continue
+
                 # Try to find link
                 link_el = tr.find("a", href=True)
                 href = link_el.get("href", "").strip() if link_el else ""
@@ -2090,13 +2501,8 @@ class CareerPageScraper(BaseATSScraper):
         if not (has_job_keyword or has_hash_route):
             return False
 
-        title_words = title_lower.split()
-        if len(title_words) < 2 or len(title_words) > 20:
-            return False
         skip_words = ['login', 'sign in', 'home', 'about', 'contact', 'privacy', 'terms', 'apply', 'submit']
         if any(skip in title_lower for skip in skip_words):
             return False
 
-        job_title_keywords = ['engineer', 'developer', 'manager', 'designer', 'analyst', 'specialist', 'lead', 'senior', 'junior', 'intern', 'associate', 'director', 'coordinator', 'consultant', 'software', 'product', 'data', 'dev']
-        has_job_title_keyword = any(keyword in title_lower for keyword in job_title_keywords)
-        return has_job_title_keyword or len(title_words) >= 3
+        return listing_title_looks_like_job_posting(title)

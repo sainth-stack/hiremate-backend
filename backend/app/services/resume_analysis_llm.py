@@ -79,7 +79,7 @@ Resume (excerpt):
 
 Respond with exactly this structure (JSON object):
 {{ "issues": [ {{ "icon": "cancel", "title": "Short title", "desc": "One sentence actionable advice", "badge": "IMPACT or SKILLS", "locked": false }} ], "did_well": [ {{ "title": "Short title", "desc": "One sentence positive finding" }} ] }}
-Provide 2-4 issues and 2-3 did_well items. Keep titles and text concise.
+Provide 3-6 issues and 2-4 did_well items. Never set locked to true — all analysis is shown to the user. Keep titles and text concise.
 """
     try:
         resp = llm.invoke(prompt)

@@ -1,9 +1,35 @@
 """
 Schemas for Company Job Search feature.
 """
+from datetime import datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel
+
+
+class JobCorpusItem(BaseModel):
+    """Row from global ingested ``jobs`` table."""
+
+    id: int
+    title: str
+    company: str
+    location: Optional[str] = None
+    url: str
+    description: Optional[str] = None
+    remote: bool
+    posted_at: Optional[datetime] = None
+    source: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class JobCorpusPage(BaseModel):
+    items: List[JobCorpusItem]
+    total: int
+    page: int
+    page_size: int
 
 
 class CompanyItem(BaseModel):

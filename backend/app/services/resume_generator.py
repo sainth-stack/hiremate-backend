@@ -1026,6 +1026,18 @@ def _reorder_sections_html(html: str, sections_order: list, template_id: str) ->
     return head_chunk + header_block + ''.join(ordered) + tail_chunk
 
 
+def _sanitize_hex_color(val: object) -> str | None:
+    """Return #rrggbb if valid, else None."""
+    if val is None or not isinstance(val, str):
+        return None
+    v = val.strip()
+    if re.match(r"^#[0-9A-Fa-f]{6}$", v):
+        return v.lower()
+    if re.match(r"^#[0-9A-Fa-f]{3}$", v):
+        return "#" + "".join(c * 2 for c in v[1:])
+    return None
+
+
 def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
     """Generate a <style> block with CSS overrides for all active design-config settings."""
     if not design_config:
@@ -1033,26 +1045,78 @@ def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
     lines: list[str] = []
     tid = (template_id or 'classic').lower()
 
-    # ── Color scheme ─────────────────────────────────────────────────────────
-    color_scheme_id = design_config.get('color_scheme_id', '')
-    if color_scheme_id:
-        from backend.app.services.templates.registry import get_template as _get_tmpl
-        tmpl_meta = _get_tmpl(tid)
-        if tmpl_meta:
-            schemes = tmpl_meta.get('color_schemes', [])
+    # ── Color scheme (+ optional custom primary from color picker) ───────────
+    from backend.app.services.templates.registry import get_template as _get_tmpl
+
+    tmpl_meta = _get_tmpl(tid)
+    scheme = None
+    if tmpl_meta:
+        schemes = tmpl_meta.get('color_schemes', [])
+        color_scheme_id = (design_config.get('color_scheme_id') or '').strip()
+        if color_scheme_id and schemes:
             scheme = next((s for s in schemes if s['id'] == color_scheme_id), None)
-            if not scheme and schemes:
-                scheme = schemes[0]  # fallback to template default
-            if scheme:
-                p = scheme['primary']
-                bg = scheme.get('bg', '#ffffff')
-                lines += [
-                    f".section-title {{ color: {p} !important; border-color: {p} !important; }}",
-                    f".header-band {{ background-color: {p} !important; }}",
-                    f"td.sidebar {{ background-color: {p} !important; }}",
-                ]
-                if bg != '#ffffff':
-                    lines.append(f"body {{ background-color: {bg}; }}")
+            if not scheme:
+                scheme = schemes[0]
+
+    hb = _sanitize_hex_color(design_config.get('header_background_color'))
+    ht = _sanitize_hex_color(design_config.get('header_text_color'))
+    bb = _sanitize_hex_color(design_config.get('body_background_color'))
+    bt = _sanitize_hex_color(design_config.get('body_text_color'))
+
+    custom_p = _sanitize_hex_color(design_config.get('custom_primary_color'))
+    p: str | None = None
+    scheme_bg = '#ffffff'
+    if custom_p:
+        p = custom_p
+        if scheme:
+            scheme_bg = scheme.get('bg', '#ffffff') or '#ffffff'
+    elif scheme:
+        p = scheme['primary']
+        scheme_bg = scheme.get('bg', '#ffffff') or '#ffffff'
+
+    # Accent: section titles / rules (preset or custom primary)
+    if p:
+        lines += [
+            f".section-title {{ color: {p} !important; border-color: {p} !important; }}",
+        ]
+
+    # Header-area backgrounds: colored band, sidebar column, optional top header bar
+    header_bg = hb or p
+    if header_bg:
+        lines += [
+            f".header-band {{ background-color: {header_bg} !important; }}",
+            f"td.sidebar {{ background-color: {header_bg} !important; }}",
+        ]
+    if hb:
+        lines.append(f".header {{ background-color: {hb} !important; }}")
+
+    # Page / main body background (explicit override or scheme tint)
+    if bb:
+        lines.append(f"body {{ background-color: {bb} !important; }}")
+    elif scheme and scheme_bg.lower() not in ('#ffffff', '#fff'):
+        lines.append(f"body {{ background-color: {scheme_bg} !important; }}")
+
+    # Main column default text
+    if bt:
+        lines += [
+            f"body {{ color: {bt} !important; }}",
+            f"td.main {{ color: {bt} !important; }}",
+            f".main {{ color: {bt} !important; }}",
+        ]
+
+    # Header / sidebar text (apply after body text so it wins on header nodes)
+    if ht:
+        lines += [
+            f".header-band {{ color: {ht} !important; }}",
+            f".header-band .name, .header-band .contact {{ color: {ht} !important; }}",
+            f".header-band a {{ color: {ht} !important; opacity: 0.92; }}",
+            f".header .name, .header .contact {{ color: {ht} !important; }}",
+            f".header a {{ color: {ht} !important; }}",
+            f"td.sidebar {{ color: {ht} !important; }}",
+            f"td.sidebar .name, td.sidebar .contact, td.sidebar .skills, td.sidebar .skills p {{ color: {ht} !important; }}",
+            f"td.sidebar a {{ color: {ht} !important; opacity: 0.92; }}",
+            f"td.sidebar .section-title {{ color: {ht} !important; border-color: rgba(255,255,255,0.28) !important; }}",
+        ]
 
     # ── Margin size (per-side sliders take precedence over legacy uniform toggle) ──
     def _to_in(v, default: int = 5) -> str:

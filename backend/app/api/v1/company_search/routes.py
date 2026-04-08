@@ -13,16 +13,27 @@ Company Job Search API endpoints.
 """
 import asyncio
 import json
+from datetime import date, datetime, time
 from typing import AsyncGenerator, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import desc, or_
+from sqlalchemy.orm import Session
 
-from backend.app.core.dependencies import get_current_user
+from backend.app.core.dependencies import get_current_user, get_db
 from backend.app.core.logging_config import get_logger
+from backend.app.models.job import Job
 from backend.app.models.user import User
-from backend.app.schemas.company_search import CompanyLinks, LinksRequest, LinksResponse, ParseResponse
+from backend.app.schemas.company_search import (
+    CompanyLinks,
+    JobCorpusItem,
+    JobCorpusPage,
+    LinksRequest,
+    LinksResponse,
+    ParseResponse,
+)
 from backend.app.services.company_search_service import (
     MAX_COMPANIES_PER_REQUEST,
     parse_file,
@@ -153,3 +164,74 @@ async def batch_jobs(
     ]
     results = await asyncio.gather(*tasks)
     return [json.loads(event.model_dump_json()) for event in results]
+
+
+@router.get(
+    "/company-search/jobs/corpus",
+    response_model=JobCorpusPage,
+    dependencies=[Depends(get_current_user)],
+)
+def list_jobs_corpus(
+    db: Session = Depends(get_db),
+    q: Optional[str] = Query(
+        None,
+        description="Search across job title, company name, and description",
+    ),
+    company: Optional[str] = Query(None, description="Filter by company name (partial match)"),
+    role: Optional[str] = Query(None, description="Filter by job title / role (partial match)"),
+    location: Optional[str] = Query(None, description="Filter by location (partial match)"),
+    skills: Optional[str] = Query(
+        None,
+        description="Comma-separated skills; each must appear in title or description",
+    ),
+    posted_from: Optional[date] = Query(None, description="Include jobs posted on or after this date (UTC)"),
+    posted_to: Optional[date] = Query(None, description="Include jobs posted on or before this date (UTC)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """
+    Paginated listings from the ingested global ``jobs`` table (career-page scraping, etc.).
+    All filters are combined with AND. Skills require every token to match title or description.
+    """
+    query = db.query(Job)
+
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                Job.title.ilike(term),
+                Job.company.ilike(term),
+                Job.description.ilike(term),
+            )
+        )
+    if company and company.strip():
+        query = query.filter(Job.company.ilike(f"%{company.strip()}%"))
+    if role and role.strip():
+        query = query.filter(Job.title.ilike(f"%{role.strip()}%"))
+    if location and location.strip():
+        query = query.filter(Job.location.ilike(f"%{location.strip()}%"))
+
+    if skills and skills.strip():
+        for part in skills.split(","):
+            token = part.strip()
+            if not token:
+                continue
+            st = f"%{token}%"
+            query = query.filter(or_(Job.title.ilike(st), Job.description.ilike(st)))
+
+    if posted_from is not None:
+        query = query.filter(Job.posted_at >= datetime.combine(posted_from, time.min))
+    if posted_to is not None:
+        query = query.filter(Job.posted_at <= datetime.combine(posted_to, time.max))
+
+    total = query.count()
+
+    rows = (
+        query.order_by(desc(Job.posted_at), desc(Job.id))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    items = [JobCorpusItem.model_validate(r) for r in rows]
+    return JobCorpusPage(items=items, total=total, page=page, page_size=page_size)

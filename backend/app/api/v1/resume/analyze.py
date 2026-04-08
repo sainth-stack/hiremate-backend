@@ -46,9 +46,9 @@ def _build_analyze_report(resume_text: str, file_name: str) -> dict:
     top_fixes = [
         {"label": "Quantify impact", "count": 3, "locked": False},
         {"label": "Repetition", "count": 2, "locked": False},
-        {"label": "Leadership", "count": None, "locked": True},
+        {"label": "Leadership & ownership", "count": 2, "locked": False},
         {"label": "Use of bullets", "count": 4, "locked": False},
-        {"label": "Communication", "count": None, "locked": True},
+        {"label": "Communication clarity", "count": 2, "locked": False},
     ]
     completed = [
         {"label": "Buzzwords", "count": 10},
@@ -56,9 +56,15 @@ def _build_analyze_report(resume_text: str, file_name: str) -> dict:
         {"label": "Unnecessary sentences", "count": 10},
     ]
     issues = [
-        {"icon": "cancel", "title": "Quantify impact", "desc": "Add more numbers to quantify your accomplishments", "badge": "IMPACT", "locked": False},
-        {"icon": "cancel", "title": "Repetition", "desc": "Use different action words instead of overusing the same ones", "badge": "IMPACT", "locked": False},
-        {"icon": "lock", "title": "Leadership", "desc": "Upgrade to unlock this check.", "badge": "SKILLS", "locked": True},
+        {"icon": "cancel", "title": "Quantify impact", "desc": "Add metrics and numbers to quantify your accomplishments.", "badge": "IMPACT", "locked": False},
+        {"icon": "cancel", "title": "Repetition", "desc": "Vary action verbs and phrasing so bullets do not sound repetitive.", "badge": "IMPACT", "locked": False},
+        {
+            "icon": "cancel",
+            "title": "Leadership & collaboration",
+            "desc": "Surface examples of leading initiatives, mentoring, or cross-functional work.",
+            "badge": "SKILLS",
+            "locked": False,
+        },
     ]
     did_well = [
         {"title": "Page density", "desc": "Your page layout looks right."},
@@ -117,9 +123,13 @@ async def analyze_resume(
         insights = get_resume_insights(resume_text.strip())
         if insights:
             if insights.get("issues") and isinstance(insights["issues"], list):
+                def _issue_icon(item: dict) -> str:
+                    raw = (item.get("icon") or "cancel").lower()
+                    return "cancel" if raw in ("lock", "locked") else raw
+
                 report["issues"] = [
-                    {**item, "icon": item.get("icon") or "cancel", "locked": item.get("locked", False)}
-                    for item in insights["issues"][:6]
+                    {**item, "icon": _issue_icon(item), "locked": False}
+                    for item in insights["issues"][:8]
                 ]
             if insights.get("did_well") and isinstance(insights["did_well"], list):
                 report["did_well"] = insights["did_well"][:4]
