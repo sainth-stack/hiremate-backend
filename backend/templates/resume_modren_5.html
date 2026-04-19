@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: Letter; margin: 0.45in; }
+body {
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 10pt;
+  line-height: 1.32;
+  margin: 0;
+  color: #111;
+}
+.header {
+  text-align: center;
+  margin-bottom: 16px;
+}
+.name-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.name-line { flex: 1; border-top: 1px solid #b0b0b0; max-width: 120px; }
+.name {
+  font-size: 22pt;
+  font-weight: 700;
+  color: #1e3a5f;
+  margin: 0;
+  padding: 0 8px;
+}
+.contact {
+  font-size: 9pt;
+  margin: 4px 0 0 0;
+}
+.section { margin-top: 14px; }
+.sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.sec-title {
+  font-weight: 700;
+  color: #1e3a5f;
+  font-size: 11pt;
+  white-space: nowrap;
+}
+.sec-rule {
+  flex: 1;
+  border-bottom: 1px solid #c5c5c5;
+  min-height: 1px;
+}
+.summary { text-align: justify; font-size: 9.5pt; color: #222; margin: 0; }
+.exp { margin-bottom: 10px; }
+.exp-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.date-col { font-size: 8.5pt; color: #333; white-space: nowrap; }
+.co-line { font-weight: 700; font-size: 10pt; }
+.job-line { font-weight: 700; font-size: 10pt; margin-top: 2px; }
+ul.bullets { margin: 4px 0 0 18px; padding: 0; }
+ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
+.skills-grid {
+  display: table;
+  width: 100%;
+}
+.skills-col { display: table-cell; width: 50%; vertical-align: top; padding-right: 12px; }
+.skills-col:last-child { padding-right: 0; padding-left: 12px; }
+.skills-col ul { margin: 0 0 0 16px; padding: 0; }
+.skills-col li { margin-bottom: 3px; font-size: 9.5pt; }
+.edu-row { margin-bottom: 8px; }
+.edu-top { display: flex; justify-content: space-between; }
+.edu-year { font-size: 9pt; font-weight: 700; }
+.edu-inst { font-weight: 700; font-size: 10pt; }
+.edu-deg { font-weight: 700; margin-top: 2px; }
+@media screen { body { padding: 0.45in !important; box-sizing: border-box; } }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="name-wrap">
+    <span class="name-line"></span>
+    <h1 class="name">{{ name }}</h1>
+    <span class="name-line"></span>
+  </div>
+  <div class="contact">
+    {% if city or country %}{% if city %}{{ city }}{% endif %}{% if city and country %}, {% endif %}{{ country }}{% endif %}
+    {% if phone %} &nbsp;·&nbsp; {{ phone }}{% endif %}
+    {% if email %} &nbsp;·&nbsp; {{ email }}{% endif %}
+  </div>
+</div>
+
+{% if professional_summary %}
+<div class="section">
+  <div class="sec-head"><span class="sec-title">Summary</span><span class="sec-rule"></span></div>
+  <p class="summary">{{ professional_summary }}</p>
+</div>
+{% endif %}
+
+{% if experiences %}
+<div class="section">
+  <div class="sec-head"><span class="sec-title">Experience</span><span class="sec-rule"></span></div>
+  {% for exp in experiences %}
+  <div class="exp">
+    <div class="exp-top">
+      <span class="date-col">{{ exp.dates }}</span>
+      <span class="co-line">{{ exp.company }}{% if exp.location %} — {{ exp.location }}{% endif %}</span>
+    </div>
+    <div class="job-line">{{ exp.title }}</div>
+    {% if exp.bullets %}
+    <ul class="bullets">{% for b in exp.bullets %}<li>{{ b|safe }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if skills %}
+<div class="section">
+  <div class="sec-head"><span class="sec-title">Skills</span><span class="sec-rule"></span></div>
+  {% set skill_items = [] %}
+  {% for cat in ['languages','frontend','backend','genai','tools','devops'] %}
+    {% if skills[cat] %}
+      {% for item in skills[cat].split(',') %}
+        {% if item.strip() %}{% set _ = skill_items.append(item.strip()) %}{% endif %}
+      {% endfor %}
+    {% endif %}
+  {% endfor %}
+  <div class="skills-grid">
+    <div class="skills-col">
+      <ul>
+        {% for s in skill_items[:(skill_items|length // 2 + skill_items|length % 2)] %}
+        <li>{{ s }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="skills-col">
+      <ul>
+        {% for s in skill_items[(skill_items|length // 2 + skill_items|length % 2):] %}
+        <li>{{ s }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if educations %}
+<div class="section">
+  <div class="sec-head"><span class="sec-title">Education</span><span class="sec-rule"></span></div>
+  {% for edu in educations %}
+  <div class="edu-row">
+    <div class="edu-top">
+      <span class="edu-year">{{ edu.dates }}</span>
+      <span class="edu-inst">{{ edu.institution }}{% if edu.location %} — {{ edu.location }}{% endif %}</span>
+    </div>
+    <div class="edu-deg">{{ edu.degree }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+</body>
+</html>
