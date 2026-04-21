@@ -3,7 +3,7 @@ Persisted ingestion run records for analytics and debugging (optional table).
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, Float
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
 
@@ -33,5 +33,9 @@ class ScraperRun(Base):
     total_jobs_seen = Column(Integer, nullable=False, default=0)
     total_inserted = Column(Integer, nullable=False, default=0)
     total_filtered = Column(Integer, nullable=False, default=0)
+
+    # LLM Tracking
+    total_tokens = Column(Integer, nullable=False, default=0)
+    total_cost = Column(Float, nullable=False, default=0.0)
 
     detail_json = Column(_json, nullable=True)

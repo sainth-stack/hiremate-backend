@@ -5,8 +5,7 @@ import json
 import logging
 from typing import AsyncGenerator
 
-from openai import OpenAI
-
+from backend.jobradar.services.llm_factory import LLMFactory
 from backend.app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -111,6 +110,8 @@ async def generate_section_stream(
     jd: str,
     tone: str | None = None,
     context: dict | None = None,
+    user_id: int = None,
+    email: str = None,
 ) -> AsyncGenerator[str, None]:
     """Yield SSE-formatted tokens for a resume section generation request."""
     if not settings.openai_api_key:
@@ -123,24 +124,19 @@ async def generate_section_stream(
         yield f"data: {json.dumps({'error': str(exc)})}\n\n"
         return
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    model = settings.openai_model or "gpt-4o"
-
     try:
-        stream = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            stream=True,
-            max_tokens=600,
-            temperature=0.7,
-        )
-
+        provider = LLMFactory.get_provider()
         full_content = ""
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content or ""
-            if delta:
-                full_content += delta
-                yield f"data: {json.dumps({'delta': delta})}\n\n"
+        
+        async for delta in provider.generate_stream(
+            system="",
+            user=prompt,
+            user_id=user_id,
+            email=email,
+            feature="section_generation"
+        ):
+            full_content += delta
+            yield f"data: {json.dumps({'delta': delta})}\n\n"
 
         word_count = len(full_content.split())
         yield f"data: {json.dumps({'done': True, 'full_content': full_content, 'word_count': word_count})}\n\n"
@@ -156,19 +152,20 @@ def generate_section_sync(
     jd: str,
     tone: str | None = None,
     context: dict | None = None,
+    user_id: int = None,
+    email: str = None,
 ) -> str:
     """Non-streaming fallback — returns the full generated text."""
     if not settings.openai_api_key:
         raise RuntimeError("OpenAI API key not configured")
 
     prompt = _build_prompt(section, profile, jd, tone, context)
-    client = OpenAI(api_key=settings.openai_api_key)
-    model = settings.openai_model or "gpt-4o"
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=600,
-        temperature=0.7,
+    provider = LLMFactory.get_provider()
+    
+    return provider.generate(
+        system_prompt="",
+        user_prompt=prompt,
+        user_id=user_id,
+        email=email,
+        feature="section_generation"
     )
-    return response.choices[0].message.content or ""

@@ -7,14 +7,8 @@ import re
 import time
 from datetime import datetime
 from typing import Any
-
-from openai import OpenAI
-
-from backend.app.core.config import settings
 from backend.app.services.field_normalization import FieldNormalizationService
-
-logger = logging.getLogger(__name__)
-_OPENAI_CLIENT: OpenAI | None = None
+from backend.jobradar.services.llm_factory import LLMFactory
 _MAP_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 MAP_PROMPT = """You are an expert job application autofill assistant with natural language generation capabilities.
@@ -328,11 +322,7 @@ def _combined_field_text(field: dict[str, Any]) -> str:
     ))
 
 
-def _get_openai_client() -> OpenAI:
-    global _OPENAI_CLIENT
-    if _OPENAI_CLIENT is None:
-        _OPENAI_CLIENT = OpenAI(api_key=settings.openai_api_key)
-    return _OPENAI_CLIENT
+# OpenAI client is no longer used directly here - using LLMFactory provider
 
 
 def _build_cache_key(
@@ -703,6 +693,8 @@ def map_form_fields(
     profile: dict[str, Any],
     custom_answers: dict[str, str] | None = None,
     resume_text: str | None = None,
+    user_id: int | None = None,
+    email: str | None = None,
 ) -> dict[str, Any]:
     started_at = time.monotonic()
     if not fields:
@@ -736,7 +728,7 @@ def map_form_fields(
 
     logger.info("LLM mapping: sending %d fields to LLM", len(processed_fields))
 
-    client = _get_openai_client()
+    provider = LLMFactory.get_provider()
     profile_desc = json.dumps(profile or {}, separators=(",", ":"))
     custom_answers_desc = json.dumps(custom_answers, separators=(",", ":"))
     prompt = MAP_PROMPT.format(
@@ -760,18 +752,18 @@ def map_form_fields(
         llm_fields_minimal.append(item)
     fields_desc = json.dumps(llm_fields_minimal, separators=(",", ":"))
 
-    response = client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": f"Form fields:\n{fields_desc}"},
-        ],
-        response_format={"type": "json_object"},
+    response_text = provider.generate(
+        system_prompt=prompt,
+        user_prompt=f"Form fields:\n{fields_desc}",
+        user_id=user_id,
+        email=email,
+        feature="form_field_mapping",
         temperature=0,
         max_tokens=2048,
+        response_format={"type": "json_object"}
     )
 
-    content = response.choices[0].message.content or "{}"
+    content = response_text or "{}"
     try:
         payload = json.loads(content)
         llm_mappings = payload.get("mappings", {})
@@ -813,6 +805,8 @@ def map_form_fields_llm_for_misses(
     profile: dict[str, Any],
     custom_answers: dict[str, str] | None = None,
     resume_text: str | None = None,
+    user_id: int | None = None,
+    email: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     LLM mapping for learning flow - returns results keyed by field_fp.
@@ -823,7 +817,7 @@ def map_form_fields_llm_for_misses(
 
     custom_answers = custom_answers or {}
     resume_text = (resume_text or "").strip()[:4000]
-    client = _get_openai_client()
+    provider = LLMFactory.get_provider()
 
     llm_fields = []
     for f in fields_with_fp:
@@ -848,17 +842,17 @@ def map_form_fields_llm_for_misses(
     )
 
     try:
-        response = client.chat.completions.create(
-            model=settings.openai_model,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": "Map these form fields."},
-            ],
-            response_format={"type": "json_object"},
+        response_text = provider.generate(
+            system_prompt=prompt,
+            user_prompt="Map these form fields.",
+            user_id=user_id,
+            email=email,
+            feature="form_field_learning",
             temperature=0,
             max_tokens=2048,
+            response_format={"type": "json_object"}
         )
-        content = response.choices[0].message.content or "{}"
+        content = response_text or "{}"
         payload = json.loads(content)
         raw_fields = payload.get("fields", [])
 

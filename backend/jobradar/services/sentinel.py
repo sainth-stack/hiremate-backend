@@ -140,7 +140,7 @@ def process_push_notification(email_address: str, history_id: str):
                     continue
 
                 # 7. Classify the thread with AI
-                result = classify_thread(messages)
+                result = classify_thread(messages, user_id=user_id, email=email_address)
                 if result is None:
                     print(f"SENTINEL: Thread {thread_id} is not job-related (AI confirmed).")
                     continue

@@ -38,10 +38,7 @@ from backend.app.core.config import settings
 from backend.app.core.logging_config import get_logger
 from backend.app.services.keyword_analyzer import extract_keywords_for_resume
 
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+from backend.jobradar.services.llm_factory import LLMFactory
 from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
 from backend.app.services.s3_service import upload_file_to_s3, generate_presigned_url
 
@@ -424,14 +421,14 @@ def _tailor_summary_llm(
     job_title: str,
     job_description: str,
     top_skills: list[str],
+    user_id: int = None,
+    email: str = None,
 ) -> str | None:
     """Use LLM to write a JD-tailored professional summary. Returns None on failure."""
     if not settings.openai_api_key or not job_description or len(job_description.strip()) < 80:
         return None
-    if OpenAI is None:
-        return None
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        provider = LLMFactory.get_provider()
         jd_snippet = (job_description or "").strip()[:800]
         skills_str = ", ".join(top_skills[:8]) if top_skills else "N/A"
         prompt = f"""Write a 2-3 sentence professional resume summary (max 220 chars) for a candidate.
@@ -441,13 +438,17 @@ Profile - Headline: {headline or 'N/A'}. Summary: {(summary or 'N/A')[:300]}
 Skills: {skills_str}
 Job description (excerpt): {jd_snippet[:500]}
 Output ONLY the summary text, nothing else."""
-        resp = client.chat.completions.create(
-            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+        
+        content = provider.generate(
+            system_prompt="",
+            user_prompt=prompt,
+            user_id=user_id,
+            email=email,
+            feature="resume_summary_tailoring",
             max_tokens=150,
+            temperature=0.3
         )
-        content = (resp.choices[0].message.content or "").strip()
+        content = (content or "").strip()
         if content and len(content) > 50:
             return content[:220]
     except Exception as e:
@@ -462,14 +463,14 @@ def _enhance_bullets_for_jd_llm(
     company: str,
     role: str,
     keywords: set[str],
+    user_id: int = None,
+    email: str = None,
 ) -> list[str] | None:
     """Use LLM to rewrite bullets to weave in JD keywords. Returns None on failure."""
     if not settings.openai_api_key or not bullets or not keywords or len((job_description or "").strip()) < 80:
         return None
-    if OpenAI is None:
-        return None
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        provider = LLMFactory.get_provider()
         jd_snippet = (job_description or "").strip()[:600]
         kw_str = ", ".join(sorted(keywords)[:15])
         bullets_str = "\n".join(f"- {b}" for b in bullets[:4])
@@ -484,13 +485,17 @@ Job description excerpt:
 {jd_snippet[:400]}
 
 Output ONLY the 4 rewritten bullets, one per line."""
-        resp = client.chat.completions.create(
-            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+
+        content = provider.generate(
+            system_prompt="",
+            user_prompt=prompt,
+            user_id=user_id,
+            email=email,
+            feature="resume_bullet_enhancement",
             max_tokens=500,
+            temperature=0.3
         )
-        content = (resp.choices[0].message.content or "").strip()
+        content = (content or "").strip()
         if not content:
             return None
         out = []
@@ -512,14 +517,14 @@ def _enhance_project_for_jd_llm(
     tech_stack: str,
     job_description: str,
     keywords: set[str],
+    user_id: int = None,
+    email: str = None,
 ) -> str | None:
     """Use LLM to rewrite project description to weave in JD keywords. Returns None on failure."""
     if not settings.openai_api_key or not description or not keywords or len((job_description or "").strip()) < 80:
         return None
-    if OpenAI is None:
-        return None
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        provider = LLMFactory.get_provider()
         jd_snippet = (job_description or "").strip()[:500]
         kw_str = ", ".join(sorted(keywords)[:12])
         prompt = f"""Rewrite this project description to better match the job description.
@@ -531,13 +536,17 @@ Original: {description[:300]}
 Job excerpt: {jd_snippet[:300]}
 
 Output ONLY the rewritten description."""
-        resp = client.chat.completions.create(
-            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+        
+        content = provider.generate(
+            system_prompt="",
+            user_prompt=prompt,
+            user_id=user_id,
+            email=email,
+            feature="resume_project_enhancement",
             max_tokens=150,
+            temperature=0.3
         )
-        content = (resp.choices[0].message.content or "").strip()
+        content = (content or "").strip()
         if content and len(content) > 30:
             return content[:220]
     except Exception as e:
@@ -553,6 +562,8 @@ def _build_professional_summary(
     skills_dict: dict,
     escape_fn,
     skip_llm: bool = False,
+    user_id: int = None,
+    email: str = None,
 ) -> str:
     """
     Build professional summary from user profile.
@@ -582,7 +593,10 @@ def _build_professional_summary(
     top_skills = all_skills[:8] if all_skills else []
 
     if job_title or (job_description and len((job_description or "").strip()) >= 80):
-        tailored = _tailor_summary_llm(headline, summary, job_title or "", job_description or "", top_skills)
+        tailored = _tailor_summary_llm(
+            headline, summary, job_title or "", job_description or "", top_skills,
+            user_id=user_id, email=email
+        )
         if tailored:
             return escape_fn(tailored[:220])
     return ""
@@ -596,6 +610,8 @@ def build_resume_context_from_payload(
     raw_awards: list | None = None,
     skip_llm: bool = False,
     date_format_style: str = 'Long Name (January YYYY)',
+    user_id: int = None,
+    email: str = None,
 ) -> dict:
     """Build Jinja2 context directly from a ProfilePayload (no DB access needed).
     skip_llm=True: skip all LLM enhancement calls — use for live preview (~50ms response).
@@ -637,6 +653,7 @@ def build_resume_context_from_payload(
                     enhanced = _enhance_bullets_for_jd_llm(
                         bullets, job_title or "", job_description or "",
                         exp.companyName or "Company", exp.jobTitle or "Role", keywords,
+                        user_id=user_id, email=email
                     )
                     if enhanced:
                         bullets = enhanced
@@ -677,6 +694,7 @@ def build_resume_context_from_payload(
             enhanced = _enhance_project_for_jd_llm(
                 proj.name or "Project", desc, proj.techStack or "",
                 job_description or "", keywords,
+                user_id=user_id, email=email
             )
             if enhanced:
                 desc = enhanced
@@ -697,6 +715,8 @@ def build_resume_context_from_payload(
         skills_dict=skills,
         escape_fn=escape_fn,
         skip_llm=skip_llm,
+        user_id=user_id,
+        email=email,
     )
 
     # Awards
@@ -738,7 +758,10 @@ def build_resume_context(
         raw_aw = [raw_aw]
     elif not isinstance(raw_aw, list):
         raw_aw = []
-    return build_resume_context_from_payload(payload, job_title, job_description, for_html, raw_aw)
+    return build_resume_context_from_payload(
+        payload, job_title, job_description, for_html, raw_aw,
+        user_id=profile.user_id, email=profile.user.email if hasattr(profile, "user") and profile.user else None
+    )
 
 
 def build_resume_text_from_context(context: dict) -> str:

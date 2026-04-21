@@ -1,7 +1,9 @@
 import json
+from typing import AsyncGenerator
 from google import genai
 from google.genai import types
 from backend.app.core.config import settings
+from backend.app.services.usage_service import record_token_usage
 from backend.jobradar.services.llm_base import LLMProvider
 
 
@@ -20,20 +22,88 @@ class GeminiProvider(LLMProvider):
 
     # ── Required by base ─────────────────────────────────────────────────────
 
-    def _complete(self, system: str, user: str) -> str:
+    def _complete(
+        self,
+        system: str,
+        user: str,
+        user_id: int = None,
+        email: str = None,
+        feature: str = None,
+        json_mode: bool = False
+    ) -> str:
+        config = types.GenerateContentConfig(
+            system_instruction=system or None,
+        )
+        if json_mode:
+            config.response_mime_type = "application/json"
+
         response = self._client.models.generate_content(
             model=settings.gemini_model,
             contents=user,
-            config=types.GenerateContentConfig(
-                system_instruction=system or None,
-                response_mime_type="application/json",
-            ),
+            config=config,
         )
+        
+        # Log usage
+        if response.usage_metadata:
+            record_token_usage(
+                model=settings.gemini_model,
+                provider="google",
+                prompt_tokens=response.usage_metadata.prompt_token_count,
+                completion_tokens=response.usage_metadata.candidates_token_count,
+                user_id=user_id,
+                email=email,
+                feature=feature
+            )
+            
         return response.text
+
+    async def generate_stream(
+        self,
+        system: str,
+        user: str,
+        user_id: int = None,
+        email: str = None,
+        feature: str = None
+    ) -> AsyncGenerator[str, None]:
+        config = types.GenerateContentConfig(
+            system_instruction=system or None,
+        )
+        
+        response = self._client.models.generate_content_stream(
+            model=settings.gemini_model,
+            contents=user,
+            config=config,
+        )
+        
+        full_content = ""
+        prompt_tokens = 0
+        completion_tokens = 0
+        
+        async for chunk in response:
+            if chunk.text:
+                full_content += chunk.text
+                yield chunk.text
+            
+            # Gemini typically provides usage at the end or in each chunk
+            if chunk.usage_metadata:
+                prompt_tokens = chunk.usage_metadata.prompt_token_count
+                completion_tokens = chunk.usage_metadata.candidates_token_count
+
+        # Log usage after stream completes
+        if prompt_tokens > 0 or completion_tokens > 0:
+            record_token_usage(
+                model=settings.gemini_model,
+                provider="google",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                user_id=user_id,
+                email=email,
+                feature=feature
+            )
 
     # ── Agentic chat with Gemini tool-calling ────────────────────────────────
 
-    def chat(self, messages: list[dict], system_instruction: str, user_id: str = None) -> str:
+    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None) -> str:
         from backend.jobradar.services.chat_tool import fetch_raw_email, search_gmail_inbox
 
         contents = []
@@ -134,6 +204,18 @@ class GeminiProvider(LLMProvider):
                     system_instruction=system_instruction,
                     tools=tools,
                 ),
+            )
+
+        # Log usage for the final response
+        if response.usage_metadata:
+            record_token_usage(
+                model=settings.gemini_model,
+                provider="google",
+                prompt_tokens=response.usage_metadata.prompt_token_count,
+                completion_tokens=response.usage_metadata.candidates_token_count,
+                user_id=user_id,
+                email=email,
+                feature=feature or "agent_chat"
             )
 
         return response.text

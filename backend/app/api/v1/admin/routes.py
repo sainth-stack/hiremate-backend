@@ -20,6 +20,7 @@ from backend.app.models.form_field_learning import (
     UserFieldAnswer,
     UserSubmissionHistory,
 )
+from backend.app.models.token_usage import TokenUsage
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -616,4 +617,129 @@ def get_admin_extension_errors(
 ) -> dict:
     """Extension error reporting - placeholder (extension errors not stored in DB yet)."""
     return {"errors": [], "message": "Extension errors are not persisted in DB yet. Placeholder for future."}
+
+@router.get("/token-usage")
+def get_admin_token_usage(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+    email: str | None = Query(None),
+    model: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user),
+) -> dict:
+    """
+    Detailed AI token usage logs and aggregation for the Admin Dashboard.
+    Supports filtering by from_date, to_date, email (search), and model.
+    """
+    # 1. Date Parsing
+    cutoff_start = _parse_date(from_date) if from_date else None
+    cutoff_end = _parse_date(to_date) if to_date else None
+    if cutoff_end:
+        # Include the entire end day
+        cutoff_end = datetime(cutoff_end.year, cutoff_end.month, cutoff_end.day, 23, 59, 59)
+
+    # 2. Base Filter Application
+    def apply_advanced_filters(query, model_attr=TokenUsage.created_at):
+        if cutoff_start:
+            query = query.filter(TokenUsage.created_at >= cutoff_start)
+        if cutoff_end:
+            query = query.filter(TokenUsage.created_at <= cutoff_end)
+        if email:
+            query = query.filter(TokenUsage.email.ilike(f"%{email}%"))
+        if model and model != "All Models":
+            query = query.filter(TokenUsage.model == model)
+        return query
+
+    # 3. Aggregates
+    summary_q = db.query(func.sum(TokenUsage.cost), func.sum(TokenUsage.total_tokens))
+    summary_q = apply_advanced_filters(summary_q)
+    
+    summary_res = summary_q.one()
+    total_cost = summary_res[0] or 0.0
+    total_tokens = summary_res[1] or 0
+    
+    # 4. Daily cost aggregation
+    daily_cutoff_start = cutoff_start or (datetime.utcnow() - timedelta(days=30))
+    daily_stats_q = db.query(
+        func.date(TokenUsage.created_at).label("d"),
+        func.sum(TokenUsage.cost).label("c"),
+        func.sum(TokenUsage.total_tokens).label("t")
+    ).filter(TokenUsage.created_at >= daily_cutoff_start)
+    
+    if cutoff_end:
+        daily_stats_q = daily_stats_q.filter(TokenUsage.created_at <= cutoff_end)
+    if email:
+        daily_stats_q = daily_stats_q.filter(TokenUsage.email.ilike(f"%{email}%"))
+    if model and model != "All Models":
+        daily_stats_q = daily_stats_q.filter(TokenUsage.model == model)
+        
+    daily_stats = (
+        daily_stats_q
+        .group_by(func.date(TokenUsage.created_at))
+        .order_by(func.date(TokenUsage.created_at))
+        .all()
+    )
+    chart_data = [{"date": str(row[0]), "cost": row[1], "tokens": row[2]} for row in daily_stats]
+
+    # 5. Model breakdown
+    model_stats_q = db.query(
+        TokenUsage.model,
+        func.sum(TokenUsage.cost).label("c"),
+        func.sum(TokenUsage.total_tokens).label("t"),
+        func.count(TokenUsage.id).label("n")
+    )
+    model_stats_q = apply_advanced_filters(model_stats_q)
+    model_stats = model_stats_q.group_by(TokenUsage.model).all()
+    models = [{"model": r[0], "cost": r[1], "tokens": r[2], "calls": r[3]} for r in model_stats]
+
+    # 6. Provider breakdown
+    provider_stats_q = db.query(
+        TokenUsage.provider,
+        func.sum(TokenUsage.cost).label("c"),
+        func.sum(TokenUsage.total_tokens).label("t"),
+        func.count(TokenUsage.id).label("n")
+    )
+    provider_stats_q = apply_advanced_filters(provider_stats_q)
+    provider_stats = provider_stats_q.group_by(TokenUsage.provider).all()
+    providers = [{"provider": r[0], "cost": float(r[1]), "tokens": r[2], "calls": r[3]} for r in provider_stats]
+
+    # 7. Paginated logs
+    q = apply_advanced_filters(db.query(TokenUsage))
+    total = q.count()
+    offset = (page - 1) * limit
+    logs = q.order_by(TokenUsage.created_at.desc()).offset(offset).limit(limit).all()
+
+
+    log_data = []
+    for l in logs:
+        log_data.append({
+            "id": l.id,
+            "user_id": l.user_id,
+            "email": l.email,
+            "model": l.model,
+            "provider": l.provider,
+            "prompt_tokens": l.prompt_tokens,
+            "completion_tokens": l.completion_tokens,
+            "total_tokens": l.total_tokens,
+            "cost": float(l.cost),
+            "feature": l.feature,
+            "timestamp": l.created_at.isoformat()
+        })
+
+    return {
+        "summary": {
+            "total_cost": float(total_cost),
+            "total_tokens": int(total_tokens),
+            "records": total
+        },
+        "chart_data": chart_data,
+        "models": models,
+        "providers": providers,
+        "logs": log_data,
+        "total": total,
+        "page": page,
+        "limit": limit
+    }
 

@@ -30,7 +30,7 @@ def get_company_briefing(
 
     # 2. Get Briefing
     service = BriefingService(db)
-    briefing = service.get_or_generate_briefing(app.company, app.role)
+    briefing = service.get_or_generate_briefing(app.company, app.role, current_user.id, current_user.email)
     
     if not briefing:
         raise HTTPException(status_code=500, detail="Failed to generate briefing")

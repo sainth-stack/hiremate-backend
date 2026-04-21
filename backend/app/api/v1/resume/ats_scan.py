@@ -141,7 +141,12 @@ async def ats_scan(
     report = _build_ats_report(resume_text.strip(), (job_description or "").strip(), file_name)
     # Optional LLM enrichment for recruiter tips
     try:
-        llm_tips = get_ats_improvements(resume_text.strip(), (job_description or "").strip())
+        llm_tips = get_ats_improvements(
+            resume_text.strip(),
+            (job_description or "").strip(),
+            user_id=current_user.id,
+            email=current_user.email
+        )
         if llm_tips and isinstance(llm_tips, list):
             report["recruiter_tips_rows"] = report.get("recruiter_tips_rows", []) + llm_tips
             logger.info("ATS scan enriched with LLM tips user_id=%s", current_user.id)

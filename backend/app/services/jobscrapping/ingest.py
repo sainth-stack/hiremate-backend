@@ -19,6 +19,8 @@ class IngestBatchResult:
     updated: int = 0
     skipped: int = 0
     errors: int = 0
+    total_tokens: int = 0
+    total_cost: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -26,6 +28,8 @@ class IngestBatchResult:
             "updated": self.updated,
             "skipped": self.skipped,
             "errors": self.errors,
+            "total_tokens": self.total_tokens,
+            "total_cost": self.total_cost,
         }
 
 
@@ -124,6 +128,8 @@ class PipelineMetrics:
     filtered_out: int = 0
     errors: int = 0
     total_jobs_seen: int = 0
+    total_tokens: int = 0
+    total_cost: float = 0.0
     dry_run: bool = False
     detail: dict[str, Any] = field(default_factory=dict)
 
@@ -138,6 +144,8 @@ class PipelineMetrics:
             "total_jobs_seen": self.total_jobs_seen,
             "total_inserted": self.inserted,
             "total_filtered": self.filtered_out,
+            "total_tokens": self.total_tokens,
+            "total_cost": self.total_cost,
             "dry_run": self.dry_run,
             **self.detail,
         }

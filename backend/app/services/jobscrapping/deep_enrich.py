@@ -14,8 +14,15 @@ from typing import Any
 from backend.app.core.config import settings
 from backend.app.services.company_search.career import CareerPageScraper
 from backend.app.services.jobscrapping.normalize import RawJob
+from backend.jobradar.services.llm_factory import LLMFactory
+from backend.jobradar.services.classifier import classify_jd
+from backend.app.services.keyword_analyzer import extract_keywords_deep
 
 logger = logging.getLogger(__name__)
+
+# System user attribution for automated tasks
+SYSTEM_USER_ID = 1
+SYSTEM_EMAIL = "system-ingest@hiremate.ai"
 
 MIN_DESC_CHARS = 200
 
@@ -57,11 +64,17 @@ def enrich_raw_job_descriptions(
             "deep_enrich_skipped": True,
             "reason": "disabled_or_dry_run",
             "deep_enrich_fetched": 0,
+            "total_tokens": 0,
+            "total_cost": 0.0,
         }
 
     timeout_sec = _clamp_detail_timeout_sec(cfg)
     max_n = _clamp_max_jobs(cfg)
     scraper = CareerPageScraper(timeout_seconds=timeout_sec)
+    
+    # Initialize LLM session tracking
+    provider = LLMFactory.get_provider()
+    provider.reset_usage()
 
     need = [j for j in jobs if not j.description or len(j.description.strip()) < MIN_DESC_CHARS]
     slice_jobs = need[:max_n]
@@ -74,6 +87,31 @@ def enrich_raw_job_descriptions(
             if text and len(text.strip()) >= 50:
                 rj.description = text[:50000]
                 fetched += 1
+                
+                # Optional: intelligent enrichment (skills + classification)
+                # This ensures we have rich data for these priority jobs immediately
+                try:
+                    # Skill extraction
+                    keywords = extract_keywords_deep(
+                        text, 
+                        user_id=SYSTEM_USER_ID, 
+                        email=SYSTEM_EMAIL
+                    )
+                    # JD Classification
+                    classification = classify_jd(
+                        text, 
+                        user_id=SYSTEM_USER_ID, 
+                        email=SYSTEM_EMAIL
+                    )
+                    
+                    # Store enrichment results in detail_json if needed, or update RawJob
+                    # For now, we mainly want to trigger the calls to track tokens.
+                    if classification:
+                        rj.company = classification.company or rj.company
+                        rj.title = classification.role or rj.title
+                except Exception as ai_e:
+                    logger.warning("Deep enrichment AI step failed: %s", ai_e)
+
                 log_json(
                     "deep_enrich_url_done",
                     url=rj.url[:500],
@@ -84,9 +122,13 @@ def enrich_raw_job_descriptions(
         except Exception as e:
             log_json("deep_enrich_url_error", url=rj.url[:500], error=str(e)[:500])
 
+    total_tokens, total_cost = provider.get_usage()
+
     return jobs, {
         "deep_enrich_skipped": False,
         "deep_enrich_fetched": fetched,
         "deep_enrich_max_jobs": max_n,
         "deep_enrich_detail_timeout_sec": timeout_sec,
+        "total_tokens": total_tokens,
+        "total_cost": total_cost,
     }

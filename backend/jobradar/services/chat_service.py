@@ -8,7 +8,7 @@ from backend.jobradar.models.chat import ChatMessage, ChatRequest
 
 class ChatService:
     @staticmethod
-    def get_reply(db: Session, user_id: int, req: ChatRequest) -> str:
+    def get_reply(db: Session, user_id: int, email: str, req: ChatRequest) -> str:
         # 1. Save user's incoming message
         db.add(ChatMessage(
             user_id=user_id,
@@ -68,7 +68,13 @@ class ChatService:
         messages = [{"role": msg.role, "content": msg.content} for msg in history_msgs]
         
         # 4. Query the LLM
-        reply = llm.chat(messages, system_instruction, user_id=user_id)
+        reply = llm.chat(
+            messages, 
+            system_instruction, 
+            user_id=user_id, 
+            email=email,
+            feature="chat_interaction"
+        )
         
         # 5. Save and return reply
         db.add(ChatMessage(

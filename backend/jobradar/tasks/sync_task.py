@@ -116,7 +116,7 @@ def sync_user_emails(user_id: int, from_date: str = None, to_date: str = None):
                 ai_count += 1
                 _update_progress(db, user_id, parsed_count, ai_count, ai_success_count)
 
-                result = classify_thread(messages)
+                result = classify_thread(messages, user_id=user_id, email=user.email)
                 if result is None:
                     continue
 

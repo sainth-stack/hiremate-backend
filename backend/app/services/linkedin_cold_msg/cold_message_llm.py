@@ -27,20 +27,7 @@ CRITICAL rules — violation is not acceptable:
 """.strip()
 
 
-def _get_llm():
-    """Return ChatOpenAI if API key set, else None."""
-    if not (getattr(settings, "openai_api_key", None) or "").strip():
-        return None
-    try:
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
-            api_key=settings.openai_api_key,
-            temperature=0.7,
-        )
-    except Exception as e:
-        logger.warning("LLM init failed: %s", e)
-        return None
+from backend.jobradar.services.llm_factory import LLMFactory
 
 
 async def generate_comment(
@@ -49,13 +36,11 @@ async def generate_comment(
     user_intent: str | None = None,
     sender_profile_summary: str | None = None,
     tone: str = "professional",
+    user_id: int = None,
+    email: str = None,
 ) -> str:
     """Generate a LinkedIn post comment via LLM."""
-    from langchain_core.messages import SystemMessage, HumanMessage
-
-    llm = _get_llm()
-    if not llm:
-        raise RuntimeError("LLM service unavailable (no API key)")
+    provider = LLMFactory.get_provider()
 
     system = """Write a LinkedIn comment that sounds like a real person typed it quickly.
 
@@ -80,9 +65,16 @@ Rules:
         parts.append(f"My profile (use my real details):\n{sender_profile_summary}")
     parts.append(f"Tone: {tone}")
 
-    response = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content="\n\n".join(parts))])
-    logger.info("Generated comment (%d chars)", len(response.content))
-    return response.content.strip()
+    response = provider.generate(
+        system_prompt=system,
+        user_prompt="\n\n".join(parts),
+        user_id=user_id,
+        email=email,
+        feature="linkedin_comment_gen",
+        temperature=0.7
+    )
+    logger.info("Generated comment (%d chars)", len(response or ""))
+    return (response or "").strip()
 
 
 async def generate_job_answer(
@@ -92,13 +84,11 @@ async def generate_job_answer(
     user_intent: str | None = None,
     sender_profile_summary: str | None = None,
     tone: str = "professional",
+    user_id: int = None,
+    email: str = None,
 ) -> str:
     """Generate a job application field answer via LLM."""
-    from langchain_core.messages import SystemMessage, HumanMessage
-
-    llm = _get_llm()
-    if not llm:
-        raise RuntimeError("LLM service unavailable (no API key)")
+    provider = LLMFactory.get_provider()
 
     system = """You are helping a job seeker fill in a LinkedIn job application field.
 
@@ -124,9 +114,16 @@ Rules:
         parts.append(f"Applicant profile (use real details):\n{sender_profile_summary}")
     parts.append(f"Tone: {tone}")
 
-    response = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content="\n\n".join(parts))])
-    logger.info("Generated job answer (%d chars)", len(response.content))
-    return response.content.strip()
+    response = provider.generate(
+        system_prompt=system,
+        user_prompt="\n\n".join(parts),
+        user_id=user_id,
+        email=email,
+        feature="linkedin_job_answer_gen",
+        temperature=0.7
+    )
+    logger.info("Generated job answer (%d chars)", len(response or ""))
+    return (response or "").strip()
 
 
 async def generate_cold_message(
@@ -136,13 +133,11 @@ async def generate_cold_message(
     sender_summary: str | None = None,
     thread_context: str | None = None,
     tone: str = "professional",
+    user_id: int = None,
+    email: str = None,
 ) -> str:
     """Generate cold message via LLM. Raises RuntimeError if LLM unavailable."""
-    from langchain_core.messages import SystemMessage, HumanMessage
-
-    llm = _get_llm()
-    if not llm:
-        raise RuntimeError("LLM service unavailable (no API key)")
+    provider = LLMFactory.get_provider()
 
     parts = [f"Intent: {user_intent}"]
     if recipient_name:
@@ -156,10 +151,15 @@ async def generate_cold_message(
     parts.append(f"Tone: {tone}")
 
     user_prompt = "\n".join(parts)
-    messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
-
     logger.info("Generating cold message for recipient=%s company=%s", recipient_name, company)
-    response = await llm.ainvoke(messages)
-    text = response.content.strip()
+    response = provider.generate(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        user_id=user_id,
+        email=email,
+        feature="linkedin_cold_message_gen",
+        temperature=0.7
+    )
+    text = (response or "").strip()
     logger.info("Generated %d chars", len(text))
     return text

@@ -48,19 +48,7 @@ def _get_career_scraper():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_llm():
-    """Return ChatOpenAI if API key set, else None (used by parse_file only)."""
-    if not (getattr(settings, "openai_api_key", None) or "").strip():
-        return None
-    try:
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
-            api_key=settings.openai_api_key,
-            temperature=0,
-        )
-    except Exception:
-        return None
+from backend.jobradar.services.llm_factory import LLMFactory
 
 
 def _extract_text_pdf(contents: bytes) -> str:
@@ -198,15 +186,13 @@ async def _resolve_career_url_scraper(company_name: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 async def parse_file(
-    contents: bytes, filename: str, user_id: Optional[int] = None
+    contents: bytes, filename: str, user_id: Optional[int] = None, email: Optional[str] = None
 ) -> List[CompanyItem]:
     """Extract company names from a PDF or DOCX file using LLM."""
     if not (getattr(settings, "openai_api_key", None) or "").strip():
         raise HTTPException(status_code=503, detail="OpenAI API key not configured.")
 
-    llm = _get_llm()
-    if llm is None:
-        raise HTTPException(status_code=503, detail="OpenAI API key not configured.")
+    provider = LLMFactory.get_provider()
 
     fn_lower = filename.lower()
     if fn_lower.endswith(".pdf"):
@@ -235,7 +221,16 @@ async def parse_file(
     from langchain_core.messages import HumanMessage
 
     try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        response_text = provider.generate(
+            system_prompt="",
+            user_prompt=prompt,
+            user_id=user_id,
+            email=email,
+            feature="company_list_extraction",
+            max_tokens=2048,
+            temperature=0,
+            response_format={"type": "json_object"}
+        )
     except Exception as exc:
         logger.warning("parse_file LLM request failed: %s", exc)
         raise HTTPException(
@@ -243,7 +238,7 @@ async def parse_file(
             detail=f"OpenAI request failed while extracting companies: {exc!s}",
         ) from exc
 
-    raw_text = _message_content_to_text(getattr(response, "content", None))
+    raw_text = response_text
     if not raw_text:
         raise HTTPException(status_code=502, detail="Empty response from language model.")
 

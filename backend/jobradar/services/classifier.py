@@ -86,24 +86,24 @@ class BriefingData(BaseModel):
     topics_to_prep: list[PrepTopic]
 
 
-def classify_thread(messages: list[dict]) -> Optional[ClassifierOutput]:
+def classify_thread(messages: list[dict], user_id: int = None, email: str = None) -> Optional[ClassifierOutput]:
     """
     Classify email thread using the configured LLM provider.
     Returns None if the thread is not job-related.
     """
     from backend.jobradar.services.llm_factory import LLMFactory
     provider = LLMFactory.get_provider()
-    return provider.classify_thread(messages)
+    return provider.classify_thread(messages, user_id=user_id, email=email)
 
 
-def classify_jd(jd_text: str) -> Optional[JDClassificationOutput]:
+def classify_jd(jd_text: str, user_id: int = None, email: str = None) -> Optional[JDClassificationOutput]:
     """
     Classify a job description using the configured LLM provider.
     Returns JDClassificationOutput with extracted company and role.
     """
     from backend.jobradar.services.llm_factory import LLMFactory
     provider = LLMFactory.get_provider()
-    return provider.classify_jd(jd_text)
+    return provider.classify_jd(jd_text, user_id=user_id, email=email)
 
 
 class InterviewEvaluationOutput(BaseModel):

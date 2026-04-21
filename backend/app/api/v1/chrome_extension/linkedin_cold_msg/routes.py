@@ -42,6 +42,8 @@ async def generate(
             sender_summary=body.sender_profile_summary,
             thread_context=body.thread_context,
             tone=body.tone or "professional",
+            user_id=current_user.id,
+            email=current_user.email,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -74,6 +76,8 @@ async def generate_comment_endpoint(
             user_intent=body.user_intent,
             sender_profile_summary=body.sender_profile_summary,
             tone=body.tone,
+            user_id=current_user.id,
+            email=current_user.email,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -107,6 +111,8 @@ async def generate_job_answer_endpoint(
             user_intent=body.user_intent,
             sender_profile_summary=body.sender_profile_summary,
             tone=body.tone,
+            user_id=current_user.id,
+            email=current_user.email,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))

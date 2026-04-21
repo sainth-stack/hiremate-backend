@@ -556,6 +556,7 @@ def _run_llm_and_persist(
     custom_answers: dict[str, str],
     resume_text: str,
     ats_platform: str,
+    email: str | None = None,
 ) -> None:
     """Background task: run LLM and persist to DB. Uses fresh db session."""
     db = SessionLocal()
@@ -565,6 +566,8 @@ def _run_llm_and_persist(
             profile=profile,
             custom_answers=custom_answers,
             resume_text=resume_text,
+            user_id=user_id,
+            email=profile.get("email") or ""
         )
         _persist_llm_results(db, user_id, llm_fields, llm_results, profile, ats_platform)
     except Exception as exc:
@@ -631,6 +634,8 @@ def map_fields(
                 profile=profile,
                 custom_answers=custom_answers,
                 resume_text=resume_text,
+                user_id=current_user.id,
+                email=current_user.email
             )
             for f in llm_fields:
                 fp = f["_fp"]
@@ -655,6 +660,7 @@ def map_fields(
                 custom_answers=custom_answers,
                 resume_text=resume_text,
                 ats_platform=ats_platform,
+                email=current_user.email
             )
             for f in llm_fields:
                 user_map[f["_fp"]] = None  # Explicit null — extension treats as unfilled
@@ -1223,6 +1229,8 @@ async def analyze_job_keywords(
     result = analyze_keywords(
         job_description=job_description,
         resume_text=resume_text or "",
+        user_id=current_user.id,
+        email=current_user.email
     )
     out = KeywordsAnalyzeOut(**result)
     out.quick_suggestions = [
@@ -1357,8 +1365,14 @@ def cover_letter_upsert(
         job_description = parse_job_description_from_html(payload.page_html) or ""
     job_description = (job_description or "").strip()
 
-    pl = profile_model_to_payload(profile)
-    content = gen_cover(pl, job_title=job_title, job_description=job_description)
+    cl_profile_payload = profile_model_to_payload(profile)
+    content = gen_cover(
+        cl_profile_payload,
+        job_title=job_title,
+        job_description=job_description,
+        user_id=current_user.id,
+        email=current_user.email
+    )
 
     prefs["cover_letter"] = {
         "content": content or "",

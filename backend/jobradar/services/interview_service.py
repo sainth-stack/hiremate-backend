@@ -19,6 +19,8 @@ class InterviewService:
         self, 
         company: str, 
         role: str, 
+        user_id: int,
+        email: str,
         count: int = 5,
         exclude_list: List[str] = None,
         category: str = None
@@ -52,7 +54,7 @@ class InterviewService:
         if not exclude_list and existing:
             exclude_list = [q.question_text for q in existing]
             
-        new_questions_data = self._generate_ai_questions(company, role, needed, exclude_list, category)
+        new_questions_data = self._generate_ai_questions(company, role, needed, user_id, email, exclude_list, category)
         
         new_objects = []
         for q_data_raw in new_questions_data:
@@ -91,7 +93,7 @@ class InterviewService:
 
         return existing + new_objects
 
-    def _generate_ai_questions(self, company: str, role: str, count: int, exclude_list: List[str] = None, category: str = None) -> List[Dict]:
+    def _generate_ai_questions(self, company: str, role: str, count: int, user_id: int, email: str, exclude_list: List[str] = None, category: str = None) -> List[Dict]:
         """
         Calls the LLM to generate structured question data using system/user separation.
         """
@@ -123,7 +125,13 @@ class InterviewService:
         
         try:
             # We call generate(system, user)
-            response_text = self.llm.generate(system_prompt, user_prompt)
+            response_text = self.llm.generate(
+                system_prompt, 
+                user_prompt, 
+                user_id=user_id, 
+                email=email,
+                feature="interview_questions"
+            )
             
             # Use consistent parsing logic as seen in other modules
             if "```json" in response_text:
@@ -146,7 +154,7 @@ class InterviewService:
             logger.error(f"AI Generation failed: {str(e)}")
             return []
 
-    def evaluate_answer(self, question: str, answer: str, company: str, role: str) -> Optional[InterviewEvaluationOutput]:
+    def evaluate_answer(self, question: str, answer: str, company: str, role: str, user_id: int, email: str) -> Optional[InterviewEvaluationOutput]:
         """
         Evaluates a single interview answer using the LLM against STAR principles.
         """
@@ -169,7 +177,13 @@ class InterviewService:
         """
 
         try:
-            response_text = self.llm.generate(system_prompt, "")
+            response_text = self.llm.generate(
+                system_prompt, 
+                "", 
+                user_id=user_id, 
+                email=email,
+                feature="interview_evaluation"
+            )
             
             # Robust parsing (handles markdown wrapper)
             if "```json" in response_text:

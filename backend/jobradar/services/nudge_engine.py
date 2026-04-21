@@ -1,13 +1,13 @@
 import logging
 from sqlalchemy.orm import Session
-from backend.jobradar.services.providers.gemini import GeminiProvider
+from backend.jobradar.services.llm_factory import LLMFactory
 from backend.jobradar.models.nudge import Nudge
 
 logger = logging.getLogger("uvicorn.error")
 
-def generate_nudge(db: Session, user_id: int, app_id: int, company: str, role: str, new_status: str, is_new: bool = False):
+def generate_nudge(db: Session, user_id: int, email: str, app_id: int, company: str, role: str, new_status: str, is_new: bool = False):
     """
-    Generates a contextual nudge via Gemini based on the application's current state.
+    Generates a contextual nudge via the configured LLM provider.
     Inserts the generated 1-sentence message directly into the nudges table.
     """
     try:
@@ -19,8 +19,14 @@ def generate_nudge(db: Session, user_id: int, app_id: int, company: str, role: s
         messages = [{"role": "user", "content": prompt}]
         sys_prompt = "You are an AI career coach inside a dashboard. Be concise, friendly, and highly actionable. No greetings, just give the one sentence advice."
         
-        provider = GeminiProvider()
-        response_text = provider.chat(messages, sys_prompt)
+        provider = LLMFactory.get_provider()
+        response_text = provider.chat(
+            messages, 
+            sys_prompt, 
+            user_id=user_id, 
+            email=email,
+            feature="nudge_generation"
+        )
 
         if response_text:
             db.add(Nudge(
