@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: Letter; margin: 0.34in; }
+body {
+  font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+  font-size: 9.6pt;
+  line-height: 1.35;
+  margin: 0;
+  color: #222;
+}
+
+.page {
+  background: #f3f3f3;
+  min-height: 10.2in;
+  border: 1px solid #d5d5d5;
+  padding: 22px 24px 18px 24px;
+  box-sizing: border-box;
+}
+
+.top-band {
+  height: 18px;
+  background: #0d6f84;
+  margin: -22px -24px 14px -24px;
+}
+
+.header {
+  display: table;
+  width: 100%;
+  margin-bottom: 14px;
+}
+.header-left,
+.header-right {
+  display: table-cell;
+  vertical-align: top;
+}
+.header-left {
+  width: 64%;
+  padding-right: 16px;
+}
+.header-right {
+  width: 36%;
+  text-align: right;
+}
+.name {
+  font-size: 24pt;
+  font-weight: 800;
+  text-transform: uppercase;
+  margin: 0;
+  letter-spacing: 0.2px;
+}
+.name-rule {
+  border-bottom: 1px solid #8f8f8f;
+  margin-top: 6px;
+}
+.profile-photo {
+  width: 180px;
+  height: 160px;
+  border: 1px solid #cbcbcb;
+  object-fit: cover;
+}
+
+.content {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+.main-col,
+.side-col {
+  display: table-cell;
+  vertical-align: top;
+}
+.main-col {
+  width: 62%;
+  padding-right: 18px;
+}
+.side-col {
+  width: 38%;
+}
+
+.section {
+  margin-bottom: 12px;
+}
+.section-title {
+  font-size: 18px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+  margin: 0 0 4px 0;
+}
+.title-accent {
+  height: 11px;
+  background: #d4e2e8;
+  margin-bottom: 7px;
+}
+.section-rule {
+  border-bottom: 1px solid #767676;
+  margin-top: 8px;
+}
+
+.summary {
+  font-size: 9pt;
+  color: #4c4c4c;
+  text-align: justify;
+}
+
+.experience-item,
+.education-item {
+  margin-bottom: 8px;
+}
+.role-line {
+  font-size: 10pt;
+  font-weight: 700;
+}
+.company-line {
+  font-size: 9pt;
+  font-weight: 700;
+}
+.small-text {
+  font-size: 8.5pt;
+  color: #4f4f4f;
+}
+ul.bullets {
+  margin: 4px 0 0 13px;
+  padding: 0;
+}
+ul.bullets li {
+  margin-bottom: 2px;
+  font-size: 8.8pt;
+  color: #4d4d4d;
+}
+
+.contact-line {
+  font-size: 8.8pt;
+  margin-bottom: 2px;
+  color: #3f3f3f;
+  word-break: break-word;
+}
+.contact-line strong {
+  color: #1f1f1f;
+}
+.contact-line a {
+  color: #3f3f3f;
+  text-decoration: none;
+}
+
+.skills-list {
+  margin: 0 0 0 12px;
+  padding: 0;
+}
+.skills-list li {
+  font-size: 8.9pt;
+  margin-bottom: 3px;
+  color: #444;
+}
+
+@media screen {
+  body { padding: 0.34in !important; box-sizing: border-box; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top-band"></div>
+
+  <div class="header">
+    <div class="header-left">
+      <h1 class="name">{{ name }}</h1>
+      <div class="name-rule"></div>
+    </div>
+    <div class="header-right">
+      <img class="profile-photo" src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=540&q=80" alt="Profile">
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="main-col">
+      {% if professional_summary %}
+      <div class="section">
+        <div class="section-title">Summary</div>
+        <div class="title-accent"></div>
+        <div class="summary">{{ professional_summary }}</div>
+        <div class="section-rule"></div>
+      </div>
+      {% endif %}
+
+      {% if experiences %}
+      <div class="section">
+        <div class="section-title">Experience</div>
+        <div class="title-accent"></div>
+        {% for exp in experiences %}
+        <div class="experience-item">
+          <div class="role-line">{{ exp.title }}{% if exp.dates %}, {{ exp.dates }}{% endif %}</div>
+          <div class="company-line">{{ exp.company }}{% if exp.location %} - {{ exp.location }}{% endif %}</div>
+          {% if exp.bullets %}
+          <ul class="bullets">
+            {% for bullet in exp.bullets %}
+            <li>{{ bullet|safe }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+        {% endfor %}
+        <div class="section-rule"></div>
+      </div>
+      {% endif %}
+
+      {% if educations %}
+      <div class="section">
+        <div class="section-title">Education</div>
+        <div class="title-accent"></div>
+        {% for edu in educations %}
+        <div class="education-item">
+          <div class="company-line">{{ edu.degree }}{% if edu.dates %}, {{ edu.dates }}{% endif %}</div>
+          <div class="small-text"><strong>{{ edu.institution }}</strong>{% if edu.location %} - {{ edu.location }}{% endif %}</div>
+          {% if edu.grade %}<div class="small-text">{{ edu.grade }}</div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="side-col">
+      <div class="section">
+        <div class="section-title">Contact</div>
+        <div class="title-accent"></div>
+        {% if phone %}<div class="contact-line"><strong>Phone:</strong> {{ phone }}</div>{% endif %}
+        {% if email %}<div class="contact-line"><strong>Email:</strong> <a href="mailto:{{ email }}">{{ email }}</a></div>{% endif %}
+        {% if linkedin %}<div class="contact-line"><strong>LinkedIn:</strong> <a href="{{ linkedin }}">{{ linkedin.replace('https://', '').replace('http://', '') }}</a></div>{% endif %}
+        {% if github %}<div class="contact-line"><strong>GitHub:</strong> <a href="{{ github }}">{{ github.replace('https://', '').replace('http://', '') }}</a></div>{% endif %}
+        {% if portfolio %}<div class="contact-line"><strong>Portfolio:</strong> <a href="{{ portfolio }}">{{ portfolio.replace('https://', '').replace('http://', '') }}</a></div>{% endif %}
+        <div class="section-rule"></div>
+      </div>
+
+      {% if skills %}
+      <div class="section">
+        <div class="section-title">Skills</div>
+        <div class="title-accent"></div>
+        <ul class="skills-list">
+          {% if skills.languages %}{% for item in skills.languages.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
+          {% if skills.frontend %}{% for item in skills.frontend.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
+          {% if skills.backend %}{% for item in skills.backend.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
+          {% if skills.genai %}{% for item in skills.genai.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
+          {% if skills.tools %}{% for item in skills.tools.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
+          {% if skills.devops %}{% for item in skills.devops.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
+        </ul>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+</body>
+</html>

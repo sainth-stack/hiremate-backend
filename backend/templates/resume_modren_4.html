@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: Letter; margin: 0.36in; }
+body {
+  font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 9.2pt;
+  line-height: 1.38;
+  margin: 0;
+  color: #222;
+  background: #f0f2f4;
+}
+.page {
+  display: table;
+  width: 100%;
+  max-width: 8.5in;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid #e2e5e9;
+}
+.leaf {
+  display: table-cell;
+  width: 22px;
+  background: linear-gradient(165deg, #1a3d2e 0%, #2d5a45 35%, #1e3328 70%, #0f1f18 100%);
+  vertical-align: top;
+}
+.inner { display: table-cell; vertical-align: top; padding: 20px 22px 18px 20px; }
+.hero { text-align: center; padding-bottom: 12px; border-bottom: 1px solid #e0e0e0; }
+.avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid #2563eb;
+  margin-bottom: 10px;
+}
+.name {
+  font-size: 13pt;
+  font-weight: 700;
+  color: #2563eb;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+}
+.grid { display: table; width: 100%; table-layout: fixed; margin-top: 14px; }
+.col-l, .col-r { display: table-cell; vertical-align: top; }
+.col-l { width: 62%; padding-right: 16px; }
+.col-r { width: 38%; padding-left: 8px; border-left: 1px solid #e8e8e8; }
+.h {
+  font-size: 10.5pt;
+  font-weight: 800;
+  color: #2563eb;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 8px 0;
+}
+.summary { font-size: 9pt; color: #444; text-align: justify; }
+.exp { margin-bottom: 12px; }
+.exp-row { display: table; width: 100%; }
+.exp-dates { display: table-cell; width: 22%; font-size: 8pt; color: #9ca3af; vertical-align: top; padding-right: 6px; }
+.exp-main { display: table-cell; vertical-align: top; }
+.job { font-weight: 700; font-size: 9.5pt; }
+.co { font-style: italic; font-size: 8.8pt; color: #555; margin: 2px 0 4px 0; }
+ul.bullets { margin: 0 0 0 14px; padding: 0; }
+ul.bullets li { margin-bottom: 2px; font-size: 8.6pt; color: #444; }
+.contact-line { font-size: 8.6pt; margin-bottom: 4px; word-break: break-word; }
+.contact-line a { color: #333; text-decoration: none; }
+.skills-ul { margin: 4px 0 0 14px; padding: 0; }
+.skills-ul li { margin-bottom: 3px; font-size: 8.8pt; }
+@media screen { body { padding: 0.36in !important; box-sizing: border-box; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="leaf"></div>
+  <div class="inner">
+    <div class="hero">
+      <img class="avatar" src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80" alt="">
+      <div class="name">{{ name }}</div>
+    </div>
+    <div class="grid">
+      <div class="col-l">
+        {% if professional_summary %}
+        <div class="h">Summary</div>
+        <div class="summary">{{ professional_summary }}</div>
+        {% endif %}
+        {% if experiences %}
+        <div style="margin-top:14px;" class="h">Experience</div>
+        {% for exp in experiences %}
+        <div class="exp">
+          <div class="exp-row">
+            <div class="exp-dates">{{ exp.dates }}</div>
+            <div class="exp-main">
+              <div class="job">{{ exp.title }}</div>
+              <div class="co">{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</div>
+              {% if exp.bullets %}
+              <ul class="bullets">{% for b in exp.bullets %}<li>{{ b|safe }}</li>{% endfor %}</ul>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+      <div class="col-r">
+        <div class="h">Contact</div>
+        {% if email %}<div class="contact-line"><a href="mailto:{{ email }}">{{ email }}</a></div>{% endif %}
+        {% if phone %}<div class="contact-line">{{ phone }}</div>{% endif %}
+        {% if city or country %}<div class="contact-line">{% if city %}{{ city }}{% endif %}{% if city and country %}, {% endif %}{{ country }}</div>{% endif %}
+        {% if linkedin %}<div class="contact-line"><a href="{{ linkedin }}">{{ linkedin.replace('https://','').replace('http://','') }}</a></div>{% endif %}
+        {% if skills %}
+        <div style="margin-top:12px;" class="h">Skills</div>
+        <ul class="skills-ul">
+          {% for cat in ['languages','frontend','backend','genai','tools','devops'] %}
+            {% if skills[cat] %}
+              {% for item in skills[cat].split(',') %}
+                {% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

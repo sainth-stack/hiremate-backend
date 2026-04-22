@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: Letter; margin: 0.32in; }
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 9.5pt;
+  line-height: 1.35;
+  margin: 0;
+  color: #111;
+}
+table.layout { width: 100%; border-collapse: collapse; table-layout: fixed; }
+td.side {
+  width: 30%;
+  background: #a9c9e2;
+  vertical-align: top;
+  padding: 0;
+}
+td.main {
+  width: 70%;
+  vertical-align: top;
+  padding: 18px 22px 16px 24px;
+  background: #fff;
+}
+.side-inner { padding: 18px 14px 20px 14px; }
+.avatar-wrap { text-align: center; padding-top: 8px; }
+.avatar {
+  width: 118px;
+  height: 118px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  object-fit: cover;
+  display: block;
+  margin: 0 auto;
+}
+.name-block { padding: 14px 8px 10px 8px; }
+.name-first {
+  font-size: 22pt;
+  font-weight: 400;
+  color: #6ba3c7;
+  line-height: 1.05;
+}
+.name-last {
+  font-size: 28pt;
+  font-weight: 700;
+  color: #000;
+  line-height: 1.0;
+}
+.name-accent {
+  height: 12px;
+  margin-top: 10px;
+  background: #8ebfe0;
+  transform: skewX(-12deg);
+  margin-left: 4px;
+  margin-right: 4px;
+}
+.side-h {
+  font-weight: 700;
+  font-size: 10.5pt;
+  margin: 14px 0 6px 0;
+}
+.side-body { font-size: 9pt; color: #111; }
+.side-body ul { margin: 4px 0 0 16px; padding: 0; }
+.side-body li { margin-bottom: 3px; }
+.main-h {
+  font-weight: 700;
+  font-size: 11pt;
+  margin: 0 0 6px 0;
+}
+.main-h-line { border-top: 1px solid #999; margin-bottom: 8px; }
+.summary { text-align: justify; font-size: 9.2pt; color: #333; }
+.exp-block { margin-bottom: 10px; }
+.job-title { font-weight: 700; font-size: 10pt; }
+.company-line { font-size: 9pt; font-weight: 700; margin-top: 2px; }
+.meta { font-size: 8.5pt; color: #444; }
+ul.bullets { margin: 4px 0 0 16px; padding: 0; }
+ul.bullets li { margin-bottom: 2px; font-size: 8.8pt; color: #333; }
+@media screen { body { padding: 0.32in !important; box-sizing: border-box; } }
+</style>
+</head>
+<body>
+{% set name_parts = name.split() %}
+{% set first_name = name_parts[0] if name_parts else name %}
+{% set last_name = name_parts[1:]|join(' ') if name_parts|length > 1 else '' %}
+<table class="layout">
+  <tr>
+    <td class="side">
+      <div class="side-inner">
+        <div class="avatar-wrap">
+          <img class="avatar" src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80" alt="">
+        </div>
+        <div class="name-block">
+          <div class="name-first">{{ first_name }}</div>
+          {% if last_name %}<div class="name-last">{{ last_name }}</div>{% endif %}
+          <div class="name-accent"></div>
+        </div>
+        <div class="side-h">Contact</div>
+        <div class="side-body">
+          {% if phone %}<div>{{ phone }}</div>{% endif %}
+          {% if email %}<div>{{ email }}</div>{% endif %}
+        </div>
+        {% if skills %}
+        <div class="side-h">Skills</div>
+        <div class="side-body">
+          <ul>
+            {% for cat in ['languages','frontend','backend','genai','tools','devops'] %}
+              {% if skills[cat] %}
+                {% for item in skills[cat].split(',') %}
+                  {% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% if educations %}
+        <div class="side-h">Education</div>
+        <div class="side-body">
+          {% for edu in educations %}
+          <div style="margin-bottom:10px;">
+            <div><strong>{{ edu.institution }}</strong>{% if edu.location %} — {{ edu.location }}{% endif %}</div>
+            <div>{{ edu.degree }}</div>
+            {% if edu.dates %}<div class="meta">{{ edu.dates }}</div>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </td>
+    <td class="main">
+      {% if professional_summary %}
+      <div class="main-h">Summary</div>
+      <div class="main-h-line"></div>
+      <div class="summary">{{ professional_summary }}</div>
+      {% endif %}
+      {% if experiences %}
+      <div style="margin-top:14px;">
+        <div class="main-h">Experience</div>
+        <div class="main-h-line"></div>
+        {% for exp in experiences %}
+        <div class="exp-block">
+          <div class="job-title">{{ exp.title }}</div>
+          <div class="company-line">{{ exp.company }}{% if exp.location %} — {{ exp.location }}{% endif %}</div>
+          {% if exp.dates %}<div class="meta">{{ exp.dates }}</div>{% endif %}
+          {% if exp.bullets %}
+          <ul class="bullets">{% for b in exp.bullets %}<li>{{ b|safe }}</li>{% endfor %}</ul>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </td>
+  </tr>
+</table>
+</body>
+</html>

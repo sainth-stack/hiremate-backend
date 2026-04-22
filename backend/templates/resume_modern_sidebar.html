@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: Letter; margin: 0.28in; }
+body {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 9.7pt;
+  margin: 0;
+  padding: 0;
+  line-height: 1.28;
+  color: #555b63;
+}
+
+table.layout {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #ffffff;
+}
+td.sidebar {
+  width: 37%;
+  background: #f0f2f5;
+  color: #60666f;
+  vertical-align: top;
+  padding: 0;
+}
+td.main {
+  width: 63%;
+  vertical-align: top;
+  border-left: 1px solid #e9edf2;
+  padding: 16px 18px 10px 24px;
+}
+
+.hero {
+  background: linear-gradient(136deg, #5f86bc 0%, #5f86bc 48%, #f0f2f5 48%, #f0f2f5 100%);
+  padding: 16px 16px 10px 16px;
+  text-align: center;
+}
+.avatar {
+  width: 112px;
+  height: 112px;
+  margin: 2px auto 10px auto;
+  border-radius: 50%;
+  border: 5px solid #f4f6f9;
+  background: #cbd5e1;
+  overflow: hidden;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.name {
+  font-size: 21pt;
+  font-weight: 500;
+  color: #537ab4;
+  line-height: 0.98;
+  margin-top: 4px;
+}
+.tagline {
+  margin-top: 5px;
+  font-size: 10.4pt;
+  color: #7f858d;
+}
+
+.sidebar-content {
+  padding: 7px 20px 14px 20px;
+}
+.s-section {
+  margin-top: 13px;
+}
+.s-title {
+  font-size: 10.4pt;
+  font-weight: 700;
+  color: #555b63;
+  border-bottom: 1.6px solid #9eb6d4;
+  padding-bottom: 6px;
+  margin-bottom: 9px;
+  position: relative;
+  padding-left: 22px;
+}
+.s-title::before {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #5f6770;
+}
+.s-title.contact::before { content: "\260E"; font-size: 9.6pt; top: 0.4pt; }
+.s-title.about::before { content: "\25CF"; font-size: 6.5pt; top: 5pt; left: 2px; }
+.s-title.skills::before { content: "\2731"; font-size: 8.6pt; top: 1.8pt; left: 1px; }
+.m-title {
+  font-size: 11.4pt;
+  font-weight: 700;
+  color: #5a6068;
+  border-bottom: 1.6px solid #9eb6d4;
+  padding-bottom: 6px;
+  margin: 0 0 10px 0;
+  position: relative;
+  padding-left: 22px;
+}
+.m-title::before {
+  position: absolute;
+  left: 0;
+  top: 0.6pt;
+  color: #666e76;
+  font-size: 9.3pt;
+}
+.m-title.education::before { content: "\2691"; }
+.m-title.experience::before { content: "\25A3"; }
+.m-title.references::before { content: "\2756"; }
+
+.contact-line {
+  margin: 6px 0;
+  font-size: 8.5pt;
+  word-break: break-word;
+  color: #7f8790;
+  padding-left: 14px;
+  position: relative;
+}
+.contact-line::before {
+  content: "\25E6";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #6f8fbd;
+}
+.contact-line a {
+  color: #7f8790;
+  text-decoration: none;
+}
+.summary {
+  font-size: 8.6pt;
+  color: #707780;
+  line-height: 1.5;
+  text-align: justify;
+}
+.skills-list {
+  margin: 0;
+  padding: 0 0 0 13px;
+}
+.skills-list li {
+  margin: 4px 0;
+  font-size: 9.1pt;
+  color: #616872;
+}
+
+.timeline-item {
+  position: relative;
+  padding-left: 16px;
+  margin-bottom: 9px;
+}
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  background: #6f95c6;
+  border-radius: 50%;
+}
+.timeline-item::after {
+  content: "";
+  position: absolute;
+  left: 2.5px;
+  top: 10px;
+  width: 1px;
+  height: calc(100% + 4px);
+  background: #b4c4d9;
+}
+.timeline-item:last-child::after {
+  display: none;
+}
+
+.head-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: baseline;
+}
+.item-title {
+  font-size: 9.9pt;
+  font-weight: 600;
+  color: #5d636b;
+}
+.dates {
+  font-size: 8.1pt;
+  color: #8f969f;
+  white-space: nowrap;
+}
+.item-sub {
+  font-size: 8.9pt;
+  color: #6f767f;
+  font-style: italic;
+  margin-top: 0;
+}
+.item-body {
+  margin-top: 2px;
+  font-size: 8.6pt;
+  color: #707780;
+  line-height: 1.34;
+}
+ul.bullets {
+  margin: 3px 0 0 14px;
+  padding: 0;
+}
+ul.bullets li {
+  margin-bottom: 1px;
+  font-size: 8.6pt;
+  color: #6e757e;
+}
+
+.project {
+  margin-bottom: 7px;
+}
+.project-name {
+  font-size: 9.7pt;
+  font-weight: 600;
+  color: #5d636b;
+}
+.project-tech {
+  font-size: 8.4pt;
+  color: #717781;
+  font-style: italic;
+  margin: 0;
+}
+.project-desc {
+  font-size: 8.6pt;
+  color: #6e757e;
+}
+
+.refs {
+  display: flex;
+  gap: 16px;
+}
+.ref-col {
+  flex: 1;
+  font-size: 8.2pt;
+  color: #666d76;
+}
+.ref-name {
+  font-size: 9.5pt;
+  font-weight: 700;
+  color: #5f656d;
+  margin-bottom: 1px;
+}
+.ref-role {
+  font-size: 8.7pt;
+  margin-bottom: 3px;
+}
+.ref-meta {
+  font-size: 7.8pt;
+  line-height: 1.3;
+}
+
+@media screen {
+  body { padding: 0.28in !important; box-sizing: border-box; }
+}
+</style>
+</head>
+<body>
+<table class="layout">
+  <tr>
+    <td class="sidebar">
+      <div class="hero">
+        <div class="avatar">
+          <img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=400&q=80" alt="Profile">
+        </div>
+        <div class="name">{{ name }}</div>
+        {% if experiences and experiences[0].title %}
+        <div class="tagline">{{ experiences[0].title }}</div>
+        {% endif %}
+      </div>
+
+      <div class="sidebar-content">
+        <div class="s-section">
+          <div class="s-title contact">Contact</div>
+          {% if phone %}<div class="contact-line">{{ phone }}</div>{% endif %}
+          {% if email %}<div class="contact-line"><a href="mailto:{{ email }}">{{ email }}</a></div>{% endif %}
+          {% if linkedin %}<div class="contact-line"><a href="{{ linkedin }}">{{ linkedin.replace('https://', '').replace('http://', '') }}</a></div>{% endif %}
+          {% if github %}<div class="contact-line"><a href="{{ github }}">{{ github.replace('https://', '').replace('http://', '') }}</a></div>{% endif %}
+          {% if portfolio %}<div class="contact-line"><a href="{{ portfolio }}">{{ portfolio.replace('https://', '').replace('http://', '') }}</a></div>{% endif %}
+        </div>
+
+        {% if professional_summary %}
+        <div class="s-section">
+          <div class="s-title about">About Me</div>
+          <div class="summary">{{ professional_summary }}</div>
+        </div>
+        {% endif %}
+
+        {% if skills %}
+        <div class="s-section">
+          <div class="s-title skills">Skills</div>
+          <ul class="skills-list">
+            {% if skills.languages %}<li>{{ skills.languages }}</li>{% endif %}
+            {% if skills.frontend %}<li>{{ skills.frontend }}</li>{% endif %}
+            {% if skills.backend %}<li>{{ skills.backend }}</li>{% endif %}
+            {% if skills.genai %}<li>{{ skills.genai }}</li>{% endif %}
+            {% if skills.tools %}<li>{{ skills.tools }}</li>{% endif %}
+            {% if skills.devops %}<li>{{ skills.devops }}</li>{% endif %}
+          </ul>
+        </div>
+        {% endif %}
+      </div>
+    </td>
+
+    <td class="main">
+      {% if educations %}
+      <div class="m-section">
+        <div class="m-title education">Education</div>
+        {% for edu in educations %}
+        <div class="timeline-item">
+          <div class="head-row">
+            <div class="item-title">{{ edu.degree }}</div>
+            <div class="dates">{{ edu.dates }}</div>
+          </div>
+          <div class="item-sub">{{ edu.institution }}</div>
+          {% if edu.grade %}<div class="item-body">{{ edu.grade }}</div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if experiences %}
+      <div class="m-section">
+        <div class="m-title experience">Experience</div>
+        {% for exp in experiences %}
+        <div class="timeline-item">
+          <div class="head-row">
+            <div class="item-title">{{ exp.title }}</div>
+            <div class="dates">{{ exp.dates }}</div>
+          </div>
+          <div class="item-sub">{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</div>
+          {% if exp.bullets %}
+          <div class="item-body">
+            <ul class="bullets">
+              {% for bullet in exp.bullets %}<li>{{ bullet|safe }}</li>{% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if projects %}
+      <div class="m-section">
+        <div class="m-title">Projects</div>
+        {% for proj in projects %}
+        <div class="project">
+          <div class="project-name">{{ proj.name }}</div>
+          {% if proj.techStack %}<div class="project-tech">{{ proj.techStack }}</div>{% endif %}
+          <div class="project-desc">{{ proj.description }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if awards %}
+      <div class="m-section">
+        <div class="m-title references">References</div>
+        <div class="refs">
+          {% for award in awards %}
+          <div class="ref-col">
+            <div class="ref-name">{{ award }}</div>
+            <div class="ref-role">Reference</div>
+            <div class="ref-meta">Contact details available on request.</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </td>
+  </tr>
+</table>
+</body>
+</html>

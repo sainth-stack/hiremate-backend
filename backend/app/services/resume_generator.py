@@ -713,6 +713,8 @@ def build_resume_context_from_payload(
         "professional_summary": professional_summary,
         "email": escape_fn(payload.email or ""),
         "phone": escape_fn(payload.phone or ""),
+        "city": escape_fn(getattr(payload, "city", None) or ""),
+        "country": escape_fn(getattr(payload, "country", None) or ""),
         "linkedin": _ensure_url(getattr(links, "linkedInUrl", "") if hasattr(links, "linkedInUrl") else (links.get("linkedInUrl", "") if isinstance(links, dict) else "")),
         "github": _ensure_url(getattr(links, "githubUrl", "") if hasattr(links, "githubUrl") else (links.get("githubUrl", "") if isinstance(links, dict) else "")),
         "portfolio": _ensure_url(getattr(links, "portfolioUrl", "") if hasattr(links, "portfolioUrl") else (links.get("portfolioUrl", "") if isinstance(links, dict) else "")),
@@ -781,9 +783,19 @@ def build_resume_text_from_context(context: dict) -> str:
 
 TEMPLATE_MAP = {
     "classic": "resume.html",
+    "classic_professional": "resume_classic_professional.html",
+    "elegant_traditional": "resume_elegant_traditional.html",
     "accent": "resume_accent.html",
     "minimalist": "resume_minimalist.html",
     "modern": "resume_modern.html",
+    "modern_sidebar": "resume_modern_sidebar.html",
+    "modern_two_column": "resume_modern_two_column.html",
+    "modren_3": "resume_modren_3.html",
+    "modren_4": "resume_modren_4.html",
+    "modren_5": "resume_modren_5.html",
+    "modren_6": "resume_modren_6.html",
+    "modren_7": "resume_modren_7.html",
+    "modren_8": "resume_modren_8.html",
     "executive": "resume_executive.html",
     "harvard": "resume_harvard.html",
     "elegant": "resume_elegant.html",
@@ -933,6 +945,8 @@ def generate_resume_preview_pdf(
         if sections_order:
             html_content = _reorder_sections_html(html_content, sections_order, template_id or 'classic')
 
+    html_content = _inject_resume_typography(html_content)
+
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
         pdf_bytes = html_to_pdf_weasyprint(html_content, work_dir)
@@ -985,10 +999,16 @@ def _apply_design_config_to_context(context: dict, design_config: dict) -> dict:
     return context
 
 
+_TWO_COL_TEMPLATE_IDS = frozenset({
+    'modern', 'impact', 'modern_sidebar', 'modern_two_column',
+    'modren_3', 'modren_4', 'modren_5', 'modren_6', 'modren_7', 'modren_8',
+})
+
+
 def _reorder_sections_html(html: str, sections_order: list, template_id: str) -> str:
     """Post-process rendered HTML to reorder section blocks per sections_order.
-    Skips two-column templates (modern, impact) where safe reordering is not possible."""
-    if not sections_order or (template_id or '').lower() in ('modern', 'impact'):
+    Skips two-column templates where safe reordering is not possible."""
+    if not sections_order or (template_id or '').lower() in _TWO_COL_TEMPLATE_IDS:
         return html
     body_m = re.search(r'(<body[^>]*>)(.*)(</body>)', html, re.DOTALL)
     if not body_m:
@@ -1151,12 +1171,46 @@ def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
         f".header-band {{ text-align: {align_val} !important; }}",
     ]
 
-    # ── Section spacing ──────────────────────────────────────────────────────
-    spacing_map = {'compact': '6px', 'normal': '12px', 'spacious': '20px'}
-    spacing = spacing_map.get(design_config.get('section_spacing', 'normal'), '12px')
+    # ── Section spacing (also drives entry / bullet breathing room) ─────────
+    # Keys are normalized to lowercase; unknown values fall back to "normal".
+    _raw_sp = design_config.get('section_spacing') or 'normal'
+    spacing_key = str(_raw_sp).strip().lower().replace(' ', '_') if _raw_sp is not None else 'normal'
+    spacing_map = {
+        'compact': '10px',
+        'normal': '18px',
+        'spacious': '32px',
+        'roomy': '44px',
+        'extra': '44px',
+        'extra_spacious': '44px',
+    }
+    spacing = spacing_map.get(spacing_key, '18px')
+    entry_gap_map = {
+        'compact': '8px',
+        'normal': '12px',
+        'spacious': '18px',
+        'roomy': '24px',
+        'extra': '26px',
+        'extra_spacious': '26px',
+    }
+    entry_gap = entry_gap_map.get(spacing_key, '12px')
+    bullet_li_margin_map = {
+        'compact': '3px',
+        'normal': '5px',
+        'spacious': '7px',
+        'roomy': '9px',
+        'extra': '9px',
+        'extra_spacious': '9px',
+    }
+    li_vm = bullet_li_margin_map.get(spacing_key, '5px')
     lines += [
         f".section {{ margin-top: {spacing} !important; }}",
         f".main .section {{ margin-top: {spacing} !important; }}",
+        f".section-title {{ margin-bottom: 6px !important; }}",
+        f".entry {{ margin-bottom: {entry_gap} !important; }}",
+        f".job {{ margin-bottom: {entry_gap} !important; }}",
+        f".proj-item {{ margin-bottom: {entry_gap} !important; }}",
+        f".edu-row {{ margin-bottom: {entry_gap} !important; }}",
+        f"ul.bullets li {{ margin-top: {li_vm} !important; margin-bottom: {li_vm} !important; }}",
     ]
 
     # ── Section separator line ────────────────────────────────────────────────
@@ -1194,7 +1248,7 @@ def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
             pass
 
     # ── Item padding (vertical padding around job/project/education items) ───
-    item_padding_map = {'none': '0px', 'small': '3px', 'medium': '6px'}
+    item_padding_map = {'none': '0px', 'small': '3px', 'medium': '6px', 'large': '12px'}
     item_padding = item_padding_map.get(design_config.get('item_padding', ''), None)
     if item_padding is not None:
         lines += [
@@ -1205,6 +1259,29 @@ def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
         ]
 
     return "<style>\n/* design-config overrides */\n" + "\n".join(lines) + "\n</style>\n"
+
+
+# Baseline typography: applied to both live preview HTML and WeasyPrint PDF (rules live outside
+# @media screen so WeasyPrint applies them). Keeps wrapping + list readability in Jinja output.
+_RESUME_GLOBAL_TYPOGRAPHY = """<style id="hiremate-resume-typography">
+body {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: normal;
+}
+p, li, td, th, .summary-text {
+  overflow-wrap: break-word;
+}
+ul li, ol li {
+  line-height: 1.55;
+}
+</style>
+"""
+
+
+def _inject_resume_typography(html: str) -> str:
+    """Inject shared wrapping / list line-height for iframe preview and PDF generation."""
+    return html.replace("</head>", _RESUME_GLOBAL_TYPOGRAPHY + "\n</head>")
 
 
 def generate_resume_preview_html(
@@ -1261,7 +1338,11 @@ def generate_resume_preview_html(
     # Inject baseline screen CSS for templates that don't define their own @media screen rules.
     # WeasyPrint ignores @media screen entirely, so this never affects the PDF output.
     # Templates that already include @media screen (modern, executive, harvard, elegant, impact) are skipped.
-    _templates_with_own_screen_css = {"modern", "executive", "harvard", "elegant", "impact", "professional"}
+    _templates_with_own_screen_css = {
+        "modern", "modern_sidebar", "modern_two_column",
+        "modren_3", "modren_4", "modren_5", "modren_6", "modren_7", "modren_8",
+        "executive", "harvard", "elegant", "impact", "professional",
+    }
     if (template_id or "classic").lower() not in _templates_with_own_screen_css:
         screen_css = """<style>
 @media screen {
@@ -1280,6 +1361,16 @@ def generate_resume_preview_html(
         if sections_order:
             html = _reorder_sections_html(html, sections_order, template_id or 'classic')
 
+    # Browser-only gutter behind the resume canvas. WeasyPrint ignores @media screen, so PDF output is unchanged.
+    # Helps multi-page iframe previews show a neutral area outside the white page when content is very tall.
+    _preview_screen_gutter = """<style>
+@media screen {
+  html { background-color: #e8eaed; }
+}
+</style>"""
+    html = html.replace("</head>", _preview_screen_gutter + "\n</head>")
+
+    html = _inject_resume_typography(html)
     return html
 
 
@@ -1307,6 +1398,7 @@ def generate_resume_html(
 
     template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
     html_content = render_html_resume(context, template_dir, template_id=template_id)
+    html_content = _inject_resume_typography(html_content)
 
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
