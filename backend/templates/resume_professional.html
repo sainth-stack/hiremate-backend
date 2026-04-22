@@ -49,6 +49,7 @@ body {
 
 .job-title-company { font-weight: bold; }
 .job-date { font-style: italic; font-size: 9.5pt; white-space: nowrap; padding-left: 8px; }
+.job-payroll-company { margin-top: 2px; font-size: 9pt; font-style: italic; font-weight: 500; color: #4b5563; }
 
 ul { margin: 3px 0 3px 18px; padding: 0; list-style-type: disc; }
 li { margin-bottom: 2px; }
@@ -130,6 +131,9 @@ li { margin-bottom: 2px; }
             <span class="job-title-company">{{ exp.title }}{% if exp.company %} | {{ exp.company }}{% endif %}{% if exp.location %}, {{ exp.location }}{% endif %}</span>
             <span class="job-date">{{ exp.dates }}</span>
         </div>
+        {% if exp.payroll_company | trim %}
+        <div class="job-payroll-company">Payroll company: {{ exp.payroll_company }}</div>
+        {% endif %}
         {% if exp.bullets %}
         <ul>
             {% for bullet in exp.bullets %}

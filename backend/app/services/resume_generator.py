@@ -666,6 +666,7 @@ def build_resume_context_from_payload(
             bullets_out = [escape_fn(t) for t in bullet_texts]
         experiences.append({
             "company": escape_fn(exp.companyName or "Company"),
+            "payroll_company": escape_fn(exp.payrollCompany or ""),
             "location": escape_fn(exp.location or ""),
             "dates": escape_fn(_format_dates(exp.startDate or "", exp.endDate or "", style=date_format_style)),
             "title": escape_fn(exp.jobTitle or "Role"),
@@ -784,6 +785,8 @@ def build_resume_text_from_context(context: dict) -> str:
                 parts.append(f"{label.title()}: {val}")
     for exp in context.get("experiences", []) or []:
         parts.append(f"\n{exp.get('company', '')} | {exp.get('dates', '')}")
+        if exp.get("payroll_company"):
+            parts.append(f"Payroll Company: {exp.get('payroll_company')}")
         parts.append(exp.get("title", ""))
         for b in exp.get("bullets", []) or []:
             text = re.sub(r"<[^>]+>", "", str(b or ""))

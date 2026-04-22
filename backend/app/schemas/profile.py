@@ -3,13 +3,17 @@ Profile Pydantic schemas - matches PROFILE_PAYLOAD_SCHEMA format
 """
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 # --- Nested schemas ---
 class Experience(BaseModel):
     jobTitle: str = ""
     companyName: str = ""
+    payrollCompany: str = Field(
+        default="",
+        validation_alias=AliasChoices("payrollCompany", "payroll_company"),
+    )
     employmentType: str = ""
     startDate: str = ""
     endDate: str = ""

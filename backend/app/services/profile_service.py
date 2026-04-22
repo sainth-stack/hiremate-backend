@@ -15,9 +15,11 @@ def build_resume_text_from_payload(payload: ProfilePayload) -> str:
         f"Headline: {payload.professionalHeadline or ''}",
     ]
     for e in payload.experiences or []:
-        parts.append(
-            f"{e.jobTitle} at {e.companyName} ({e.startDate}-{e.endDate}): {e.description}"
-        )
+        line = f"{e.jobTitle} at {e.companyName} ({e.startDate}-{e.endDate}): {e.description}"
+        pc = (getattr(e, "payrollCompany", None) or "").strip()
+        if pc:
+            line += f"\nPayroll company: {pc}"
+        parts.append(line)
     for e in payload.educations or []:
         parts.append(f"{e.degree}, {e.institution} ({e.startYear}-{e.endYear})")
     for s in payload.techSkills or []:

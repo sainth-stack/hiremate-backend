@@ -15,6 +15,7 @@ body { font-family: "{{ font_family|default('Times New Roman') }}", Times, serif
 .job { margin-bottom: 6px; }
 .job-header { display: flex; justify-content: space-between; font-weight: bold; }
 .job-role { font-style: italic; margin-top: 2px; }
+.payroll-company { display: block; width: 100%; margin-top: 3px; margin-bottom: 1px; font-size: 9pt; font-style: italic; font-weight: 500; color: #4b5563; clear: both; }
 ul { margin: 3px 0 3px 18px; padding: 0; }
 li { margin-bottom: 2px; }
 .education { display: flex; justify-content: space-between; }
@@ -68,6 +69,9 @@ li { margin-bottom: 2px; }
             <span>{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</span>
             <span>{{ exp.dates }}</span>
         </div>
+        {% if exp.payroll_company | trim %}
+        <div class="payroll-company">Payroll company: {{ exp.payroll_company }}</div>
+        {% endif %}
         <div class="job-role">{{ exp.title }}</div>
         {% if exp.bullets %}
         <ul>

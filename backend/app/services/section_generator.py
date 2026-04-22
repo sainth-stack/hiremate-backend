@@ -40,6 +40,7 @@ SECTION_PROMPTS: dict[str, str] = {
         "Original bullet: \"{original_bullet}\"\n"
         "Role: {role_title}\n"
         "Company: {company}\n"
+        "{payroll_company}"
         "JD context: {jd_snippet}\n"
         "{user_instruction}\n\n"
         "Rules:\n"
@@ -86,6 +87,7 @@ def _build_prompt(
         "original_bullet": (context or {}).get("instruction", ""),
         "role_title": "",
         "company": "",
+        "payroll_company": "",
         "user_instruction": (
             f"User instruction: {context['instruction']}"
             if context and context.get("instruction")
@@ -100,6 +102,8 @@ def _build_prompt(
             role = experiences[role_index]
             ctx["role_title"] = role.get("jobTitle", "")
             ctx["company"] = role.get("companyName", "")
+            pc = (role.get("payrollCompany") or "").strip()
+            ctx["payroll_company"] = f"Payroll company: {pc}\n" if pc else ""
 
     return template.format(**ctx)
 

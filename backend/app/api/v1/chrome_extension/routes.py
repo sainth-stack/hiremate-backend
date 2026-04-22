@@ -225,6 +225,7 @@ def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
             {
                 "jobTitle": e.jobTitle or "",
                 "companyName": e.companyName or "",
+                "payrollCompany": getattr(e, "payrollCompany", "") or "",
                 "employmentType": getattr(e, "employmentType", "") or "",
                 "startDate": e.startDate or "",
                 "endDate": e.endDate or "",
@@ -232,7 +233,10 @@ def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
                 "location": getattr(e, "location", "") or "",
             }
         )
-        exp_parts.append(f"{e.jobTitle} at {e.companyName} ({e.startDate}-{e.endDate}): {e.description}")
+        exp_line = f"{e.jobTitle} at {e.companyName} ({e.startDate}-{e.endDate}): {e.description}"
+        if (getattr(e, "payrollCompany", None) or "").strip():
+            exp_line += f" [Payroll: {e.payrollCompany.strip()}]"
+        exp_parts.append(exp_line)
     profile["experiences"] = experiences_list
     profile["experience"] = "\n".join(exp_parts) if exp_parts else (payload.professionalSummary or "")
 

@@ -43,6 +43,10 @@ class _ExperienceSchema(BaseModel):
     """Work experience entry."""
     jobTitle: str = Field(default="", description="Job title or role")
     companyName: str = Field(default="", description="Company or organization name")
+    payrollCompany: str = Field(
+        default="",
+        description="Employer of record / payroll vendor if different from company (e.g. contracting via HUSYS)",
+    )
     employmentType: str = Field(default="", description="e.g. Full-time, Part-time, Contract, Internship")
     startDate: str = Field(default="", description="Start date e.g. Jan 2020, 2020-01")
     endDate: str = Field(default="", description="End date e.g. Present, Dec 2023")
@@ -124,7 +128,7 @@ RULES:
    - If location is "USA" or "United States" → use proper country name
    - For dates: normalize to formats like "Jan 2020", "2020-2023", "Present"
 3. Map correctly:
-   - Experience: jobTitle, companyName, startDate, endDate, description, techStack (from bullets)
+   - Experience: jobTitle, companyName, payrollCompany (if stated e.g. via agency/payroll vendor), startDate, endDate, description, techStack (from bullets)
    - Education: degree, institution, fieldOfStudy, startYear, endYear
    - Skills: techSkills = programming, tools, frameworks; softSkills = leadership, communication, etc.
    - Links: extract LinkedIn, GitHub, portfolio URLs from text or hyperlinks
