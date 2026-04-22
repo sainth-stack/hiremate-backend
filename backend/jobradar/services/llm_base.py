@@ -57,25 +57,75 @@ Analyze the match and return ONLY a JSON object with these fields:
 - suggestions: 3-5 specific, actionable bullet points to improve the resume for this JD"""
 
 
-class LLMProvider(ABC):
+from typing import Optional, List, Dict, AsyncGenerator
 
-    # ── Abstract interface — each provider implements these two ──────────────
+class LLMProvider(ABC):
+    def __init__(self):
+        self.total_session_tokens: int = 0
+        self.total_session_cost: float = 0.0
+
+    def reset_usage(self):
+        """Reset session usage counters."""
+        self.total_session_tokens = 0
+        self.total_session_cost = 0.0
+
+    def get_usage(self) -> tuple[int, float]:
+        """Return (total_tokens, total_cost) for the current session."""
+        return self.total_session_tokens, self.total_session_cost
+
+    # ── Abstract interface — each provider implements these ───────────────────
 
     @abstractmethod
-    def _complete(self, system: str, user: str) -> str:
+    def _complete(
+        self,
+        system: str,
+        user: str,
+        user_id: int = None,
+        email: str = None,
+        feature: str = None,
+        json_mode: bool = False
+    ) -> str:
         """
         Internal: Make a single text completion call.
         """
 
-    def generate(self, system_prompt: str, user_prompt: str = "") -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str = "",
+        user_id: int = None,
+        email: str = None,
+        feature: str = None,
+        json_mode: bool = False
+    ) -> str:
         """
         Public API for single-turn generation.
-        Matches the (system, user) order used across this codebase.
         """
-        return self._complete(system=system_prompt, user=user_prompt)
+        return self._complete(
+            system=system_prompt,
+            user=user_prompt,
+            user_id=user_id,
+            email=email,
+            feature=feature,
+            json_mode=json_mode
+        )
 
     @abstractmethod
-    def chat(self, messages: List[Dict], system_instruction: str, user_id: str = None) -> str:
+    def generate_stream(
+        self,
+        system: str,
+        user: str,
+        user_id: int = None,
+        email: str = None,
+        feature: str = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        Make a streaming completion call and yield tokens.
+        Note: Token usage logging for streams is handled after the stream ends.
+        """
+
+    @abstractmethod
+    def chat(self, messages: List[Dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None) -> str:
         """
         Handle a conversational, agentic chat with tool-calling support.
         Provider-specific because tool formats differ across SDKs.
@@ -83,12 +133,15 @@ class LLMProvider(ABC):
 
     # ── Shared logic — all providers inherit these ───────────────────────────
 
-    def classify_thread(self, messages: List[Dict]) -> Optional[ClassifierOutput]:
+    def classify_thread(self, messages: List[Dict], user_id: int = None, email: str = None) -> Optional[ClassifierOutput]:
         """Classify an email thread. Returns ClassifierOutput or None if not job-related."""
         thread_text = self._format_thread(messages)
         raw = self._complete(
             system=CLASSIFY_SYSTEM_PROMPT,
             user=f"Classify this email thread:\n\n{thread_text}",
+            user_id=user_id,
+            email=email,
+            feature="sentinel_classification"
         )
         try:
             data = json.loads(raw.strip())
@@ -99,21 +152,24 @@ class LLMProvider(ABC):
         result = ClassifierOutput(**data)
         return result if result.is_job_related else None
 
-    def score_resume(self, resume_text: str, job_description: str) -> ScoreResponse:
+    def score_resume(self, resume_text: str, job_description: str, user_id: int = None, email: str = None) -> ScoreResponse:
         """Score a resume against a job description."""
         prompt = SCORE_RESUME_PROMPT.format(
             resume_text=resume_text,
             job_description=job_description,
         )
-        raw = self._complete(system="", user=prompt)
+        raw = self._complete(system="", user=prompt, user_id=user_id, email=email, feature="resume_scoring")
         data = json.loads(raw.strip())
         return ScoreResponse(**data)
 
-    def classify_jd(self, jd_text: str) -> Optional[JDClassificationOutput]:
+    def classify_jd(self, jd_text: str, user_id: int = None, email: str = None) -> Optional[JDClassificationOutput]:
         """Extract company and role from JD text."""
         raw = self._complete(
             system=CLASSIFY_JD_SYSTEM_PROMPT,
             user=f"Extract company and role from this job description:\n\n{jd_text[:8000]}",
+            user_id=user_id,
+            email=email,
+            feature="jd_classification"
         )
         try:
             data = json.loads(raw.strip())

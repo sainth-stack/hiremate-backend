@@ -57,7 +57,7 @@ async def parse_company_file(
 
     contents = await file.read()
     try:
-        companies = await parse_file(contents, filename, user_id=current_user.id)
+        companies = await parse_file(contents, filename, user_id=current_user.id, email=current_user.email)
     except HTTPException:
         raise
     except ValueError as e:

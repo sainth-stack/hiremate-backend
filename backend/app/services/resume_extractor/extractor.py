@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from backend.jobradar.services.llm_factory import LLMFactory
 from backend.app.core.config import settings
 from backend.app.schemas.profile import (
     Education,
@@ -33,6 +34,8 @@ class ResumeExtractionState(TypedDict):
     resume_last_updated: str | None
     payload: ProfilePayload | None
     error: str | None
+    user_id: int | None
+    email: str | None
 
 
 # --- JSON-serializable schema for LLM (flat structure for reliable parsing) ---
@@ -175,22 +178,27 @@ def _llm_extract_node(state: ResumeExtractionState) -> dict:
     resume_url = state.get("resume_url")
     resume_last_updated = state.get("resume_last_updated")
     file_path = state.get("file_path", "")
+    user_id = state.get("user_id")
+    email = state.get("email")
 
     try:
-        llm = ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key or None,
-            temperature=0,
+        provider = LLMFactory.get_provider()
+        content = provider.generate(
+            system_prompt="You are a precise resume parser. Extract all data and map to the schema. Derive missing fields when possible.",
+            user_prompt=_EXTRACTION_PROMPT.format(resume_text=text),
+            user_id=user_id,
+            email=email,
+            feature="resume_parsing",
+            json_mode=True
         )
-        structured_llm = llm.with_structured_output(
-            _ResumeExtractionSchema, method="function_calling"
-        )
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a precise resume parser. Extract all data and map to the schema. Derive missing fields when possible."),
-            ("human", _EXTRACTION_PROMPT),
-        ])
-        chain = prompt | structured_llm
-        result: _ResumeExtractionSchema = chain.invoke({"resume_text": text})
+        content = (content or "").strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```\w*\n?", "", content)
+            content = re.sub(r"\n?```\s*$", "", content)
+        
+        data = json.loads(content)
+        # Manually validate/map to schema
+        result = _ResumeExtractionSchema.model_validate(data)
 
         # Convert to ProfilePayload
         payload = ProfilePayload(
@@ -253,6 +261,8 @@ def extract_resume_to_payload(
     file_path: str | Path,
     resume_url: str | None = None,
     resume_last_updated: str | None = None,
+    user_id: int | None = None,
+    email: str | None = None,
 ) -> ProfilePayload:
     """
     Extract resume data from PDF using LangGraph + LLM for accurate mapping.
@@ -273,6 +283,8 @@ def extract_resume_to_payload(
         "resume_last_updated": resume_last_updated,
         "payload": None,
         "error": None,
+        "user_id": user_id,
+        "email": email,
     }
 
     result = graph.invoke(initial_state)

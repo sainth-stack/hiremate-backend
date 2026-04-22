@@ -36,6 +36,8 @@ def persist_scraper_run(
         total_jobs_seen=metrics.total_jobs_seen,
         total_inserted=metrics.inserted,
         total_filtered=metrics.filtered_out,
+        total_tokens=metrics.total_tokens,
+        total_cost=metrics.total_cost,
         detail_json=detail,
     )
     db.add(row)

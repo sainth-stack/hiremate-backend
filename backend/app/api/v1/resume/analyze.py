@@ -120,7 +120,11 @@ async def analyze_resume(
     report = _build_analyze_report(resume_text.strip(), file_name)
     # Optional LLM enrichment for issues and did_well
     try:
-        insights = get_resume_insights(resume_text.strip())
+        insights = get_resume_insights(
+            resume_text.strip(),
+            user_id=current_user.id,
+            email=current_user.email
+        )
         if insights:
             if insights.get("issues") and isinstance(insights["issues"], list):
                 def _issue_icon(item: dict) -> str:

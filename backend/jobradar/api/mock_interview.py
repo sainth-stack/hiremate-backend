@@ -29,7 +29,7 @@ def get_interview_questions(
         raise HTTPException(status_code=404, detail="Application not found")
     
     service = InterviewService(db)
-    questions = service.get_or_generate_questions(app.company, app.role)
+    questions = service.get_or_generate_questions(app.company, app.role, current_user.id, current_user.email)
     
     return [
         {
@@ -91,6 +91,8 @@ def load_more_questions(
     questions = service.get_or_generate_questions(
         app.company, 
         app.role, 
+        current_user.id, 
+        current_user.email,
         count=current_count + 5,
         exclude_list=existing_texts,
         category=category
@@ -117,7 +119,7 @@ def evaluate_interview_answer(
         raise HTTPException(status_code=404, detail="Application not found")
         
     service = InterviewService(db)
-    evaluation = service.evaluate_answer(question, answer, app.company, app.role)
+    evaluation = service.evaluate_answer(question, answer, app.company, app.role, current_user.id, current_user.email)
     
     if not evaluation:
         raise HTTPException(status_code=500, detail="AI evaluation failed")

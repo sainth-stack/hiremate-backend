@@ -15,7 +15,7 @@ class BriefingService:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_or_generate_briefing(self, company: str, role: str) -> Optional[BriefingData]:
+    def get_or_generate_briefing(self, company: str, role: str, user_id: int, email: str) -> Optional[BriefingData]:
         """
         Retrieves a briefing from the cache or generates it via LLM.
         """
@@ -39,7 +39,7 @@ class BriefingService:
         # 2. Generate with AI
         logger.info(f"CACHE MISS: Generating briefing for {company}/{role}")
         
-        briefing_dict = self._generate_ai_briefing(company, role)
+        briefing_dict = self._generate_ai_briefing(company, role, user_id, email)
         if not briefing_dict:
             return None
 
@@ -55,7 +55,7 @@ class BriefingService:
 
         return BriefingData(**briefing_dict)
 
-    def _generate_ai_briefing(self, company: str, role: str) -> Optional[dict]:
+    def _generate_ai_briefing(self, company: str, role: str, user_id: int, email: str) -> Optional[dict]:
         """
         Prompts the LLM to research the company and role.
         """
@@ -95,7 +95,13 @@ class BriefingService:
         user_prompt = f"Generate a briefing for {company} - {role}."
 
         try:
-            raw_response = provider.generate(system_prompt, user_prompt)
+            raw_response = provider.generate(
+                system_prompt, 
+                user_prompt, 
+                user_id=user_id, 
+                email=email,
+                feature="briefing_generation"
+            )
             
             # Clean response if wrapped in markdown
             if isinstance(raw_response, str):

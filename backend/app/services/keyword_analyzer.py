@@ -11,13 +11,11 @@ import re
 import time
 from typing import Any
 
-from openai import OpenAI
-
+from backend.jobradar.services.llm_factory import LLMFactory
 from backend.app.core.config import settings
 from backend.app.services.analysis_cache import get as cache_get, set as cache_set
 
 logger = logging.getLogger(__name__)
-_OPENAI_CLIENT: OpenAI | None = None
 
 # Two-tier cache: extraction by JD (skip LLM on same JD), full result by (JD, resume)
 _extraction_cache: dict[str, tuple[float, dict]] = {}
@@ -72,13 +70,6 @@ _EXCLUDED_KEYWORDS = frozenset({
 })
 
 
-def _get_client() -> OpenAI:
-    global _OPENAI_CLIENT
-    if _OPENAI_CLIENT is None:
-        _OPENAI_CLIENT = OpenAI(api_key=settings.openai_api_key)
-    return _OPENAI_CLIENT
-
-
 def _hash_input(jd: str, resume: str) -> str:
     return hashlib.sha256((jd[:4000] + "|||" + resume[:4000]).encode()).hexdigest()[:32]
 
@@ -128,7 +119,7 @@ def _extract_keywords_fallback(jd: str) -> dict[str, list[str]]:
     return {"high_priority": skills[:split] or skills[:12], "low_priority": skills[split:][:6]}
 
 
-def _extract_keywords(job_description: str) -> dict[str, list[str]]:
+def _extract_keywords(job_description: str, user_id: int = None, email: str = None) -> dict[str, list[str]]:
     """Extract keywords from JD. Uses extraction cache to skip LLM when same JD."""
     jd = (job_description or "").strip()[:3500]
     if not jd or len(jd) < 80:
@@ -143,7 +134,7 @@ def _extract_keywords(job_description: str) -> dict[str, list[str]]:
             return val
         del _extraction_cache[jd_key]
 
-    result = _extract_keywords_llm(job_description)
+    result = _extract_keywords_llm(job_description, user_id=user_id, email=email)
     while len(_extraction_cache) >= settings.keyword_extraction_max_entries and _extraction_cache:
         oldest = min(_extraction_cache.items(), key=lambda x: x[1][0])[0]
         del _extraction_cache[oldest]
@@ -151,7 +142,7 @@ def _extract_keywords(job_description: str) -> dict[str, list[str]]:
     return result
 
 
-def _extract_keywords_llm(job_description: str) -> dict[str, list[str]]:
+def _extract_keywords_llm(job_description: str, user_id: int = None, email: str = None) -> dict[str, list[str]]:
     jd = (job_description or "").strip()[:3500]
     if not jd or len(jd) < 80:
         return {"high_priority": [], "low_priority": []}
@@ -159,18 +150,22 @@ def _extract_keywords_llm(job_description: str) -> dict[str, list[str]]:
     if not settings.openai_api_key:
         return _extract_keywords_fallback(jd)
 
-    client = _get_client()
-    prompt = EXTRACT_PROMPT + jd
-
     try:
-        resp = client.chat.completions.create(
-            model=settings.openai_model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=500,
+        provider = LLMFactory.get_provider()
+        content = provider.generate(
+            system_prompt="",
+            user_prompt=EXTRACT_PROMPT + jd,
+            user_id=user_id,
+            email=email,
+            feature="keyword_extraction",
+            json_mode=True
         )
-        content = (resp.choices[0].message.content or "").strip()
-        content = re.sub(r"^```\w*\n?", "", content).replace("```", "").strip()
+        content = (content or "").strip()
+        # Clean up possible markdown code blocks
+        if content.startswith("```"):
+            content = re.sub(r"^```\w*\n?", "", content)
+            content = re.sub(r"\n?```\s*$", "", content)
+        
         data = json.loads(content)
         high = [str(k).strip().lower() for k in data.get("high_priority", []) if k][:12]
         low = [str(k).strip().lower() for k in data.get("low_priority", []) if k][:6]
@@ -189,7 +184,7 @@ def extract_keywords_for_resume(job_description: str) -> dict[str, list[str]]:
     return _extract_keywords(job_description)
 
 
-def analyze_keywords(job_description: str, resume_text: str) -> dict[str, Any]:
+def analyze_keywords(job_description: str, resume_text: str, user_id: int = None, email: str = None) -> dict[str, Any]:
     """
     Analyze job description vs resume. Returns match stats and keyword lists.
     Cached by (jd, resume) hash. Uses LLM for extraction, fast Python for matching.
@@ -225,7 +220,7 @@ def analyze_keywords(job_description: str, resume_text: str) -> dict[str, Any]:
             "message": "No resume text",
         }
 
-    extracted = _extract_keywords(jd)
+    extracted = _extract_keywords(jd, user_id=user_id, email=email)
     high = [k for k in extracted.get("high_priority", []) if k and k not in _EXCLUDED_KEYWORDS]
     low = [k for k in extracted.get("low_priority", []) if k and k not in _EXCLUDED_KEYWORDS]
 
@@ -288,7 +283,7 @@ Job description:
 {jd}"""
 
 
-async def extract_keywords_deep(jd: str) -> list[dict]:
+async def extract_keywords_deep(jd: str, user_id: int = None, email: str = None) -> list[dict]:
     """
     Extract ranked keywords from a JD using LLM for intelligent prioritization.
 
@@ -299,19 +294,21 @@ async def extract_keywords_deep(jd: str) -> list[dict]:
     if not settings.openai_api_key or not jd.strip():
         return []
 
-    client = _get_client()
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{
-                "role": "user",
-                "content": _DEEP_EXTRACT_PROMPT.format(jd=jd[:3000]),
-            }],
-            response_format={"type": "json_object"},
-            max_tokens=800,
-            temperature=0.2,
+        provider = LLMFactory.get_provider()
+        raw = provider.generate(
+            system_prompt="",
+            user_prompt=_DEEP_EXTRACT_PROMPT.format(jd=jd[:3000]),
+            user_id=user_id,
+            email=email,
+            feature="deep_keyword_extraction",
+            json_mode=True
         )
-        raw = response.choices[0].message.content or "{}"
+        raw = (raw or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```\w*\n?", "", raw)
+            raw = re.sub(r"\n?```\s*$", "", raw)
+        
         result = json.loads(raw)
         return result.get("keywords", [])
     except Exception:

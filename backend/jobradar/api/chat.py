@@ -18,7 +18,7 @@ def chat(
     db: Session = Depends(get_db)
 ):
     """Send a message to the JobRadar AI assistant."""
-    reply = ChatService.get_reply(db, current_user.id, req)
+    reply = ChatService.get_reply(db, current_user.id, current_user.email, req)
     return ChatResponse(reply=reply)
 
 @router.get("", response_model=List[ChatHistoryItem])

@@ -1,9 +1,7 @@
-"""Cover letter generation from user profile + job description."""
-from openai import OpenAI
-
+from backend.jobradar.services.llm_factory import LLMFactory
 from backend.app.core.config import settings
 from backend.app.core.logging_config import get_logger
-from backend.app.schemas.profile import ProfilePayload, profile_model_to_payload
+from backend.app.schemas.profile import ProfilePayload
 from backend.app.services.profile_service import build_resume_text_from_payload
 
 logger = get_logger("services.cover_letter")
@@ -29,12 +27,14 @@ def generate_cover_letter(
     payload: ProfilePayload,
     job_title: str = "",
     job_description: str = "",
+    user_id: int = None,
+    email: str = None,
 ) -> str | None:
     """Generate cover letter using LLM. Returns text or None on failure."""
     if not settings.openai_api_key:
         return None
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        provider = LLMFactory.get_provider()
         resume_text = build_resume_text_from_payload(payload)
         name = f"{payload.firstName or ''} {payload.lastName or ''}".strip() or "the candidate"
         headline = payload.professionalHeadline or ""
@@ -50,13 +50,18 @@ def generate_cover_letter(
             job_title=job_title,
             job_description=job_description,
         )
-        resp = client.chat.completions.create(
-            model=getattr(settings, "openai_model", "gpt-4o-mini") or "gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
+        
+        content = provider.generate(
+            system_prompt="",
+            user_prompt=prompt,
+            user_id=user_id,
+            email=email,
+            feature="cover_letter_gen",
             max_tokens=600,
+            temperature=0.5
         )
-        content = (resp.choices[0].message.content or "").strip()
+        
+        content = (content or "").strip()
         if content and len(content) > 50:
             return content[:2500]
     except Exception as e:

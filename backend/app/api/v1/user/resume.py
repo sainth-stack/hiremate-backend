@@ -430,6 +430,8 @@ async def generate_resume_section(
                 jd=jd,
                 tone=payload.tone,
                 context=payload.context,
+                user_id=current_user.id,
+                email=current_user.email
             ),
             media_type="text/event-stream",
         )
@@ -441,6 +443,8 @@ async def generate_resume_section(
                 jd=jd,
                 tone=payload.tone,
                 context=payload.context,
+                user_id=current_user.id,
+                email=current_user.email
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
@@ -458,7 +462,11 @@ async def extract_resume_keywords(
     if not payload.job_description.strip():
         raise HTTPException(status_code=400, detail="job_description is required")
 
-    keywords = await extract_keywords_deep(payload.job_description)
+    keywords = await extract_keywords_deep(
+        payload.job_description,
+        user_id=current_user.id,
+        email=current_user.email
+    )
     return {"keywords": keywords}
 
 
@@ -802,6 +810,8 @@ async def upload_resume(
                 tmp_path,
                 resume_url=resume_url,
                 resume_last_updated=resume_last_updated,
+                user_id=current_user.id,
+                email=current_user.email
             )
         finally:
             Path(tmp_path).unlink(missing_ok=True)

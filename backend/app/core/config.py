@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Google OAuth
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
     google_scopes: list[str] = [
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
@@ -170,4 +170,14 @@ PDF_DEFAULT_TITLE: str = "Resume"
 PDF_LINE_HEIGHT: int = 14
 PDF_FONT_SIZE_TITLE: int = 14
 PDF_FONT_SIZE_BODY: int = 10
-PDF_MAX_LINE_CHARS: int = 120
+PDF_MAX_LINE_CHARS: int = 100
+# AI Pricing (USD per 1M tokens)
+AI_PRICING: dict[str, dict[str, float]] = {
+    "gpt-4o-mini": {"prompt": 0.15, "completion": 0.60},
+    "gpt-4o": {"prompt": 5.00, "completion": 15.00},
+    "gemini-1.5-flash": {"prompt": 0.075, "completion": 0.30},
+    "gemini-2.0-flash": {"prompt": 0.10, "completion": 0.40},
+    "claude-3-5-sonnet-20240620": {"prompt": 3.00, "completion": 15.00},
+    "claude-3-opus-20240229": {"prompt": 15.00, "completion": 75.00},
+    "mistral-large-latest": {"prompt": 2.00, "completion": 6.00},
+}

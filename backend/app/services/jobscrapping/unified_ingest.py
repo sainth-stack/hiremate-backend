@@ -129,6 +129,11 @@ def _apply_filter_enrich_upsert(
 
     batch = upsert_jobs(db, to_persist, dry_run=dry_run, commit=commit)
     err_n = len(scrape_failures) + batch.errors
+    
+    # Capture AI usage from enrichment
+    tokens = enrich_meta.get("total_tokens", 0)
+    cost = enrich_meta.get("total_cost", 0.0)
+    
     detail: dict[str, Any] = {
         "failures": scrape_failures,
         "ingest_batch_errors": batch.errors,
@@ -141,6 +146,8 @@ def _apply_filter_enrich_upsert(
         filtered_out=filtered_out,
         errors=err_n,
         total_jobs_seen=len(labeled),
+        total_tokens=tokens,
+        total_cost=cost,
         dry_run=dry_run,
         detail=detail,
     )
@@ -362,6 +369,8 @@ def run_unified_companies_ingestion(db: Session, *, dry_run: bool = False) -> Pi
             filtered_out=m.filtered_out,
             errors=m.errors,
             total_jobs_seen=m.total_jobs_seen,
+            total_tokens=m.total_tokens,
+            total_cost=m.total_cost,
             dry_run=m.dry_run,
             detail=detail,
         )
@@ -403,6 +412,8 @@ def run_unified_companies_ingestion(db: Session, *, dry_run: bool = False) -> Pi
             filtered_out=m.filtered_out,
             errors=m.errors,
             total_jobs_seen=m.total_jobs_seen,
+            total_tokens=m.total_tokens,
+            total_cost=m.total_cost,
             dry_run=m.dry_run,
             detail=detail2,
         )
