@@ -7,6 +7,7 @@ import re
 import time
 from datetime import datetime
 from typing import Any
+from backend.app.core.config import settings
 from backend.app.services.field_normalization import FieldNormalizationService
 from backend.jobradar.services.llm_factory import LLMFactory
 _MAP_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
