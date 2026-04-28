@@ -43,6 +43,23 @@ class SoftSkill(BaseModel):
     name: str = ""
 
 
+class SkillCategory(BaseModel):
+    """Flexible skill category with customizable name and skills"""
+    categoryName: str = ""
+    skills: List[str] = Field(default_factory=list)
+    order: int = 0
+
+
+class CustomSection(BaseModel):
+    """User-defined custom section"""
+    sectionId: str = ""
+    sectionName: str = ""
+    content: str = ""
+    format: str = "bullets"  # "bullets" or "paragraph"
+    order: int = 0
+    enabled: bool = True
+
+
 class Project(BaseModel):
     name: str = ""
     description: str = ""
@@ -90,9 +107,11 @@ class ProfilePayload(BaseModel):
     professionalSummary: str = ""
     experiences: List[Experience] = Field(default_factory=list)
     educations: List[Education] = Field(default_factory=list)
-    techSkills: List[TechSkill] = Field(default_factory=list)
-    softSkills: List[SoftSkill] = Field(default_factory=list)
+    techSkills: List[TechSkill] = Field(default_factory=list)  # Deprecated, use skillCategories
+    softSkills: List[SoftSkill] = Field(default_factory=list)  # Deprecated, use skillCategories
+    skillCategories: List[SkillCategory] = Field(default_factory=list)  # New flexible skills structure
     projects: List[Project] = Field(default_factory=list)
+    customSections: List[CustomSection] = Field(default_factory=list)  # User-defined sections
     preferences: Preferences = Field(default_factory=Preferences)
     links: Links = Field(default_factory=Links)
 
@@ -109,6 +128,17 @@ def profile_model_to_payload(profile) -> ProfilePayload:
          "url": (o.get("url", "") if isinstance(o, dict) else getattr(o, "url", ""))}
         for o in raw_other
     ]
+    
+    # Handle new skillCategories or fall back to legacy techSkills/softSkills
+    skill_categories = []
+    if hasattr(profile, 'skill_categories') and profile.skill_categories:
+        skill_categories = [SkillCategory.model_validate(c) for c in profile.skill_categories]
+    
+    # Handle customSections
+    custom_sections = []
+    if hasattr(profile, 'custom_sections') and profile.custom_sections:
+        custom_sections = [CustomSection.model_validate(s) for s in profile.custom_sections]
+    
     return ProfilePayload(
         resumeUrl=profile.resume_url,
         resumeLastUpdated=profile.resume_last_updated,
@@ -125,7 +155,9 @@ def profile_model_to_payload(profile) -> ProfilePayload:
         educations=[Education.model_validate(e) for e in (profile.educations or [])],
         techSkills=[TechSkill.model_validate(s) for s in (profile.tech_skills or [])],
         softSkills=[SoftSkill.model_validate(s) for s in (profile.soft_skills or [])],
+        skillCategories=skill_categories,
         projects=[Project.model_validate(p) for p in (profile.projects or [])],
+        customSections=custom_sections,
         preferences=Preferences(**{**Preferences().model_dump(), **prefs}),
         links=Links(**{k: v for k, v in {**Links().model_dump(), **lnks}.items() if k != "otherLinks"}, otherLinks=other_links),
     )
@@ -133,7 +165,7 @@ def profile_model_to_payload(profile) -> ProfilePayload:
 
 def payload_to_profile_dict(payload: ProfilePayload) -> dict:
     """Convert ProfilePayload to DB model kwargs"""
-    return {
+    result = {
         "resume_url": payload.resumeUrl,
         "resume_last_updated": payload.resumeLastUpdated,
         "first_name": payload.firstName,
@@ -153,3 +185,11 @@ def payload_to_profile_dict(payload: ProfilePayload) -> dict:
         "preferences": payload.preferences.model_dump(),
         "links": payload.links.model_dump(),
     }
+    
+    # Add new fields
+    if payload.skillCategories:
+        result["skill_categories"] = [c.model_dump() for c in payload.skillCategories]
+    if payload.customSections:
+        result["custom_sections"] = [s.model_dump() for s in payload.customSections]
+    
+    return result

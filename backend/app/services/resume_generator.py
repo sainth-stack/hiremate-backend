@@ -156,6 +156,37 @@ def _score_bullet(bullet: str, keywords: set[str]) -> int:
     return sum(1 for k in keywords if k in bullet_lower)
 
 
+def _process_skill_categories(payload) -> dict[str, str]:
+    """
+    Process skillCategories from profile payload.
+    If skillCategories exist, use them directly (user's custom structure).
+    Otherwise, fall back to legacy techSkills categorization.
+    """
+    # Use new skillCategories structure if available
+    if hasattr(payload, 'skillCategories') and payload.skillCategories:
+        result = {}
+        for category in payload.skillCategories:
+            category_name = (category.categoryName or "").strip()
+            skills = category.skills or []
+            if category_name and skills:
+                # Use the user's category name directly, convert to lowercase for key
+                key = category_name.lower().replace(' ', '_')
+                # Deduplicate and limit skills per category
+                seen = set()
+                unique_skills = []
+                for skill in skills[:12]:  # Max 12 skills per category
+                    skill = skill.strip()
+                    norm = _normalize_skill_for_dedup(skill)
+                    if norm and norm not in seen:
+                        seen.add(norm)
+                        unique_skills.append(skill)
+                result[key] = ", ".join(unique_skills)
+        return result
+    
+    # Fall back to legacy techSkills categorization
+    return _categorize_skills(payload.techSkills or [])
+
+
 def _categorize_skills(tech_skills: list[TechSkill]) -> dict[str, str]:
     """Group tech skills into template categories. Deduplicates aliases (React/React.js)."""
     categories: dict[str, list[str]] = {
@@ -630,8 +661,8 @@ def build_resume_context_from_payload(
             return f"https://{u}"
         return u
 
-    # Skills
-    skills = _categorize_skills(payload.techSkills or [])
+    # Skills - use new skillCategories or fall back to legacy techSkills
+    skills = _process_skill_categories(payload)
     if not any(skills.values()) and payload.techSkills:
         skills["languages"] = ", ".join((s.name or "").strip() for s in payload.techSkills[:10])
     skills = _enrich_skills_with_jd_keywords(skills, payload, keywords)
@@ -687,24 +718,35 @@ def build_resume_context_from_payload(
             "grade": escape_fn(edu.grade or ""),
         })
 
-    # Projects: max 2
+    # Projects: max 2, parse bullets properly
     projects: list[dict] = []
     for proj in (payload.projects or [])[:2]:
         desc = proj.description or ""
-        if not skip_llm and keywords and desc and _score_bullet(desc, keywords) < len(keywords) * 0.2 and len(keywords) >= 3:
+        
+        # Parse bullets from the description
+        bullets = _parse_bullets(desc, max_bullets=5)
+        
+        if not skip_llm and keywords and bullets and _score_bullet(" ".join(bullets), keywords) < len(keywords) * 0.2 and len(keywords) >= 3:
             enhanced = _enhance_project_for_jd_llm(
                 proj.name or "Project", desc, proj.techStack or "",
                 job_description or "", keywords,
                 user_id=user_id, email=email
             )
             if enhanced:
-                desc = enhanced
-        # No truncation for project descriptions — show the full text the user wrote
-        desc = _truncate_at_word(desc, max_len=1000)
+                bullets = _parse_bullets(enhanced, max_bullets=5)
+        
+        # Format bullets for output
+        bullet_texts = [_truncate_at_word(b or "", max_len=350) for b in bullets]
+        if for_html and keywords:
+            bullets_out = [_bold_keywords_in_bullet(t, keywords) for t in bullet_texts]
+        else:
+            bullets_out = [escape_fn(t) for t in bullet_texts]
+        
         projects.append({
             "name": escape_fn(proj.name or "Project"),
             "techStack": escape_fn((proj.techStack or "").strip()),
-            "description": escape_fn(desc or ""),
+            "role": escape_fn((proj.role or "").strip()),
+            "bullets": bullets_out,
         })
 
     # Professional summary
@@ -729,6 +771,38 @@ def build_resume_context_from_payload(
     else:
         awards = []
 
+    # Custom sections
+    custom_sections: list[dict] = []
+    if hasattr(payload, 'customSections') and payload.customSections:
+        for section in payload.customSections:
+            # Only include enabled sections
+            if getattr(section, 'enabled', True):
+                section_name = (getattr(section, 'sectionName', None) or "").strip()
+                content = (getattr(section, 'content', None) or "").strip()
+                format_type = getattr(section, 'format', 'bullets')
+                
+                if section_name and content:
+                    if format_type == 'paragraph':
+                        # Paragraph format - just escape and truncate
+                        paragraph_text = _truncate_at_word(content, max_len=800)
+                        custom_sections.append({
+                            "sectionName": escape_fn(section_name),
+                            "paragraph": escape_fn(paragraph_text),
+                            "format": "paragraph",
+                            "order": getattr(section, 'order', len(custom_sections))
+                        })
+                    else:
+                        # Bullets format (default)
+                        bullets = _parse_bullets(content, max_bullets=6)
+                        bullet_texts = [_truncate_at_word(b or "", max_len=350) for b in bullets]
+                        bullets_out = [escape_fn(t) for t in bullet_texts]
+                        custom_sections.append({
+                            "sectionName": escape_fn(section_name),
+                            "bullets": bullets_out,
+                            "format": "bullets",
+                            "order": getattr(section, 'order', len(custom_sections))
+                        })
+
     return {
         "name": escape_fn(name),
         "professional_summary": professional_summary,
@@ -744,6 +818,7 @@ def build_resume_context_from_payload(
         "educations": educations,
         "projects": projects,
         "awards": awards,
+        "custom_sections": custom_sections,
     }
 
 

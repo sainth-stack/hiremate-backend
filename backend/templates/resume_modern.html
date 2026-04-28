@@ -51,12 +51,11 @@ li { margin-bottom: 2px; }
   {% if skills %}
   <div class="section-title">Skills</div>
   <div class="skills">
-    {% if skills.languages %}<p><strong>Languages:</strong> {{ skills.languages }}</p>{% endif %}
-    {% if skills.frontend %}<p><strong>Frontend:</strong> {{ skills.frontend }}</p>{% endif %}
-    {% if skills.backend %}<p><strong>Backend:</strong> {{ skills.backend }}</p>{% endif %}
-    {% if skills.genai %}<p><strong>GenAI:</strong> {{ skills.genai }}</p>{% endif %}
-    {% if skills.tools %}<p><strong>Tools:</strong> {{ skills.tools }}</p>{% endif %}
-    {% if skills.devops %}<p><strong>DevOps:</strong> {{ skills.devops }}</p>{% endif %}
+    {% for key, value in skills.items() %}
+    {% if value %}
+    <p><strong>{{ key.replace('_', ' ').title() }}:</strong> {{ value }}</p>
+    {% endif %}
+    {% endfor %}
   </div>
   {% endif %}
 </td>
@@ -109,10 +108,27 @@ li { margin-bottom: 2px; }
     <div class="project">
       <strong>{{ proj.name }}</strong>
       {% if proj.techStack %}<div class="project-tech">{{ proj.techStack }}</div>{% endif %}
+      {% if proj.bullets %}
+      <ul>{% for bullet in proj.bullets %}<li>{{ bullet|safe }}</li>{% endfor %}</ul>
+      {% elif proj.description %}
       <div class="project-desc">{{ proj.description }}</div>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
+  {% endif %}
+
+  {% if custom_sections %}
+  {% for section in custom_sections %}
+  <div class="section">
+    <div class="section-title">{{ section.sectionName }}</div>
+    {% if section.format == 'paragraph' and section.paragraph %}
+    <p class="summary-text">{{ section.paragraph }}</p>
+    {% elif section.bullets %}
+    <ul>{% for bullet in section.bullets %}<li>{{ bullet|safe }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+  {% endfor %}
   {% endif %}
 
   {% if awards %}

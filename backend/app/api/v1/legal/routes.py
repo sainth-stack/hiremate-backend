@@ -4,9 +4,12 @@ Legal API routes.
 Public:
   GET  /api/legal/privacy-policy          — fetch current privacy policy
   GET  /api/legal/privacy-policy/history  — version history list
+  GET  /api/legal/terms-of-service        — fetch current terms of service
+  GET  /api/legal/terms-of-service/history — version history list
 
 Admin-only:
   PUT  /api/legal/privacy-policy          — publish a new version
+  PUT  /api/legal/terms-of-service        — publish a new version
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -48,6 +51,38 @@ def update_privacy_policy(
     policy = LegalService.upsert_policy(
         db,
         policy_type="privacy_policy",
+        version=body.version,
+        title=body.title,
+        content=body.content,
+    )
+    return policy
+
+
+@router.get("/terms-of-service", response_model=LegalPolicyResponse)
+def get_terms_of_service(db: Session = Depends(get_db)):
+    """Return the current (is_current=True) terms of service. Public endpoint."""
+    policy = LegalService.get_current_policy(db, "terms_of_service")
+    if not policy:
+        raise HTTPException(status_code=404, detail="Terms of service not found")
+    return policy
+
+
+@router.get("/terms-of-service/history", response_model=list[LegalPolicyHistoryItem])
+def get_terms_of_service_history(db: Session = Depends(get_db)):
+    """Return version history (newest first). Public endpoint."""
+    return LegalService.get_policy_history(db, "terms_of_service")
+
+
+@router.put("/terms-of-service", response_model=LegalPolicyResponse)
+def update_terms_of_service(
+    body: LegalPolicyUpsertRequest,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user),
+):
+    """Publish a new version of the terms of service. Admin only."""
+    policy = LegalService.upsert_policy(
+        db,
+        policy_type="terms_of_service",
         version=body.version,
         title=body.title,
         content=body.content,

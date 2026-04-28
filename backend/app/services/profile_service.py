@@ -5,7 +5,39 @@ from sqlalchemy.orm import Session
 
 from backend.app.models.profile import Profile
 from backend.app.models.user import User
-from backend.app.schemas.profile import ProfilePayload, payload_to_profile_dict
+from backend.app.schemas.profile import ProfilePayload, payload_to_profile_dict, SkillCategory
+
+
+def migrate_legacy_skills_to_categories(payload: ProfilePayload) -> None:
+    """
+    Migrate old techSkills/softSkills structure to new skillCategories structure.
+    If skillCategories is empty but techSkills/softSkills exist, convert them.
+    """
+    # Only migrate if we have legacy skills but no skill categories
+    if not payload.skillCategories and (payload.techSkills or payload.softSkills):
+        categories = []
+        
+        # Migrate technical skills
+        if payload.techSkills:
+            tech_skills = [s.name for s in payload.techSkills if s.name.strip()]
+            if tech_skills:
+                categories.append(SkillCategory(
+                    categoryName="Technical Skills",
+                    skills=tech_skills,
+                    order=0
+                ))
+        
+        # Migrate soft skills
+        if payload.softSkills:
+            soft_skills = [s.name for s in payload.softSkills if s.name.strip()]
+            if soft_skills:
+                categories.append(SkillCategory(
+                    categoryName="Soft Skills",
+                    skills=soft_skills,
+                    order=1
+                ))
+        
+        payload.skillCategories = categories
 
 
 def build_resume_text_from_payload(payload: ProfilePayload) -> str:
@@ -22,8 +54,14 @@ def build_resume_text_from_payload(payload: ProfilePayload) -> str:
         parts.append(line)
     for e in payload.educations or []:
         parts.append(f"{e.degree}, {e.institution} ({e.startYear}-{e.endYear})")
+    
+    # Include skills from both old and new structure
     for s in payload.techSkills or []:
         parts.append(f"Skill: {s.name} ({s.level})")
+    for category in payload.skillCategories or []:
+        for skill in category.skills:
+            parts.append(f"Skill: {skill}")
+    
     return "\n\n".join(filter(None, parts))
 
 
@@ -57,6 +95,9 @@ class ProfileService:
     @staticmethod
     def update_profile(db: Session, user: User, payload: ProfilePayload) -> Profile:
         """Update profile with full payload (PROFILE_PAYLOAD_SCHEMA format)."""
+        # Migrate legacy skills structure if needed
+        migrate_legacy_skills_to_categories(payload)
+        
         profile = ProfileService.get_or_create_profile(db, user)
         data = payload_to_profile_dict(payload)
         for key, value in data.items():

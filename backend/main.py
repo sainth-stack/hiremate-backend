@@ -109,8 +109,8 @@ async def lifespan(app: FastAPI):
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="HireMate API",
-    description="Job seeking application API",
+    title="OpsBrain API",
+    description="AI-powered job search platform API",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -168,20 +168,21 @@ async def on_startup():
     from backend.app.utils import cache
     await cache.connect()
 
-    # Seed default privacy policy if the table is empty
+    # Seed default legal policies if the table is empty
     try:
         from backend.app.db.session import SessionLocal
         from backend.app.services.legal_service import LegalService
         with SessionLocal() as db:
             LegalService.seed_default_privacy_policy(db)
+            LegalService.seed_default_terms_of_service(db)
     except Exception as e:
-        logger.warning("Could not seed privacy policy: %s", str(e))
+        logger.warning("Could not seed legal policies: %s", str(e))
 
 
 @app.get("/")
 def read_root():
     """Root endpoint"""
-    return {"message": "HireMate API", "version": "1.0.0"}
+    return {"message": "OpsBrain API", "version": "1.0.0"}
 
 
 @app.get("/health")

@@ -30,9 +30,11 @@ class Profile(Base):
 
     experiences = Column(JSON, default=list)
     educations = Column(JSON, default=list)
-    tech_skills = Column(JSON, default=list)
-    soft_skills = Column(JSON, default=list)
+    tech_skills = Column(JSON, default=list)  # Deprecated, use skill_categories
+    soft_skills = Column(JSON, default=list)  # Deprecated, use skill_categories
+    skill_categories = Column(JSON, default=list)  # New flexible skills structure
     projects = Column(JSON, default=list)
+    custom_sections = Column(JSON, default=list)  # User-defined sections
     preferences = Column(JSON, default=dict)
     links = Column(JSON, default=dict)
 
