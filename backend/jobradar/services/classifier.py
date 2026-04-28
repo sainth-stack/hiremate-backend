@@ -22,17 +22,53 @@ class ScoreResponse(BaseModel):
     suggestions: list[str]  # Actionable advice for optimization
 
 
+class InterviewEventData(BaseModel):
+    event_type: str
+    title: str
+    scheduled_at: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    format: Optional[str] = None
+    meeting_link: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class HRContactData(BaseModel):
+    name: str
+    email: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    title: Optional[str] = None
+
+
+class CompanySignals(BaseModel):
+    domain: Optional[str] = None
+    industry: Optional[str] = None
+    size_range: Optional[str] = None
+    hq_location: Optional[str] = None
+    tech_stack: list[str] = []
+
+
+class SalaryRange(BaseModel):
+    min: Optional[int] = None
+    max: Optional[int] = None
+    currency: Optional[str] = None
+
+
 class ClassifierOutput(BaseModel):
     is_job_related: bool
     company: Optional[str] = None
     role: Optional[str] = None
     platform: Optional[str] = None
     status: Optional[str] = None
+    stage_type: Optional[str] = None
     interview_date: Optional[str] = None
     next_action: Optional[str] = None
     confidence: float = 0.0
     summary: Optional[str] = None
     interview_process: Optional[str] = None
+    interview_events: list[InterviewEventData] = []
+    hr_contacts: list[HRContactData] = []
+    company_signals: Optional[CompanySignals] = None
+    salary_range: Optional[SalaryRange] = None
 
 
 class JDClassificationOutput(BaseModel):

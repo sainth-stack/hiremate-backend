@@ -153,6 +153,50 @@ def get_current_user_profile(
     )
 
 
+@router.patch("/profile")
+def update_user_profile(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update user profile fields for salary estimation.
+    Accepts: years_of_experience, skills (array), current_location, current_salary, target_salary_min.
+    """
+    if "years_of_experience" in payload:
+        current_user.years_of_experience = payload["years_of_experience"]
+    
+    if "skills" in payload:
+        if isinstance(payload["skills"], list):
+            current_user.skills = payload["skills"]
+        else:
+            raise HTTPException(status_code=400, detail="skills must be an array")
+    
+    if "current_location" in payload:
+        current_user.current_location = payload["current_location"]
+    
+    if "current_salary" in payload:
+        current_user.current_salary = payload["current_salary"]
+    
+    if "target_salary_min" in payload:
+        current_user.target_salary_min = payload["target_salary_min"]
+    
+    db.commit()
+    db.refresh(current_user)
+    
+    return {
+        "success": True,
+        "message": "Profile updated successfully",
+        "profile": {
+            "years_of_experience": current_user.years_of_experience,
+            "skills": current_user.skills,
+            "current_location": current_user.current_location,
+            "current_salary": current_user.current_salary,
+            "target_salary_min": current_user.target_salary_min,
+        }
+    }
+
+
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_access_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
