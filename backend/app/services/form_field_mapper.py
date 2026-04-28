@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
 from datetime import datetime
 from typing import Any
+
 from backend.app.core.config import settings
+from backend.app.core.logging_config import get_logger
 from backend.app.services.field_normalization import FieldNormalizationService
 from backend.jobradar.services.llm_factory import LLMFactory
+
+logger = get_logger("form_field_mapper")
 _MAP_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 MAP_PROMPT = """You are an expert job application autofill assistant with natural language generation capabilities.
