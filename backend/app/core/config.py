@@ -152,15 +152,6 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-# --- Constants (non-env, business config) ---
-
-# Payment: plan_id -> amount in paise (1 INR = 100 paise)
-PLAN_AMOUNTS: dict[str, int] = {
-    "daily": 9900,   # ₹99
-    "weekly": 39900,  # ₹399
-    "monthly": 99900, # ₹999
-}
-
 # Job description scraper
 FRAME_SEP: str = "<!--FRAME_SEP-->"
 MAX_HTML_BYTES: int = 2_000_000

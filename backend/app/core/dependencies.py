@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
-from backend.app.db.session import SessionLocal
+from backend.app.db.session import SessionLocal, get_db
 from backend.app.models.user import User
 
 security = HTTPBearer(auto_error=False)
@@ -28,15 +28,6 @@ def verify_token(token: str, db: Session) -> User | None:
         return user
     except (JWTError, ValueError):
         return None
-
-
-def get_db() -> Session:
-    """Get database session"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def get_current_user(

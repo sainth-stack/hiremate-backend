@@ -7,16 +7,28 @@ import razorpay
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from backend.app.core.config import settings, PLAN_AMOUNTS
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+from backend.app.core.config import settings
 from backend.app.core.dependencies import get_current_user
+from backend.app.db.session import get_db
 from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
+from backend.app.models.subscription_plan import SubscriptionPlan
 
 logger = get_logger("api.payment")
 router = APIRouter()
 
+@router.get("/plans")
+def list_public_plans(db: Session = Depends(get_db)):
+    """List all active subscription plans for the pricing page."""
+    plans = db.query(SubscriptionPlan).filter(SubscriptionPlan.is_active == True).all()
+    # Sort by amount to show Free -> Pro -> Elite
+    plans.sort(key=lambda p: p.amount)
+    return {"data": plans}
+
 class CreateOrderRequest(BaseModel):
-    plan_id: str  # daily | weekly | monthly
+    plan_id: str  # pro | elite
 
 
 class CreateOrderResponse(BaseModel):
@@ -37,19 +49,30 @@ class VerifyPaymentRequest(BaseModel):
 def create_order(
     body: CreateOrderRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Create a Razorpay order for the given plan. Returns order_id for frontend checkout."""
+    print("Settings razorpay_key_id", settings.razorpay_key_id)
+    print("Settings razorpay_key_secret", settings.razorpay_key_secret)
     if not settings.razorpay_key_id or not settings.razorpay_key_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Payment gateway is not configured",
         )
 
-    amount = PLAN_AMOUNTS.get(body.plan_id)
-    if not amount:
+    # Fetch plan from DB
+    plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == body.plan_id).first()
+    if not plan or not plan.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid plan_id: {body.plan_id}. Use: daily, weekly, monthly",
+            detail=f"Invalid or inactive plan_id: {body.plan_id}",
+        )
+
+    amount = plan.amount
+    if amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot create payment order for free plan",
         )
 
     try:
@@ -98,6 +121,7 @@ def create_order(
 def verify_payment(
     body: VerifyPaymentRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Verify Razorpay payment signature. Call after successful payment on frontend."""
     if not settings.razorpay_key_id or not settings.razorpay_key_secret:
@@ -106,10 +130,12 @@ def verify_payment(
             detail="Payment gateway is not configured",
         )
 
-    if body.plan_id not in PLAN_AMOUNTS:
+    # Fetch plan from DB
+    plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == body.plan_id).first()
+    if not plan or not plan.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid plan_id: {body.plan_id}",
+            detail=f"Invalid or inactive plan_id: {body.plan_id}",
         )
 
     try:
@@ -132,11 +158,27 @@ def verify_payment(
             current_user.id,
         )
 
-        # TODO: Store subscription in DB, grant plan access
+        # Update user subscription in DB
+        expiry_date = datetime.utcnow() + timedelta(days=30)
+        current_user.subscription_plan = body.plan_id
+        current_user.subscription_expiry = expiry_date
+        current_user.last_payment_id = body.razorpay_payment_id
+        
+        db.commit()
+        db.refresh(current_user)
+
+        logger.info(
+            "User %s upgraded to %s until %s",
+            current_user.email,
+            body.plan_id,
+            expiry_date
+        )
+
         return {
             "success": True,
-            "message": "Payment verified successfully",
+            "message": f"Successfully subscribed to {body.plan_id} plan",
             "plan_id": body.plan_id,
+            "expiry_date": expiry_date.isoformat(),
             "payment_id": body.razorpay_payment_id,
         }
     except razorpay.errors.SignatureVerificationError as e:

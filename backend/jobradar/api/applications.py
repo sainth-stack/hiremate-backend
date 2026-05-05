@@ -124,6 +124,8 @@ def get_application(
     return app
 
 
+from backend.app.services.usage_service import check_feature_limit
+
 @router.post("")
 def create_application(
     payload: dict,
@@ -131,6 +133,10 @@ def create_application(
     db: Session = Depends(get_db),
 ):
     """Manually add a new application to the tracker."""
+    allowed, message = check_feature_limit(db, current_user, "job_tracking")
+    if not allowed:
+        raise HTTPException(status_code=403, detail=message)
+
     new_app = Application(
         user_id=current_user.id,
         company=payload.get("company"),
@@ -163,6 +169,9 @@ def create_application_from_jd(
     Extracts company and role from a JD using AI, then creates an application.
     Also enriches company profile if domain can be extracted.
     """
+    allowed, message = check_feature_limit(db, current_user, "job_tracking")
+    if not allowed:
+        raise HTTPException(status_code=403, detail=message)
     import re
     from urllib.parse import urlparse
     
