@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from backend.app.api.v1.activity import router as activity_router
 from backend.app.api.v1.admin import router as admin_router
+from backend.app.api.v1.admin.plans import router as admin_plans_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.chrome_extension.routes import router as chrome_extension_router
 from backend.app.api.v1.dashboard import router as dashboard_router
@@ -75,6 +76,73 @@ def _advance_history_ids_on_startup():
         db.close()
 
 
+def _seed_subscription_plans():
+    """Seed initial subscription plans if the table is empty."""
+    from backend.app.db.session import SessionLocal
+    from backend.app.models.subscription_plan import SubscriptionPlan
+    db = SessionLocal()
+    try:
+        count = db.query(SubscriptionPlan).count()
+        if count == 0:
+            logger.info("STARTUP: Seeding default subscription plans...")
+            plans = [
+                SubscriptionPlan(
+                    id="free",
+                    name="Free",
+                    description="Basic plan for individuals",
+                    amount=0,
+                    resume_slots=1,
+                    ai_tailor_credits=5,
+                    ats_match_checks=3,
+                    job_tracking=10,
+                    features=[
+                        "Basic Design Templates",
+                        "Email Support"
+                    ]
+                ),
+                SubscriptionPlan(
+                    id="pro",
+                    name="Pro",
+                    description="Professional plan for serious job seekers",
+                    amount=49900,  # ₹499
+                    resume_slots=5,
+                    ai_tailor_credits=999999,
+                    ats_match_checks=999999,
+                    job_tracking=50,
+                    features=[
+                        "Premium Design Kit",
+                        "Chrome Extension Access",
+                        "Priority Email Support"
+                    ]
+                ),
+                SubscriptionPlan(
+                    id="elite",
+                    name="Elite",
+                    description="The ultimate plan for maximum success",
+                    amount=99900,  # ₹999
+                    resume_slots=999999,
+                    ai_tailor_credits=999999,
+                    ats_match_checks=999999,
+                    job_tracking=999999,
+                    features=[
+                        "AI Mock Interviews",
+                        "Priority AI Processing",
+                        "24/7 Priority Support",
+                        "Advanced Analytics"
+                    ]
+                ),
+            ]
+            db.add_all(plans)
+            db.commit()
+            logger.info("STARTUP: Successfully seeded %d plans", len(plans))
+    except Exception as e:
+        logger.warning("Could not seed subscription plans: %s", str(e))
+        db.rollback()
+    finally:
+        db.close()
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: verify DB + start scheduler. Shutdown: stop scheduler."""
@@ -133,6 +201,7 @@ app.include_router(dashboard_router, prefix="/api")
 app.include_router(chrome_extension_router, prefix="/api")
 app.include_router(activity_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
+app.include_router(admin_plans_router, prefix="/api/admin")
 app.include_router(legal_router, prefix="/api", tags=["legal"])
 app.include_router(issues_router, prefix="/api", tags=["issues"])
 app.include_router(company_search_router, prefix="/api")
@@ -177,6 +246,10 @@ async def on_startup():
             LegalService.seed_default_terms_of_service(db)
     except Exception as e:
         logger.warning("Could not seed legal policies: %s", str(e))
+
+    # Seed subscription plans
+    _seed_subscription_plans()
+
 
 
 @app.get("/")

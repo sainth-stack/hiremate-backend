@@ -27,6 +27,11 @@ class User(Base):
     is_active = Column(Integer, default=1)
     is_admin = Column(Boolean, default=False, nullable=False)
     
+    # Subscription fields
+    subscription_plan = Column(String(50), default="free", nullable=False)
+    subscription_expiry = Column(DateTime, nullable=True)
+    last_payment_id = Column(String(100), nullable=True)
+    
     # User profile fields for salary estimation
     years_of_experience = Column(Integer, nullable=True)
     skills = Column(JSON, nullable=True)  # Array of skill strings

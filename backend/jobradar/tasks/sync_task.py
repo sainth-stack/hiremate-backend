@@ -275,6 +275,14 @@ def sync_user_emails(user_id: int, from_date: str = None, to_date: str = None):
                         continue
 
                 # AI classification
+                if not is_tracked:
+                    from backend.app.services.usage_service import check_feature_limit
+                    allowed, msg = check_feature_limit(db, user, "job_tracking")
+                    if not allowed:
+                        if i % 10 == 0:
+                            _update_progress(db, user_id, parsed_count, ai_count, ai_success_count)
+                        continue
+
                 ai_count += 1
                 _update_progress(db, user_id, parsed_count, ai_count, ai_success_count)
 

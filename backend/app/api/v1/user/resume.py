@@ -33,6 +33,7 @@ from backend.app.services.resume_service import (
 )
 from backend.app.services.s3_service import upload_file_to_s3
 from backend.app.services.tailor_context_store import get_and_clear_tailor_context
+from backend.app.services.usage_service import check_feature_limit
 
 logger = get_logger("api.user.resume")
 router = APIRouter()
@@ -236,6 +237,17 @@ def generate_resume(
     Returns resume_id, resume_url, presigned_url, resume_name, resume_text (for edit popup).
     When resume_id is provided, creates a new version record (tailor-more flow).
     """
+    # Check plan limits before generation
+    if not payload.resume_id:
+        allowed, message = check_feature_limit(db, current_user, "resume_slots")
+        if not allowed:
+            raise HTTPException(status_code=403, detail=message)
+    
+    # AI tailoring always costs a credit (or check if allowed)
+    allowed_ai, msg_ai = check_feature_limit(db, current_user, "ai_tailor_credits")
+    if not allowed_ai:
+        raise HTTPException(status_code=403, detail=msg_ai)
+
     try:
         result = generate_resume_html(
             db=db,
@@ -741,6 +753,10 @@ async def upload_resume(
         - **resumeLastUpdated**: ISO 8601 timestamp
         - **profile**: Full profile data as stored in DB
     """
+    allowed, message = check_feature_limit(db, current_user, "resume_slots")
+    if not allowed:
+        raise HTTPException(status_code=403, detail=message)
+
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         logger.warning(

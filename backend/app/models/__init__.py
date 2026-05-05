@@ -22,3 +22,4 @@ from backend.jobradar.models.application import Application, StatusHistory, Sync
 from backend.jobradar.models.nudge import Nudge
 from backend.jobradar.models.mock_interview import MockInterviewQuestion, MockInterviewSession, MockInterviewAnswer
 from backend.jobradar.models.briefing import CompanyBriefing
+from backend.app.models.subscription_plan import SubscriptionPlan

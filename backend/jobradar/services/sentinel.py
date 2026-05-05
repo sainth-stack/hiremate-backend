@@ -134,6 +134,14 @@ def process_push_notification(email_address: str, history_id: str):
                     print(f"SENTINEL: Skipping non-job email in thread {thread_id} (No keywords matched and not tracked).")
                     continue
 
+                # Check plan limits for new job tracking
+                if not is_tracked:
+                    from backend.app.services.usage_service import check_feature_limit
+                    allowed, msg = check_feature_limit(db, user, "job_tracking")
+                    if not allowed:
+                        print(f"SENTINEL: Limit reached for {email_address}. Skipping new job classification: {msg}")
+                        continue
+
                 # 6. Fetch all messages in this thread
                 messages = get_thread_messages(creds, thread_id)
                 if not messages:
