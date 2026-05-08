@@ -917,6 +917,9 @@ class CareerPageScraper(BaseATSScraper):
             **funnel_meta,
         }
         out = self.dedupe_jobs(jobs)
+        role_q = (role or "").strip()
+        if role_q:
+            out = [j for j in out if self.role_matches(j.role, role_q)]
         loc = (location or "").strip()
         if loc:
             out = [j for j in out if self.location_matches(j.location, loc)]
