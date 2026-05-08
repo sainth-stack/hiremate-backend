@@ -65,7 +65,9 @@ class GPTProvider(LLMProvider):
         user_id: int = None,
         email: str = None,
         feature: str = None,
-        json_mode: bool = False
+        json_mode: bool = False,
+        temperature: float = None,
+        max_tokens: int = None
     ) -> str:
         messages = []
         if system:
@@ -78,6 +80,10 @@ class GPTProvider(LLMProvider):
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
 
         response = self._client.chat.completions.create(**kwargs)
         

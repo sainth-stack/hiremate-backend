@@ -55,10 +55,23 @@ const HIREMATE_ORIGINS = [
 const DB_VERSION = 2;
 const STORE_NAME = "resume";
 const LOG_PREFIX = "[Autofill][background]";
+const DEFAULT_APP_ORIGIN = "https://opsbrainai.com";
 
 function logInfo(message, meta) {
   if (meta !== undefined) console.info(LOG_PREFIX, message, meta);
   else console.info(LOG_PREFIX, message);
+}
+
+async function configureUninstallFeedbackUrl() {
+  try {
+    const { loginPageUrl } = await chrome.storage.local.get(["loginPageUrl"]);
+    const baseOrigin = loginPageUrl ? new URL(loginPageUrl).origin : DEFAULT_APP_ORIGIN;
+    const uninstallUrl = `${baseOrigin}/extension/uninstall?source=chrome_extension`;
+    await chrome.runtime.setUninstallURL(uninstallUrl);
+    logInfo("Configured uninstall feedback URL", { uninstallUrl });
+  } catch (error) {
+    logInfo("Failed to configure uninstall feedback URL", { error: String(error) });
+  }
 }
 
 function openDB() {
@@ -657,7 +670,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  // Optional: set default profile keys so popup can show placeholders
+  configureUninstallFeedbackUrl();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  configureUninstallFeedbackUrl();
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.loginPageUrl) {
+    configureUninstallFeedbackUrl();
+  }
 });
 
 // Handle extension icon click (when popup is not used)

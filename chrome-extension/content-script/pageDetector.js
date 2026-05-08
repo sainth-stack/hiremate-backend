@@ -33,12 +33,22 @@ class PageDetector {
         /paylocity\.com\/.+\/careers\//,
         // Job boards
         /linkedin\.com\/jobs\/view\//,
+        /linkedin\.com\/jobs\/collections/,
         /indeed\.com\/viewjob/,
+        /indeed\.com\/.*\/job\//,
         /glassdoor\.com\/job-listing/,
         /monster\.com\/job-openings/,
         /ziprecruiter\.com\/jobs\//,
         /dice\.com\/job/,
         /simplyhired\.com\/job/,
+        // Naukri - Indian job portal
+        /naukri\.com\/job-listings/,
+        /naukri\.com\/.*\/job-/,
+        /naukri\.com\/.*\/jd-/,
+        /hirist\.com\/jobs\//,
+        /shine\.com\/jobs\//,
+        /timesjobs\.com\/candidate\/job-detail/,
+        /foundit\.in\/.*\/job/,
         // Generic career / apply paths (covers custom company career pages)
         /careers\./,
         /\/jobs?\//,
@@ -48,6 +58,8 @@ class PageDetector {
         /\/job-openings\//,
         /\/opportunities\//,
         /\/positions\//,
+        /\/job-details\//,
+        /\/vacancies\//,
       ],
       domSignals: [
         { selector: 'input[type="file"][accept*="pdf"]', weight: 3 },

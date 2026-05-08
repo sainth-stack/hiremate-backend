@@ -2,7 +2,7 @@
 Schemas for Company Job Search feature.
 """
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -17,16 +17,19 @@ class JobCorpusItem(BaseModel):
     url: str
     description: Optional[str] = None
     remote: bool
+    salary_min: Optional[int] = None
+    salary_max: Optional[int] = None
     posted_at: Optional[datetime] = None
     source: str
     created_at: datetime
+    match_data: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
 
 
 class JobCorpusPage(BaseModel):
-    items: List[JobCorpusItem]
+    items: List[JobCorpusItem | Dict[str, Any]]
     total: int
     page: int
     page_size: int

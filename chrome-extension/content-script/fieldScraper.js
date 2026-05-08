@@ -240,15 +240,50 @@
       }
       return humanize(aid.replace(/^(input|select|textbox|widget|form|field)[-_]?/,""));
     }
-    // 6. Question wrapper (Greenhouse/Lever/Ashby)
+    // 6. Question wrapper (Greenhouse/Lever/Ashby) + aggressive parent search for textareas
     const qw = canonical.closest(
       ".application-question,.form-group,.question,.field-wrapper," +
       "[class*='field-group'],[class*='fieldGroup'],[class*='form-field']," +
-      "[class*='application-field'],[class*='custom-question']"
+      "[class*='application-field'],[class*='custom-question']," +
+      "li,div[class*='field'],div[class*='question']"  // Added more generic wrappers
     );
     if (qw) {
       const ql = qw.querySelector(".question-text,.application-label,.field-label,label,.label,legend,[class*='label'],[class*='Label']");
       if (ql?.textContent?.trim()) return cleanLabel(ql.textContent);
+      
+      // ENHANCED: For textarea/richtext fields, aggressively search parent container for question text
+      if (canonical.tagName.toLowerCase() === "textarea" || canonical.isContentEditable) {
+        // Look for any heading or text content in the wrapper that precedes the field
+        const headings = qw.querySelectorAll("h1,h2,h3,h4,h5,h6,p,div[class*='text'],div[class*='title']");
+        for (const h of headings) {
+          const txt = h.textContent?.trim();
+          // Valid question if: has text, is before field, reasonable length, looks like a question
+          if (txt && txt.length > 10 && txt.length < 500 && 
+              qw.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING) {
+            // Clean out any nested field text (e.g., input values) 
+            const clone = h.cloneNode(true);
+            clone.querySelectorAll("input,select,textarea,button").forEach(n=>n.remove());
+            const cleanTxt = clone.textContent?.trim();
+            if (cleanTxt && cleanTxt.length > 10) return cleanLabel(cleanTxt);
+          }
+        }
+        
+        // Fallback: grab first substantial text node from parent container (above the field)
+        let parent = canonical.parentElement;
+        for (let i = 0; i < 3 && parent; i++) {
+          const clone = parent.cloneNode(true);
+          // Remove the field itself and all other fields to isolate question text
+          clone.querySelectorAll("input,select,textarea,button,[contenteditable]").forEach(n=>n.remove());
+          const txt = clone.textContent?.trim();
+          if (txt && txt.length > 15 && txt.length < 500) {
+            // Check if it's not just technical garbage (like field IDs)
+            if (!/^(cards\[|field\d+|[a-f0-9-]{36})/.test(txt.toLowerCase())) {
+              return cleanLabel(txt);
+            }
+          }
+          parent = parent.parentElement;
+        }
+      }
     }
     // 7. placeholder
     for (const t of targets) {
@@ -878,7 +913,9 @@
     }
 
     const platform = detectPlatform(rootDoc);
-    if (platform === "workday") {
+    // Only expand tabs if not explicitly disabled (useful for multi-step wizards where we want current tab only)
+    const shouldExpandTabs = options.expandTabs !== false;
+    if (platform === "workday" && shouldExpandTabs) {
       await expandWorkdayTabsAndSections(rootDoc);
       await new Promise(r => setTimeout(r, 200));
     }

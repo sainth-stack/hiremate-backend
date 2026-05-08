@@ -13,30 +13,56 @@
   // Covers: messaging, InMail, overlay compose, comments, job application fields,
   // post creation. Listed from most-specific to most-generic.
   var COMPOSER_SELECTORS = [
-    // Messaging
+    // LinkedIn - Messaging
     'div.msg-form__contenteditable[contenteditable="true"]',
     'div[contenteditable="true"].msg-form__contenteditable',
     'div[role="textbox"][aria-label*="message" i]',
     'div[role="textbox"][aria-label*="Write" i]',
     'div[contenteditable="true"].msg-overlay-conversation-bubble__content-wrapper',
-    // Replies to comments (more specific — must come before generic comment selectors)
+    // LinkedIn - Replies to comments (more specific — must come before generic comment selectors)
     'div[role="textbox"][aria-label*="reply" i]',
     'div[role="textbox"][aria-placeholder*="reply" i]',
     '.comments-reply-texteditor div[contenteditable="true"]',
     '.comments-reply-box div[contenteditable="true"]',
-    // Comments on posts
+    // LinkedIn - Comments on posts
     'div[role="textbox"][aria-label*="comment" i]',
     'div[role="textbox"][aria-placeholder*="comment" i]',
     '.comments-comment-texteditor div[contenteditable="true"]',
     '.comments-comment-box--cr div[contenteditable="true"]',
     '.comments-comment-box div[contenteditable="true"]',
-    // Job application forms (Easy Apply)
+    // LinkedIn - Job application forms (Easy Apply)
     '.jobs-easy-apply-content textarea',
     '.jobs-easy-apply-content div[contenteditable="true"]',
     '.application-outlet textarea',
-    // Post / article creation
+    // LinkedIn - Post / article creation
     '.share-creation-state div[role="textbox"]',
     '.share-box-feed-entry__trigger-container div[contenteditable="true"]',
+    // Naukri - Job application forms
+    'textarea[name*="question"]',
+    'textarea[name*="answer"]',
+    'textarea[id*="question"]',
+    'textarea[id*="answer"]',
+    'textarea[placeholder*="Type your answer"]',
+    'textarea[placeholder*="Enter"]',
+    // Greenhouse - Job application forms
+    'textarea[name*="question"]',
+    'textarea[id*="question"]',
+    'div[contenteditable="true"][data-qa*="question"]',
+    // Workday - Job application forms
+    'textarea[data-automation-id*="formField"]',
+    'div[contenteditable="true"][data-automation-id*="formField"]',
+    'textarea[aria-label]',
+    // Lever - Job application forms
+    'textarea[name*="answer"]',
+    'textarea[class*="application"]',
+    // Generic job application textarea fields (very common pattern)
+    'textarea[name*="cover"]',
+    'textarea[placeholder*="Why"]',
+    'textarea[placeholder*="Tell us"]',
+    'textarea[placeholder*="Describe"]',
+    'textarea[placeholder*="Explain"]',
+    'textarea[aria-label*="question" i]',
+    'textarea[aria-label*="answer" i]',
     // Generic — catches remaining inputs not matched above
     'div[role="textbox"][contenteditable="true"]',
     'textarea',
@@ -48,12 +74,59 @@
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
+  function isJobSiteOrLinkedIn() {
+    const hostname = location.hostname.toLowerCase();
+    const pathname = location.pathname.toLowerCase();
+    
+    // LinkedIn
+    if (hostname.includes("linkedin.com")) return true;
+    
+    // Naukri
+    if (hostname.includes("naukri.com")) return true;
+    
+    // Indeed
+    if (hostname.includes("indeed.com")) return true;
+    
+    // Monster
+    if (hostname.includes("monster.com")) return true;
+    
+    // Glassdoor
+    if (hostname.includes("glassdoor.com")) return true;
+    
+    // ZipRecruiter
+    if (hostname.includes("ziprecruiter.com")) return true;
+    
+    // Dice
+    if (hostname.includes("dice.com")) return true;
+    
+    // ATS platforms
+    if (hostname.includes("greenhouse.io") || 
+        hostname.includes("workday.com") || 
+        hostname.includes("myworkdayjobs.com") ||
+        hostname.includes("lever.co") ||
+        hostname.includes("smartrecruiters.com") ||
+        hostname.includes("ashbyhq.com") ||
+        hostname.includes("taleo.net") ||
+        hostname.includes("icims.com") ||
+        hostname.includes("jobvite.com") ||
+        hostname.includes("successfactors.com") ||
+        hostname.includes("bamboohr.com")) return true;
+    
+    // Generic career/jobs pages
+    if (pathname.includes("/jobs") || 
+        pathname.includes("/careers") || 
+        pathname.includes("/apply") ||
+        pathname.includes("/application")) return true;
+    
+    return false;
+  }
+
   function isLinkedInMessagingPage() {
     return location.hostname.includes("linkedin.com");
   }
 
   function startColdEmailModule() {
-    if (!location.hostname.includes("linkedin.com")) return;
+    if (!isJobSiteOrLinkedIn()) return;
     if (_active) { _attachToComposers(); return; }
     _active = true;
     _startObserver();
@@ -99,6 +172,28 @@
 
   // Returns true for elements that should never get the brain icon
   function _shouldSkipElement(el) {
+    // Skip captcha fields
+    var name = (el.getAttribute("name") || "").toLowerCase();
+    var id = (el.getAttribute("id") || "").toLowerCase();
+    if (name.includes("captcha") || name.includes("recaptcha") ||
+        id.includes("captcha") || id.includes("recaptcha")) {
+      return true;
+    }
+    
+    // Skip hidden fields
+    if (el.type === "hidden") return true;
+    
+    // Skip token/CSRF fields
+    if (name.includes("token") || name.includes("csrf") || name.includes("_token")) {
+      return true;
+    }
+    
+    // Skip verification/challenge fields
+    if (name.includes("verification") || name.includes("challenge") ||
+        name.endsWith("-response") || id.endsWith("-response")) {
+      return true;
+    }
+    
     // Skip search boxes
     var ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
     if (ariaLabel.includes("search")) return true;
@@ -136,7 +231,7 @@
   }
 
   // ── Context detection ──────────────────────────────────────────────────────
-  // Returns: "message" | "comment" | "job" | "general"
+  // Returns: "message" | "comment" | "reply" | "job" | "general"
 
   function _detectFieldContext(composer) {
     var ariaLabel = (
@@ -144,6 +239,22 @@
       composer.getAttribute("aria-placeholder") ||
       composer.getAttribute("placeholder") || ""
     ).toLowerCase();
+    var fieldName = (composer.getAttribute("name") || "").toLowerCase();
+    var fieldId = (composer.getAttribute("id") || "").toLowerCase();
+    
+    // Check for job-related attributes first (highest priority)
+    if (ariaLabel.includes("question") || ariaLabel.includes("answer") ||
+        ariaLabel.includes("why") || ariaLabel.includes("tell us") ||
+        ariaLabel.includes("describe") || ariaLabel.includes("explain") ||
+        ariaLabel.includes("cover letter") || ariaLabel.includes("application")) return "job";
+    
+    if (fieldName.includes("question") || fieldName.includes("answer") ||
+        fieldName.includes("cover") || fieldName.includes("application")) return "job";
+    
+    if (fieldId.includes("question") || fieldId.includes("answer") ||
+        fieldId.includes("cover") || fieldId.includes("application")) return "job";
+    
+    // Check for LinkedIn/messaging context
     if (ariaLabel.includes("reply")) return "reply";
     if (ariaLabel.includes("comment") || ariaLabel.includes("add a comment")) return "comment";
     if (ariaLabel.includes("message") || ariaLabel.includes("write a message")) return "message";
@@ -153,21 +264,34 @@
     for (var i = 0; i < 15; i++) {
       if (!el) break;
       var cls = (el.className || "").toString().toLowerCase();
+      // Check for job application containers first
+      if (cls.includes("application") || cls.includes("job-form") ||
+          cls.includes("apply") || cls.includes("question")) return "job";
+      // LinkedIn-specific job apply
+      if (cls.includes("jobs-easy-apply") || cls.includes("application-outlet") ||
+          cls.includes("easy-apply") || cls.includes("job-application")) return "job";
+      // Messaging
       if (cls.includes("msg-form") || cls.includes("msg-overlay") || cls.includes("msg-compose") ||
           cls.includes("messaging-thread") || el.id && el.id.includes("msg-")) return "message";
+      // Comments/Replies
       if (cls.includes("comments-reply") || cls.includes("reply-texteditor") ||
           cls.includes("replies-list") || cls.includes("create-reply") ||
           cls.includes("reply-box")) return "reply";
       if (cls.includes("comments-comment") || cls.includes("comment-texteditor") ||
           cls.includes("comment-box") || cls.includes("comments-text-editor")) return "comment";
-      if (cls.includes("jobs-easy-apply") || cls.includes("application-outlet") ||
-          cls.includes("easy-apply") || cls.includes("job-application")) return "job";
+      // Post creation
       if (cls.includes("share-creation-state") || cls.includes("share-box-feed-entry")) return "general";
       el = el.parentElement;
     }
 
+    // URL-based detection as final fallback
     if (location.pathname.startsWith("/messaging")) return "message";
-    if (location.pathname.includes("/jobs/")) return "job";
+    if (location.pathname.includes("/job") || location.pathname.includes("/apply") ||
+        location.pathname.includes("/application") || location.pathname.includes("/career")) return "job";
+    
+    // Default: if it's a textarea on a job site, assume it's for job application
+    if (composer.tagName === "TEXTAREA" && !location.pathname.includes("/feed")) return "job";
+    
     return "general";
   }
 
@@ -240,49 +364,252 @@
   }
 
   function _scrapeJobContext(composer) {
-    // Field label
+    // ────────────────────────────────────────────────────────────────────────
+    // PRECISION FIELD LABEL EXTRACTION
+    // Only get the label for THIS specific field, not other fields on the page
+    // ────────────────────────────────────────────────────────────────────────
     var fieldLabel = "";
+    
+    // Helper: Clean text
+    function cleanText(text) {
+      if (!text) return "";
+      return text.replace(/\*/g, "").replace(/\(required\)/gi, "").replace(/\s+/g, " ").trim();
+    }
+    
+    // Helper: Is this a valid question/label?
+    function isValidLabel(text) {
+      if (!text || text.length < 3 || text.length > 500) return false;
+      // Filter out technical identifiers
+      if (/^[a-z_]+\[[0-9a-f-]+\]/.test(text)) return false;
+      if (/^[a-z_]+_[a-z_]+_\d+$/.test(text)) return false;
+      if (/^\w+\[\d+\]$/.test(text)) return false;
+      return true;
+    }
+    
+    console.log("[HM] Scraping label for field:", {
+      tag: composer.tagName,
+      id: composer.getAttribute("id"),
+      name: composer.getAttribute("name"),
+      placeholder: composer.getAttribute("placeholder")
+    });
+    
+    // ────────────────────────────────────────────────────────────────────────
+    // STRATEGY 1: Direct label with for= attribute (highest priority)
+    // ────────────────────────────────────────────────────────────────────────
     var id = composer.getAttribute("id");
     if (id) {
-      var lbl = document.querySelector('label[for="' + id + '"]');
-      if (lbl) fieldLabel = lbl.textContent.trim();
-    }
-    if (!fieldLabel) {
-      fieldLabel =
-        composer.getAttribute("aria-label") ||
-        composer.getAttribute("placeholder") ||
-        composer.getAttribute("name") || "";
-    }
-    if (!fieldLabel) {
-      var anc = composer.parentElement;
-      for (var i = 0; i < 6; i++) {
-        if (!anc) break;
-        var lel = anc.querySelector("label, h3, h4, legend, span.jobs-easy-apply-form-section__grouping");
-        if (lel && !lel.contains(composer)) { fieldLabel = lel.textContent.trim(); break; }
-        anc = anc.parentElement;
+      var labelFor = document.querySelector('label[for="' + id + '"]');
+      if (labelFor) {
+        var text = cleanText(labelFor.textContent);
+        if (isValidLabel(text)) {
+          fieldLabel = text;
+          console.log("[HM] Found label via for=:", fieldLabel);
+          return buildContext(fieldLabel);
+        }
       }
     }
+    
+    // ────────────────────────────────────────────────────────────────────────
+    // STRATEGY 2: aria-label / aria-labelledby
+    // ────────────────────────────────────────────────────────────────────────
+    var ariaLabel = composer.getAttribute("aria-label");
+    if (ariaLabel && isValidLabel(ariaLabel)) {
+      fieldLabel = cleanText(ariaLabel);
+      console.log("[HM] Found label via aria-label:", fieldLabel);
+      return buildContext(fieldLabel);
+    }
+    
+    var ariaLabelledBy = composer.getAttribute("aria-labelledby");
+    if (ariaLabelledBy) {
+      var labelEl = document.getElementById(ariaLabelledBy);
+      if (labelEl) {
+        var text = cleanText(labelEl.textContent);
+        if (isValidLabel(text)) {
+          fieldLabel = text;
+          console.log("[HM] Found label via aria-labelledby:", fieldLabel);
+          return buildContext(fieldLabel);
+        }
+      }
+    }
+    
+    // ────────────────────────────────────────────────────────────────────────
+    // STRATEGY 3: Look in IMMEDIATE parent container only (max 3 levels up)
+    // This prevents picking up labels from other fields on the page
+    // ────────────────────────────────────────────────────────────────────────
+    var container = composer.parentElement;
+    var levelCount = 0;
+    var bestCandidate = null;
+    var bestScore = 0;
+    
+    while (container && levelCount < 3) {
+      // Get all text-bearing elements in THIS container only
+      var children = container.children;
+      
+      for (var i = 0; i < children.length; i++) {
+        var child = children[i];
+        
+        // Skip if this element contains the composer (it's a wrapper)
+        if (child.contains(composer) && child !== composer) continue;
+        
+        var text = cleanText(child.textContent);
+        if (!isValidLabel(text)) continue;
+        
+        // Score this candidate
+        var score = 0;
+        var tag = child.tagName.toLowerCase();
+        
+        // Tag-based scoring
+        if (tag === "label") score += 100;
+        if (tag.match(/^h[1-6]$/)) score += 80;
+        if (tag === "legend") score += 90;
+        if (tag === "p" || tag === "div" || tag === "span") score += 20;
+        
+        // Content-based scoring
+        if (text.includes("?")) score += 30;
+        if (/\b(why|what|how|describe|tell|explain|provide)\b/i.test(text)) score += 20;
+        if (text.length > 15 && text.length < 200) score += 10;
+        
+        // Position-based scoring (closer = better)
+        if (levelCount === 0) score += 50; // Same level as composer
+        if (levelCount === 1) score += 30; // One level up
+        if (levelCount === 2) score += 10; // Two levels up
+        
+        // Check if it's a direct sibling (just before the textarea)
+        if (child.nextElementSibling === composer || 
+            child.nextElementSibling?.contains(composer)) {
+          score += 40;
+        }
+        
+        // Penalize if text is too long (likely includes other content)
+        if (text.length > 300) score -= 50;
+        
+        // If this is better than our current best, use it
+        if (score > bestScore && score > 30) { // Minimum score threshold
+          bestScore = score;
+          bestCandidate = text;
+          console.log("[HM] Candidate:", {
+            text: text.slice(0, 60),
+            tag: tag,
+            score: score,
+            level: levelCount
+          });
+        }
+      }
+      
+      // Also check direct text nodes in the container (text not wrapped in elements)
+      var directText = "";
+      for (var j = 0; j < container.childNodes.length; j++) {
+        var node = container.childNodes[j];
+        if (node.nodeType === 3) { // Text node
+          directText += node.textContent;
+        }
+      }
+      directText = cleanText(directText);
+      if (isValidLabel(directText) && directText.length > 10) {
+        var score = 15 + (levelCount === 0 ? 20 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          bestCandidate = directText;
+        }
+      }
+      
+      levelCount++;
+      container = container.parentElement;
+    }
+    
+    if (bestCandidate && bestScore > 30) {
+      fieldLabel = bestCandidate;
+      console.log("[HM] Best candidate selected:", { text: fieldLabel, score: bestScore });
+      return buildContext(fieldLabel);
+    }
+    
+    // ────────────────────────────────────────────────────────────────────────
+    // STRATEGY 4: Check immediate previous sibling only
+    // ────────────────────────────────────────────────────────────────────────
+    var prev = composer.previousElementSibling;
+    if (prev) {
+      var text = cleanText(prev.textContent);
+      if (isValidLabel(text) && text.length > 10 && text.length < 300) {
+        fieldLabel = text;
+        console.log("[HM] Found label via previous sibling:", fieldLabel);
+        return buildContext(fieldLabel);
+      }
+    }
+    
+    // ────────────────────────────────────────────────────────────────────────
+    // STRATEGY 5: Placeholder as last resort (only if it looks like a question)
+    // ────────────────────────────────────────────────────────────────────────
+    var placeholder = composer.getAttribute("placeholder");
+    if (placeholder && isValidLabel(placeholder) && 
+        (placeholder.includes("?") || placeholder.length > 20)) {
+      fieldLabel = cleanText(placeholder);
+      console.log("[HM] Using placeholder as fallback:", fieldLabel);
+      return buildContext(fieldLabel);
+    }
+    
+    // ────────────────────────────────────────────────────────────────────────
+    // FALLBACK: Generic message
+    // ────────────────────────────────────────────────────────────────────────
+    console.log("[HM] No label found, using fallback");
+    fieldLabel = "Please provide your answer for this question";
+    return buildContext(fieldLabel);
+    
+    // ────────────────────────────────────────────────────────────────────────
+    // Helper: Build complete context object
+    // ────────────────────────────────────────────────────────────────────────
+    function buildContext(label) {
+      var jobTitle = "";
+      var company = "";
+      var jobDescription = "";
+      
+      // LinkedIn selectors
+      var titleEl =
+        document.querySelector(".jobs-unified-top-card__job-title") ||
+        document.querySelector(".job-details-jobs-unified-top-card__job-title") ||
+        document.querySelector("h1.t-24.t-bold");
+      if (titleEl) jobTitle = _firstLine(titleEl.textContent);
 
-    // Job title + company
-    var jobTitle = "";
-    var company = "";
-    var titleEl =
-      document.querySelector(".jobs-unified-top-card__job-title") ||
-      document.querySelector(".job-details-jobs-unified-top-card__job-title") ||
-      document.querySelector("h1.t-24.t-bold");
-    if (titleEl) jobTitle = _firstLine(titleEl.textContent);
+      var companyEl =
+        document.querySelector(".jobs-unified-top-card__company-name") ||
+        document.querySelector(".job-details-jobs-unified-top-card__company-name") ||
+        document.querySelector(".jobs-unified-top-card__subtitle-primary-grouping");
+      if (companyEl) company = _firstLine(companyEl.textContent);
+      
+      // Naukri selectors
+      if (!jobTitle) {
+        titleEl = document.querySelector(".jd-header-title, .job-title, h1.title");
+        if (titleEl) jobTitle = _firstLine(titleEl.textContent);
+      }
+      if (!company) {
+        companyEl = document.querySelector(".jd-header-comp-name, .comp-name, .company-name");
+        if (companyEl) company = _firstLine(companyEl.textContent);
+      }
+      
+      // Generic selectors
+      if (!jobTitle) {
+        titleEl = document.querySelector("h1");
+        if (titleEl) jobTitle = _firstLine(titleEl.textContent);
+      }
+      
+      // Job description
+      var descEl = 
+        document.querySelector(".jobs-description__content") ||
+        document.querySelector("[class*='job-description']") ||
+        document.querySelector(".jd-info");
+      if (descEl) {
+        var descText = descEl.textContent.trim();
+        if (descText.length > 100) {
+          jobDescription = descText.slice(0, 500);
+        }
+      }
 
-    var companyEl =
-      document.querySelector(".jobs-unified-top-card__company-name") ||
-      document.querySelector(".job-details-jobs-unified-top-card__company-name") ||
-      document.querySelector(".jobs-unified-top-card__subtitle-primary-grouping");
-    if (companyEl) company = _firstLine(companyEl.textContent);
-
-    return {
-      fieldLabel: fieldLabel.slice(0, 200),
-      jobTitle: jobTitle.slice(0, 100),
-      company: company.slice(0, 100),
-    };
+      return {
+        fieldLabel: label,
+        jobTitle: jobTitle.slice(0, 150),
+        company: company.slice(0, 150),
+        jobDescription: jobDescription,
+      };
+    }
   }
 
   // ── Floating brain icon ────────────────────────────────────────────────────
@@ -345,6 +672,13 @@
     var existing = document.querySelector(".hm-ce-popup[data-hm-open]");
     if (existing) { existing.remove(); return; }
     var ctx = _detectFieldContext(composer);
+    console.log("[HM] Field context detected:", ctx, {
+      tag: composer.tagName,
+      name: composer.getAttribute("name"),
+      id: composer.getAttribute("id"),
+      placeholder: composer.getAttribute("placeholder"),
+      ariaLabel: composer.getAttribute("aria-label")
+    });
     if (ctx === "reply") {
       _openReplyPopup(icon, composer);
     } else if (ctx === "comment") {
@@ -731,49 +1065,41 @@
 
   // ── Job answer popup ───────────────────────────────────────────────────────
 
-  var JOB_PRESETS = [
-    { label: "Why this role",   text: "Explain why I am the right fit for this specific role" },
-    { label: "Cover letter",    text: "Write a concise cover letter highlighting my most relevant experience" },
-    { label: "Why this company", text: "Explain why I want to work at this specific company" },
-    { label: "Key strengths",   text: "Highlight my top 3 strengths relevant to this job" },
-    { label: "Career goals",    text: "Describe how this role fits into my career goals" },
-    { label: "Biggest achievement", text: "Describe my biggest professional achievement relevant to this role" },
-  ];
-
   function _openJobPopup(icon, composer) {
     var ctx = _scrapeJobContext(composer);
-    var popup = _buildPopupShell(icon, "Fill Application Field");
+    var popup = _buildPopupShell(icon, "AI Answer");
 
-    var presetHtml = JOB_PRESETS.map(function (p) {
-      return '<button class="hm-ce-preset" data-text="' + _esc(p.text) + '">' + _esc(p.label) + "</button>";
-    }).join("");
+    // Show the question/field label prominently
+    var questionHtml = "";
+    if (ctx.fieldLabel) {
+      questionHtml =
+        '<div class="hm-ce-section" style="padding-top:14px;">' +
+          '<div class="hm-ce-section-label">Question</div>' +
+          '<div class="hm-ce-question-text">' + _esc(ctx.fieldLabel) + "</div>" +
+        "</div>";
+    }
 
-    var fieldInfo = "";
-    if (ctx.fieldLabel || ctx.jobTitle) {
-      var infoText = [];
-      if (ctx.fieldLabel) infoText.push("Field: " + _esc(ctx.fieldLabel));
-      if (ctx.jobTitle)   infoText.push("Role: " + _esc(ctx.jobTitle));
-      if (ctx.company)    infoText.push("Company: " + _esc(ctx.company));
-      fieldInfo =
-        '<div class="hm-ce-section" style="padding-top:12px;">' +
-          '<div class="hm-ce-section-label">Detected context</div>' +
-          '<div class="hm-ce-post-preview">' + infoText.join(" · ") + "</div>" +
+    // Show job context if available (but less prominent)
+    var contextHtml = "";
+    if (ctx.jobTitle || ctx.company) {
+      var contextParts = [];
+      if (ctx.jobTitle) contextParts.push(_esc(ctx.jobTitle));
+      if (ctx.company) contextParts.push(_esc(ctx.company));
+      contextHtml =
+        '<div class="hm-ce-job-context">' +
+          contextParts.join(" · ") +
         "</div>";
     }
 
     popup.innerHTML += (
-      fieldInfo +
-      '<div class="hm-ce-section" style="padding-top:10px;">' +
-        '<div class="hm-ce-section-label">What to write</div>' +
-        '<div class="hm-ce-preset-chips">' + presetHtml + "</div>" +
-      "</div>" +
-      '<div class="hm-ce-intent-wrap">' +
-        '<textarea class="hm-ce-intent-input" id="hm-ce-intent" rows="2" placeholder="Any extra guidance? (optional)"></textarea>' +
+      questionHtml +
+      contextHtml +
+      '<div class="hm-ce-intent-wrap" style="padding-top:12px;">' +
+        '<textarea class="hm-ce-intent-input" id="hm-ce-intent" rows="3" placeholder="Add any specific details or guidance... (optional)"></textarea>' +
       "</div>" +
       _footerHtml("Generate Answer")
     );
 
-    _wirePresets(popup);
     _positionPopup(popup, icon);
 
     popup.querySelector("#hm-ce-generate").addEventListener("click", function () {
@@ -785,6 +1111,7 @@
           field_label: ctx.fieldLabel || null,
           job_title: ctx.jobTitle || null,
           company: ctx.company || null,
+          job_description: ctx.jobDescription || null,
           user_intent: intent || null,
           sender_profile_summary: senderSummary || null,
           tone: "professional",
@@ -920,6 +1247,11 @@
   // ── Fill target element ────────────────────────────────────────────────────
 
   function _fillComposer(composer, text) {
+    console.log("[HM] Filling composer", {
+      tag: composer.tagName,
+      textLength: text.length,
+      text: text.slice(0, 100)
+    });
     composer.focus();
 
     // Native textarea / input — use value setter + React-compatible events
@@ -935,6 +1267,7 @@
       }
       composer.dispatchEvent(new Event("input", { bubbles: true }));
       composer.dispatchEvent(new Event("change", { bubbles: true }));
+      console.log("[HM] Filled textarea, value now:", composer.value.slice(0, 100));
       return;
     }
 
@@ -974,6 +1307,7 @@
       sel.removeAllRanges();
       sel.addRange(range);
     } catch (_) {}
+    console.log("[HM] Filled contenteditable, content now:", composer.textContent.slice(0, 100));
   }
 
   // ── History ────────────────────────────────────────────────────────────────
@@ -1024,5 +1358,6 @@
     startColdEmailModule: startColdEmailModule,
     stopColdEmailModule: stopColdEmailModule,
     isLinkedInMessagingPage: isLinkedInMessagingPage,
+    isJobSiteOrLinkedIn: isJobSiteOrLinkedIn,
   };
 })();

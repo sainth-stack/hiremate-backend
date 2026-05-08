@@ -14,17 +14,34 @@ class MistralProvider(LLMProvider):
         self._client = Mistral(api_key=settings.mistral_api_key)
         print(f"MISTRAL: Initialized with model {settings.mistral_model}")
 
-    def _complete(self, system: str, user: str, user_id: int = None, email: str = None, feature: str = None) -> str:
+    def _complete(
+        self,
+        system: str,
+        user: str,
+        user_id: int = None,
+        email: str = None,
+        feature: str = None,
+        json_mode: bool = False,
+        temperature: float = None,
+        max_tokens: int = None
+    ) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user})
 
-        response = self._client.chat.complete(
-            model=settings.mistral_model,
-            messages=messages,
-            response_format={"type": "json_object"},
-        )
+        kwargs = {
+            "model": settings.mistral_model,
+            "messages": messages,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+
+        response = self._client.chat.complete(**kwargs)
         
         # Log usage
         if hasattr(response, 'usage'):

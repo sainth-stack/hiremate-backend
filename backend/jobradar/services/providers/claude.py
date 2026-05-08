@@ -21,15 +21,21 @@ class ClaudeProvider(LLMProvider):
         user_id: int = None,
         email: str = None,
         feature: str = None,
-        json_mode: bool = False
+        json_mode: bool = False,
+        temperature: float = None,
+        max_tokens: int = None
     ) -> str:
         # Note: Claude uses 'system' as a top-level param, not a message role
-        response = self._client.messages.create(
-            model=settings.claude_model,
-            max_tokens=4096,
-            system=system or "",
-            messages=[{"role": "user", "content": user}],
-        )
+        kwargs = {
+            "model": settings.claude_model,
+            "max_tokens": max_tokens if max_tokens is not None else 4096,
+            "system": system or "",
+            "messages": [{"role": "user", "content": user}],
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        
+        response = self._client.messages.create(**kwargs)
         
         # Log usage
         if hasattr(response, 'usage'):

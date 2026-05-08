@@ -29,13 +29,19 @@ class GeminiProvider(LLMProvider):
         user_id: int = None,
         email: str = None,
         feature: str = None,
-        json_mode: bool = False
+        json_mode: bool = False,
+        temperature: float = None,
+        max_tokens: int = None
     ) -> str:
         config = types.GenerateContentConfig(
             system_instruction=system or None,
         )
         if json_mode:
             config.response_mime_type = "application/json"
+        if temperature is not None:
+            config.temperature = temperature
+        if max_tokens is not None:
+            config.max_output_tokens = max_tokens
 
         response = self._client.models.generate_content(
             model=settings.gemini_model,

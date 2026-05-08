@@ -114,7 +114,9 @@ class LLMProvider(ABC):
         user_id: int = None,
         email: str = None,
         feature: str = None,
-        json_mode: bool = False
+        json_mode: bool = False,
+        temperature: float = None,
+        max_tokens: int = None
     ) -> str:
         """
         Internal: Make a single text completion call.
@@ -127,18 +129,28 @@ class LLMProvider(ABC):
         user_id: int = None,
         email: str = None,
         feature: str = None,
-        json_mode: bool = False
+        json_mode: bool = False,
+        temperature: float = None,
+        max_tokens: int = None,
+        response_format: dict = None
     ) -> str:
         """
         Public API for single-turn generation.
+        Note: response_format is mapped to json_mode for compatibility.
         """
+        # Map response_format to json_mode for backwards compatibility
+        if response_format and response_format.get("type") == "json_object":
+            json_mode = True
+        
         return self._complete(
             system=system_prompt,
             user=user_prompt,
             user_id=user_id,
             email=email,
             feature=feature,
-            json_mode=json_mode
+            json_mode=json_mode,
+            temperature=temperature,
+            max_tokens=max_tokens
         )
 
     @abstractmethod

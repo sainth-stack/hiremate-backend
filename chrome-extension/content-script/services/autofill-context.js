@@ -19,7 +19,7 @@ async function getAutofillContextFromApi() {
     autofillCtx = await _res.json();
     await chrome.storage.local.set({ [AUTOFILL_CTX_KEY]: { data: autofillCtx, ts: Date.now() } });
   }
-  return {
+  const context = {
     profile: autofillCtx.profile || {},
     profileDetail: null,
     customAnswers: autofillCtx.custom_answers || {},
@@ -28,6 +28,15 @@ async function getAutofillContextFromApi() {
     resumeFileName: autofillCtx.resume_url ? (autofillCtx.resume_url.split("/").pop() || "").split("?")[0] : null,
     resumeUrl: autofillCtx.resume_url || null,
   };
+  
+  // Auto-cache resume in background for instant autofill (no network delay)
+  if (context.resumeUrl || context.resumeFileName) {
+    fetchResumeFromContext(context).catch(() => {
+      logWarn("Auto-cache resume during context load failed");
+    });
+  }
+  
+  return context;
 }
 
 /** Sanitize resume display name to valid filename (e.g. "Sainath Reddy (default)" → "Sainath_Reddy_Resume.pdf"). */

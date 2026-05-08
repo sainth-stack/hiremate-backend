@@ -702,9 +702,9 @@ function initColdEmailRadio() {
 
   if (!settingsBtn || !settingsPanel || !settingsBack || !coldToggle) return;
 
-  // Restore saved toggle state
+  // Restore saved toggle state (default: "cold" = enabled by default)
   chrome.storage.local.get([STORAGE_KEY], (result) => {
-    const mode = result[STORAGE_KEY] || "standard";
+    const mode = result[STORAGE_KEY] || "cold";
     coldToggle.checked = mode === "cold";
     if (mode === "cold" && window.__HM_COLD_EMAIL__?.isLinkedInMessagingPage?.()) {
       window.__HM_COLD_EMAIL__.stopColdEmailModule();
@@ -742,10 +742,52 @@ function initColdEmailRadio() {
 
 window.__HM_MOUNT_INPAGE_INTO__ = mountInPageUILegacyInto;
 
-// Auto-start cold email module on LinkedIn without requiring the widget to open
-if (location.hostname.includes("linkedin.com")) {
+// Auto-start cold email module on job sites without requiring the widget to open
+// Checks if we're on LinkedIn, Naukari, or any other job application site
+function isJobSiteForColdMode() {
+  const hostname = location.hostname.toLowerCase();
+  const pathname = location.pathname.toLowerCase();
+  
+  // LinkedIn
+  if (hostname.includes("linkedin.com")) return true;
+  
+  // Naukri
+  if (hostname.includes("naukri.com")) return true;
+  
+  // Other major job boards
+  if (hostname.includes("indeed.com") || 
+      hostname.includes("monster.com") ||
+      hostname.includes("glassdoor.com") ||
+      hostname.includes("ziprecruiter.com") ||
+      hostname.includes("dice.com")) return true;
+  
+  // ATS platforms
+  if (hostname.includes("greenhouse.io") || 
+      hostname.includes("workday.com") || 
+      hostname.includes("myworkdayjobs.com") ||
+      hostname.includes("lever.co") ||
+      hostname.includes("smartrecruiters.com") ||
+      hostname.includes("ashbyhq.com") ||
+      hostname.includes("taleo.net") ||
+      hostname.includes("icims.com") ||
+      hostname.includes("jobvite.com") ||
+      hostname.includes("successfactors.com") ||
+      hostname.includes("bamboohr.com")) return true;
+  
+  // Generic career/jobs pages
+  if (pathname.includes("/jobs") || 
+      pathname.includes("/careers") || 
+      pathname.includes("/apply") ||
+      pathname.includes("/application")) return true;
+  
+  return false;
+}
+
+if (isJobSiteForColdMode()) {
   chrome.storage.local.get(["hm_cold_agent_mode"], function (result) {
-    if (result["hm_cold_agent_mode"] === "cold") {
+    // Default to "cold" mode if not set (enabled by default)
+    const mode = result["hm_cold_agent_mode"] || "cold";
+    if (mode === "cold") {
       setTimeout(function () {
         if (window.__HM_COLD_EMAIL__) {
           window.__HM_COLD_EMAIL__.stopColdEmailModule();

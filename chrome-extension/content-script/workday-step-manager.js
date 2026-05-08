@@ -203,11 +203,30 @@
     // 1. Wait for the step's fields to render
     await waitForStepToSettle(doc);
 
-    // 2. Scrape fields on this step
+    // 2. Scrape fields on this step (CURRENT TAB ONLY — don't expand other tabs)
     const scraper = window.__OPSBRAIN_SCRAPER__;
     let scrapeResult;
     try {
-      scrapeResult = await scraper.getScrapedFieldsWithExpandedOptions({ document: doc });
+      scrapeResult = await scraper.getScrapedFields({ 
+        document: doc,
+        scope: "current_document",  // Only scrape visible fields in current document
+        includeHidden: false,        // Skip hidden fields
+        expandTabs: false            // Don't click other tabs — only current tab
+      });
+      // Manually expand dropdown options for the visible fields (but don't expand tabs)
+      const selectFields = scrapeResult.fields.filter(f => f.type === "select" && (!f.options || !f.options.length) && f._canonical);
+      if (selectFields.length > 0) {
+        log("Expanding dropdown options", { count: selectFields.length });
+        for (const f of selectFields) {
+          try {
+            const opts = await scraper.expandDropdownForOptions(f._canonical, doc);
+            if (opts.length > 0) f.options = opts;
+            await new Promise(r => setTimeout(r, 280)); // Workday rate limit
+          } catch (_) {}
+        }
+      }
+      // Attach fingerprints
+      await scraper.attachShaFingerprints(scrapeResult.fields);
     } catch (e) {
       log("Scrape error", { error: String(e) });
       return;

@@ -158,21 +158,22 @@ async def lifespan(app: FastAPI):
         ) from e
 
     from backend.app.services.jobscrapping.ingest_lock import clear_stale_ingest_locks_on_startup
+    from backend.app.scheduler.job_ingestion import start_scheduler, stop_scheduler
 
     clear_stale_ingest_locks_on_startup()
 
     # Advance Gmail history cursors so queued Pub/Sub notifications from downtime are ignored
     _advance_history_ids_on_startup()
 
-    # Start background scheduler
-    # from jobradar.scheduler import start_scheduler
-    # start_scheduler()
+    # Start job ingestion scheduler (runs every 2 hours)
+    start_scheduler()
+    logger.info("Job ingestion scheduler started")
 
     yield
 
     # Shutdown
-    # from jobradar.scheduler import stop_scheduler
-    # stop_scheduler()
+    stop_scheduler()
+    logger.info("Scheduler stopped")
 
 
 # Initialize FastAPI app

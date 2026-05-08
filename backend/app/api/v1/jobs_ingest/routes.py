@@ -5,6 +5,8 @@ Response counters: `total_inserted` matches `inserted` for a run; `total_filtere
 `filtered_out` (title_filter drops). See plan.md.
 """
 from typing import Any
+import asyncio
+import threading
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
@@ -12,14 +14,21 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.core.dependencies import get_db
+from backend.app.core.logging_config import get_logger
+from backend.app.db.session import get_db_context
 from backend.app.services.jobscrapping import (
     run_career_pages_ingestion,
     run_public_urls_ingestion,
     run_unified_companies_ingestion,
 )
+from backend.app.services.jobscrapping.public_apis import run_public_apis_ingestion_with_run_record
 from backend.app.services.jobscrapping.ingest_lock import ingest_route_lock
 
+logger = get_logger("jobs_ingest_routes")
+
 router = APIRouter(prefix="/jobs", tags=["jobs-ingest"])
+_public_apis_state_lock = threading.Lock()
+_public_apis_running = False
 
 
 def _lock_career_pages():
@@ -95,3 +104,81 @@ def ingest_companies_unified(
     """
     m = run_unified_companies_ingestion(db, dry_run=body.dry_run)
     return m.as_response()
+
+
+def _lock_public_apis():
+    with ingest_route_lock("public-apis"):
+        yield
+
+
+async def _run_background_ingestion(dry_run: bool):
+    """Background task to run job ingestion."""
+    global _public_apis_running
+    try:
+        with ingest_route_lock("public-apis"):
+            logger.info("🚀 Starting background job ingestion...")
+            with get_db_context() as db:
+                m = await run_public_apis_ingestion_with_run_record(db, dry_run=dry_run)
+            logger.info(
+                f"✅ Background ingestion completed: "
+                f"inserted={m.inserted}, updated={m.updated}, "
+                f"skipped={m.skipped}, errors={m.errors}"
+            )
+    except Exception as e:
+        logger.error(f"❌ Background ingestion failed: {e}", exc_info=True)
+    finally:
+        with _public_apis_state_lock:
+            _public_apis_running = False
+
+
+def _start_public_apis_thread(dry_run: bool) -> bool:
+    """
+    Start ingestion in a dedicated daemon thread so API requests stay responsive.
+    Returns False if a run is already in progress in this process.
+    """
+    global _public_apis_running
+    with _public_apis_state_lock:
+        if _public_apis_running:
+            return False
+        _public_apis_running = True
+
+    thread = threading.Thread(
+        target=lambda: asyncio.run(_run_background_ingestion(dry_run)),
+        name="public-apis-ingestion",
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+@router.post("/ingest/public-apis")
+async def ingest_from_public_apis(
+    body: IngestBody,
+    _: Session = Depends(get_db),
+    __: None = Depends(verify_ingest_secret),
+) -> dict[str, Any]:
+    """
+    Ingest jobs from public APIs (RemoteOK, Remotive, Greenhouse, LinkedIn, etc).
+    Runs in the background and returns immediately.
+    Fetches 400-800+ jobs from ALL companies automatically.
+    """
+    started = _start_public_apis_thread(body.dry_run)
+    if not started:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Public APIs ingestion is already running. Retry later.",
+        )
+    
+    return {
+        "status": "started",
+        "message": "Job ingestion started in detached background thread. Check logs for progress.",
+        "dry_run": body.dry_run,
+        "sources": [
+            "RemoteOK (Universal)",
+            "Remotive (Universal)",
+            "Arbeitnow (Aggregator)",
+            "Greenhouse (Auto-discovery)",
+            "LinkedIn (US + India)"
+        ],
+        "expected_jobs": "400-800+ jobs from ALL companies"
+    }
