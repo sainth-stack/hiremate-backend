@@ -18,6 +18,51 @@ async function fetchProfileResumeBlob(ctx) {
   return { blob: await res.blob(), filename: resumeFilename };
 }
 
+/** Auto-cache resume in IndexedDB for instant autofill (avoids network delay during fill) */
+async function autoCacheResume(ctx) {
+  try {
+    const resumeUrl = ctx?.resumeUrl || ctx?.resume_url;
+    const resumeFilename = resumeUrl ? (resumeUrl.split("/").pop() || "").split("?")[0] : null;
+    if (!resumeFilename) return;
+
+    // Check if resume already cached
+    const existing = await chrome.runtime.sendMessage({ type: "GET_RESUME" }).catch(() => ({ ok: false }));
+    if (existing?.ok && existing?.data?.buffer) {
+      logInfo("Resume already cached in IndexedDB", { fileName: resumeFilename });
+      return;
+    }
+
+    // Fetch resume from backend
+    const apiBase = await getApiBase();
+    const headers = await getAuthHeaders();
+    const res = await fetchWithAuthRetry(
+      `${apiBase}/chrome-extension/autofill/resume/${encodeURIComponent(resumeFilename)}`,
+      { headers }
+    );
+    if (!res.ok) {
+      logWarn("Failed to fetch resume for auto-cache", { status: res.status });
+      return;
+    }
+
+    const resumeBuffer = await res.arrayBuffer();
+    const buffer = Array.from(new Uint8Array(resumeBuffer));
+
+    // Generate hash for cache validation
+    const hashInput = buffer.slice(0, 512).join(",");
+    const hash = btoa(hashInput).slice(0, 32);
+
+    // Save to IndexedDB
+    await chrome.runtime.sendMessage({
+      type: "SAVE_RESUME",
+      payload: { buffer, name: resumeFilename, hash },
+    });
+    
+    logInfo("Resume auto-cached successfully", { fileName: resumeFilename, bytes: buffer.length });
+  } catch (err) {
+    logWarn("Auto-cache resume failed", err);
+  }
+}
+
 async function fetchResumesFromApi() {
   const apiBase = await getApiBase();
   const headers = await getAuthHeaders();
@@ -289,6 +334,9 @@ async function loadProfileIntoPanel(root) {
       : `<p class="ja-prof-empty">No uploads</p>`;
     setHtml(uploadsEl, uploadsHtml);
     if (hasResume) {
+      // Auto-cache resume in IndexedDB for instant autofill (no network delay)
+      autoCacheResume(ctx).catch(() => {});
+
       const runResume = async (mode) => {
         try {
           const got = await fetchProfileResumeBlob(ctx);

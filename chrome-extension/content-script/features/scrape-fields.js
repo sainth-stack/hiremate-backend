@@ -11,6 +11,51 @@ async function scrapeFields(options = {}) {
   const preExpandEducation = Math.max(0, options.preExpandEducation || 0);
   logInfo("scrapeFields: start", { scope: options.scope, expandSelectOptions, preExpandEmployment, preExpandEducation });
 
+  // ────────────────────────────────────────────────────────────────────────
+  // Helper: Filter out technical/hidden/captcha fields
+  // ────────────────────────────────────────────────────────────────────────
+  function shouldExcludeField(field) {
+    const name = (field.name || "").toLowerCase();
+    const id = (field.id || field.domId || "").toLowerCase();
+    const label = (field.label || "").toLowerCase();
+    
+    // Exclude captcha fields
+    if (name.includes("captcha") || name.includes("recaptcha")) {
+      logInfo("Excluding captcha field", { name, id });
+      return true;
+    }
+    if (id.includes("captcha") || id.includes("recaptcha")) {
+      logInfo("Excluding captcha field", { name, id });
+      return true;
+    }
+    
+    // Exclude hidden fields by type
+    if (field.type === "hidden") {
+      logInfo("Excluding hidden field", { name, id });
+      return true;
+    }
+    
+    // Exclude token/CSRF fields
+    if (name.includes("token") || name.includes("csrf") || name.includes("_token")) {
+      logInfo("Excluding security token field", { name, id });
+      return true;
+    }
+    
+    // Exclude verification codes (not captcha but similar)
+    if (name.includes("verification") || name.includes("challenge")) {
+      logInfo("Excluding verification field", { name, id });
+      return true;
+    }
+    
+    // Exclude technical response fields
+    if (name.endsWith("-response") || id.endsWith("-response")) {
+      logInfo("Excluding response field", { name, id });
+      return true;
+    }
+    
+    return false;
+  }
+
   const scraper = typeof window !== "undefined" && window.__HIREMATE_FIELD_SCRAPER__;
   logInfo("scrapeFields: scraper check", { hasScraper: !!scraper });
 
@@ -86,7 +131,9 @@ async function scrapeFields(options = {}) {
   const fastResult = await scrapeWithLearning(options);
   logInfo("scrapeFields: scrapeWithLearning returned", { fastPath: !!fastResult?.length, count: fastResult?.length || 0, ms: Date.now() - t0 });
   if (fastResult && fastResult.length > 0) {
-    const fields = fastResult.map((f, index) => ({
+    // Filter out captcha and technical fields
+    const filteredFast = fastResult.filter(f => !shouldExcludeField(f));
+    const fields = filteredFast.map((f, index) => ({
       index,
       label: f.label || null,
       name: f.name || null,
@@ -103,7 +150,7 @@ async function scrapeFields(options = {}) {
       isStandardField: f.isStandardField || false,
       fingerprint: f.fingerprint,
     }));
-    logInfo("Scrape: fast path completed", { totalFields: fields.length });
+    logInfo("Scrape: fast path completed", { totalFields: fields.length, excludedFields: fastResult.length - filteredFast.length });
     return { fields };
   }
 
@@ -112,7 +159,7 @@ async function scrapeFields(options = {}) {
     try {
       const scrapeOpts = {
         scope: includeNestedDocuments ? "all" : "current_document",
-        includeHidden: true,
+        includeHidden: false, // Changed to false to exclude hidden fields
         excludePredicate: isInsideExtensionWidget,
         expandSelectOptions,
       };
@@ -135,7 +182,9 @@ async function scrapeFields(options = {}) {
       }
       if (result.fields.length > 0) {
         result.fields = await enrichFieldsWithLearnedSelectors(result.fields, atsPlatform);
-        const fields = result.fields.map((f, index) => ({
+        // Filter out captcha and technical fields
+        const filteredFields = result.fields.filter(f => !shouldExcludeField(f));
+        const fields = filteredFields.map((f, index) => ({
           index,
           label: f.label || null,
           name: f.name || null,
@@ -153,7 +202,7 @@ async function scrapeFields(options = {}) {
           fingerprint: f.fingerprint,
         }));
         const preview = fields.slice(0, 15).map((f) => ({ index: f.index, type: f.type, label: f.label, id: f.id, name: f.name, required: f.required }));
-        logInfo("Scrape: completed", { totalFields: fields.length, requiredFields: fields.filter((f) => f.required).length, fields: preview });
+        logInfo("Scrape: completed", { totalFields: fields.length, excludedFields: result.fields.length - filteredFields.length, requiredFields: fields.filter((f) => f.required).length, fields: preview });
         return { fields };
       }
     } catch (e) {
@@ -163,9 +212,8 @@ async function scrapeFields(options = {}) {
     logInfo("scrapeFields: no scraper, using legacy getFillableFields", { ms: Date.now() - t0 });
   }
 
-  let fillable = getFillableFields(includeNestedDocuments || true, true);
+  let fillable = getFillableFields(includeNestedDocuments || true, false); // Changed to false to exclude hidden
   if (fillable.length === 0) fillable = getFillableFields(true, false);
-  if (fillable.length === 0) fillable = getFillableFields(true, true);
 
   const fields = fillable.map((el, index) => {
     const meta = getFieldMeta(el);
@@ -187,7 +235,8 @@ async function scrapeFields(options = {}) {
       role: meta.role || null,
       options: opts,
     };
-  });
+  }).filter(f => !shouldExcludeField(f)); // Filter at the end too
+  
   const preview = fields.slice(0, 15).map((f) => ({ index: f.index, type: f.type, label: f.label, id: f.id, name: f.name, required: f.required }));
   logInfo("Scrape: completed (legacy)", { totalFields: fields.length, requiredFields: fields.filter((f) => f.required).length, fields: preview });
   return { fields };

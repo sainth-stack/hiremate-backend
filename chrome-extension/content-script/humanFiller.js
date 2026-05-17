@@ -783,6 +783,117 @@
     return null;
   }
 
+  // ─── SELECT REASONABLE DEFAULT (when mapping fails) ──────────
+  async function selectReasonableDefault(el, attemptedValue, fieldMeta, doc) {
+    const tag = el.tagName.toLowerCase();
+    
+    // Only works for native <select> dropdowns
+    if (tag !== "select") return false;
+    
+    const options = Array.from(el.querySelectorAll("option")).filter(opt => !opt.disabled);
+    if (options.length < 2) return false;
+    
+    const label = (fieldMeta?.label || "").toLowerCase();
+    const attemptedLower = String(attemptedValue || "").toLowerCase();
+    
+    // Skip placeholder/empty options
+    const validOptions = options.filter(opt => {
+      const txt = (opt.textContent || "").trim().toLowerCase();
+      const val = (opt.value || "").trim();
+      if (!txt || !val || val === "" || val === "null") return false;
+      if (txt.match(/^(select|choose|pick|--|please select|none)/)) return false;
+      return true;
+    });
+    
+    if (validOptions.length === 0) return false;
+    
+    // Strategy 1: For Yes/No questions, default to "Yes" if reasonable
+    if (label.match(/willing|able|available|open to|interested|agree|consent|authorize/i)) {
+      const yesOpt = validOptions.find(opt => {
+        const txt = opt.textContent.trim().toLowerCase();
+        return txt === "yes" || txt === "true" || txt === "1";
+      });
+      if (yesOpt) {
+        await humanScrollTo(el);
+        await humanClick(el);
+        await delay(30,80);
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,"value")?.set;
+        if (setter) setter.call(el, yesOpt.value); else el.value = yesOpt.value;
+        try { if (el._valueTracker) el._valueTracker.setValue(""); } catch(_) {}
+        el.dispatchEvent(new Event("change",{bubbles:true}));
+        el.dispatchEvent(new FocusEvent("blur",{bubbles:true}));
+        return true;
+      }
+    }
+    
+    // Strategy 2: For sponsorship/visa questions, default to "No" if reasonable
+    if (label.match(/sponsor|visa|work authorization|require sponsor/i) && !label.match(/don't|do not|no need/i)) {
+      const noOpt = validOptions.find(opt => {
+        const txt = opt.textContent.trim().toLowerCase();
+        return txt === "no" || txt === "false" || txt === "0";
+      });
+      if (noOpt) {
+        await humanScrollTo(el);
+        await humanClick(el);
+        await delay(30,80);
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,"value")?.set;
+        if (setter) setter.call(el, noOpt.value); else el.value = noOpt.value;
+        try { if (el._valueTracker) el._valueTracker.setValue(""); } catch(_) {}
+        el.dispatchEvent(new Event("change",{bubbles:true}));
+        el.dispatchEvent(new FocusEvent("blur",{bubbles:true}));
+        return true;
+      }
+    }
+    
+    // Strategy 3: For numeric/experience fields, find closest reasonable number
+    if (label.match(/years|experience|age|yrs/i) && attemptedLower.match(/\d+/)) {
+      const attemptedNum = parseInt(attemptedLower.match(/\d+/)[0]);
+      let bestOpt = null;
+      let bestDiff = Infinity;
+      
+      for (const opt of validOptions) {
+        const txt = opt.textContent.trim();
+        const matches = txt.match(/\d+/);
+        if (matches) {
+          const num = parseInt(matches[0]);
+          const diff = Math.abs(num - attemptedNum);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestOpt = opt;
+          }
+        }
+      }
+      
+      if (bestOpt && bestDiff <= 3) { // Allow up to 3 years difference
+        await humanScrollTo(el);
+        await humanClick(el);
+        await delay(30,80);
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,"value")?.set;
+        if (setter) setter.call(el, bestOpt.value); else el.value = bestOpt.value;
+        try { if (el._valueTracker) el._valueTracker.setValue(""); } catch(_) {}
+        el.dispatchEvent(new Event("change",{bubbles:true}));
+        el.dispatchEvent(new FocusEvent("blur",{bubbles:true}));
+        return true;
+      }
+    }
+    
+    // Strategy 4: Default to first non-placeholder option (safest fallback)
+    if (validOptions.length > 0) {
+      const firstOpt = validOptions[0];
+      await humanScrollTo(el);
+      await humanClick(el);
+      await delay(30,80);
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,"value")?.set;
+      if (setter) setter.call(el, firstOpt.value); else el.value = firstOpt.value;
+      try { if (el._valueTracker) el._valueTracker.setValue(""); } catch(_) {}
+      el.dispatchEvent(new Event("change",{bubbles:true}));
+      el.dispatchEvent(new FocusEvent("blur",{bubbles:true}));
+      return true;
+    }
+    
+    return false;
+  }
+
   // ─── SINGLE FIELD FILLER ──────────────────────────────────────
   async function fillField(fieldMeta, value, resumeData, doc) {
     const el = resolveField(fieldMeta, doc);
@@ -846,6 +957,12 @@
         // For school/company: try "Other" option, then fill the specify/enter field
         const otherOk = await trySelectOtherAndFillSpecify(el, String(value), fieldMeta.options, fieldMeta, doc);
         if (otherOk) return {ok:true};
+        // SMART DEFAULT: If we can't map the value, select a reasonable default instead of leaving empty
+        const defaultOk = await selectReasonableDefault(el, String(value), fieldMeta, doc);
+        if (defaultOk) {
+          log("Selected smart default for unmapped dropdown", {label: fieldMeta.label, value});
+          return {ok:true,defaultUsed:true};
+        }
         // Retry with fallbackFill for native select
         if (tag === "select") { await fallbackFill(el, String(value), doc); return {ok:true,fallback:true}; }
       }
@@ -1006,6 +1123,73 @@
     return false;
   }
 
+  // ─── HELPER: CHECK IF FIELD IS ALREADY FILLED ────────────────
+  function getFieldValue(el) {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.type || "").toLowerCase();
+    
+    if (tag === "select") {
+      return el.value || "";
+    }
+    if (type === "checkbox" || type === "radio") {
+      return el.checked ? "checked" : "";
+    }
+    if (el.isContentEditable || el.contentEditable === "true") {
+      return (el.textContent || el.innerText || "").trim();
+    }
+    if (type === "file") {
+      return el.files && el.files.length > 0 ? "has_file" : "";
+    }
+    return (el.value || "").trim();
+  }
+
+  function isFieldAlreadyFilled(el, meta) {
+    if (!el || !el.isConnected) return false;
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+
+    const tag = el.tagName.toLowerCase();
+    const type = (el.type || "").toLowerCase();
+    const fieldType = meta?.type || "text";
+
+    // File fields: check if file already uploaded
+    if (type === "file" || fieldType === "file") {
+      // Check for file preview/name (common in Workday, Greenhouse)
+      const container = el.closest('[data-automation-id*="fileUpload"],[class*="file-upload"],[class*="dropzone"]') || el.parentElement;
+      if (container) {
+        const preview = container.querySelector('[class*="file-name"],[class*="filename"],[data-automation-id*="fileName"]');
+        if (preview && preview.textContent?.trim()) return true;
+      }
+      return el.files && el.files.length > 0;
+    }
+
+    // Select/dropdown: check if option selected (not default/placeholder)
+    if (tag === "select" || fieldType === "select") {
+      const val = el.value || "";
+      if (!val || val === "" || val === "null" || val === "undefined") return false;
+      // Check if it's a placeholder option
+      const selected = el.selectedOptions?.[0];
+      if (selected && (selected.textContent?.trim().toLowerCase().match(/^(select|choose|pick|--)/))) {
+        return false;
+      }
+      return val.length > 0;
+    }
+
+    // Checkbox/radio: consider filled if checked
+    if (type === "checkbox" || type === "radio") {
+      return el.checked;
+    }
+
+    // Text inputs, textareas, contenteditable: check if has meaningful text
+    const currentValue = getFieldValue(el);
+    if (!currentValue || currentValue.length < 2) return false;
+
+    // Ignore placeholder-like values
+    const placeholder = (el.placeholder || el.getAttribute("aria-placeholder") || "").toLowerCase();
+    if (placeholder && currentValue.toLowerCase() === placeholder) return false;
+
+    return true;
+  }
+
   // ─── MAIN FILL LOOP ───────────────────────────────────────────
   /**
    * fillWithValuesHumanLike — THE main entry point
@@ -1082,6 +1266,14 @@
           } catch(_) {}
         }
         await delay(20,50);
+        continue;
+      }
+
+      // SKIP ALREADY-FILLED FIELDS (optimization: don't waste time on fields user already filled)
+      if (isFieldAlreadyFilled(el, meta)) {
+        log("Skipping already-filled field", {label: meta.label || `Field ${i}`, currentValue: getFieldValue(el)});
+        filledCount++; // Count as filled since it already has a value
+        await delay(10,20);
         continue;
       }
 

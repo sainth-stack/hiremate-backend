@@ -197,6 +197,19 @@ def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
     """Convert ProfilePayload to a UI-friendly profile dict.
     Returns both legacy flat text fields and structured lists for improved UI rendering.
     """
+    # Helper to clean placeholder URLs
+    def clean_url(url: str, field_name: str) -> str:
+        if not url:
+            return ""
+        url_lower = url.strip().lower()
+        # Skip placeholder text
+        if url_lower in (field_name.lower(), f"{field_name.lower()} url", "not specified", "n/a", "none"):
+            return ""
+        # Must be a valid URL or empty
+        if not url.startswith(("http://", "https://", "www.")):
+            return ""
+        return url.strip()
+    
     profile: dict[str, Any] = {
         "firstName": payload.firstName or "",
         "lastName": payload.lastName or "",
@@ -206,9 +219,9 @@ def _profile_to_autofill_format(payload: ProfilePayload) -> dict[str, Any]:
         "city": payload.city or "",
         "country": payload.country or "",
         "location": ", ".join(filter(None, [payload.city, payload.country])),
-        "linkedin": payload.links.linkedInUrl if payload.links else "",
-        "github": payload.links.githubUrl if payload.links else "",
-        "portfolio": payload.links.portfolioUrl if payload.links else "",
+        "linkedin": clean_url(payload.links.linkedInUrl if payload.links else "", "linkedin"),
+        "github": clean_url(payload.links.githubUrl if payload.links else "", "github"),
+        "portfolio": clean_url(payload.links.portfolioUrl if payload.links else "", "portfolio"),
         "title": payload.professionalHeadline or "",
         "professionalHeadline": payload.professionalHeadline or "",
         "professionalSummary": payload.professionalSummary or "",
@@ -628,6 +641,69 @@ def map_fields(
             pk = PROFILE_KEY_TO_FIELD.get(profile_key, profile_key)
             if pk in profile and profile.get(pk):
                 user_map[fp] = profile.get(pk)
+
+    # Post-process: Ensure atsFieldType fields use correct profile values (override bad cached/shared mappings)
+    for field in fields_with_fp:
+        fp = field.get("_fp")
+        ats_type = (field.get("atsFieldType") or "").lower().strip()
+        if not fp or not ats_type or ats_type not in PROFILE_DRIVEN_ATS_TYPES:
+            continue
+        
+        # Map atsFieldType to correct profile key
+        ats_to_profile = {
+            "full_name": "name",
+            "first_name": "firstName",
+            "last_name": "lastName",
+            "email": "email",
+            "phone": "phone",
+            "linkedin": "linkedin",
+            "portfolio": "portfolio",
+            "github": "github",
+            "city": "city",
+            "country": "country",
+            "address": "location",
+            "company": "company",
+        }
+        
+        profile_key = ats_to_profile.get(ats_type)
+        if profile_key and profile_key in profile and profile.get(profile_key):
+            val = profile[profile_key]
+            # Skip if profile has placeholder text instead of real data
+            if val and not (isinstance(val, str) and val.strip().lower() in ("linkedin", "github", "portfolio", "twitter", "not specified", "n/a")):
+                user_map[fp] = val
+    
+    # Clear bad mappings for URL/link fields that got name/email data
+    for field in fields_with_fp:
+        fp = field.get("_fp")
+        if not fp or fp not in user_map:
+            continue
+        
+        label = (field.get("label") or "").lower()
+        name = (field.get("name") or "").lower()
+        current_val = str(user_map[fp] or "")
+        
+        # If field is clearly a URL/link field but has name/email data, clear it
+        if any(keyword in label or keyword in name for keyword in ["link", "url", "website", "site"]):
+            # Check if current value is NOT a URL (contains name, email format, etc.)
+            if current_val and not current_val.startswith(("http://", "https://", "www.")):
+                if "@" in current_val or " " in current_val.strip():
+                    user_map[fp] = None
+    
+    # Clear address line fields that got city/country instead of street address
+    for field in fields_with_fp:
+        fp = field.get("_fp")
+        if not fp or fp not in user_map:
+            continue
+        
+        label = (field.get("label") or "").lower()
+        name = (field.get("name") or "").lower()
+        current_val = str(user_map[fp] or "")
+        
+        # If field is "Address Line 1/2/3" but has city/country instead of street address, clear it
+        if "address line" in label or "addressline" in name:
+            # If it looks like "City, Country" format instead of actual street address, clear it
+            if current_val and "," in current_val and len(current_val.split()) <= 3:
+                user_map[fp] = None
 
     # Layer 4: LLM for remaining misses — sync (when requested) or background
     llm_fields = [f for f in fields_with_fp if f["_fp"] not in user_map]

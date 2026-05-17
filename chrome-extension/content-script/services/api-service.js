@@ -45,9 +45,9 @@ async function getApiBase() {
   if (window.__CONFIG__?.getApiBase) return window.__CONFIG__.getApiBase();
   try {
     const data = await chrome.storage.local.get(["apiBase"]);
-    return data.apiBase || "https://opsbrainai.com/api";
+    return data.apiBase || "http://localhost:8000/api";
   } catch (_) {
-    return "https://opsbrainai.com/api";
+    return "http://localhost:8000/api";
   }
 }
 

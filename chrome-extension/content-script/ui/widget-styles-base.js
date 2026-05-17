@@ -1056,6 +1056,19 @@ function getWidgetStylesBase() {
       border-radius: 6px; padding: 6px 10px; line-height: 1.5;
       max-height: 52px; overflow: hidden; margin-top: 4px;
     }
+
+    /* Job application popup styles */
+    .hm-ce-question-text {
+      font-size: 14px; color: #111; font-weight: 500;
+      line-height: 1.6; padding: 10px 12px;
+      background: #f8fafc; border-radius: 8px;
+      border-left: 3px solid #0a66c2; margin-top: 4px;
+    }
+    .hm-ce-job-context {
+      font-size: 11px; color: #6b7280;
+      text-align: center; padding: 8px 16px;
+      border-bottom: 1px solid #f3f4f6;
+    }
   `;
   (document.head || document.documentElement).appendChild(style);
 })();

@@ -137,7 +137,12 @@ class LLMProvider(ABC):
     ) -> str:
         """
         Public API for single-turn generation.
+        Note: response_format is mapped to json_mode for compatibility.
         """
+        # Map response_format to json_mode for backwards compatibility
+        if response_format and response_format.get("type") == "json_object":
+            json_mode = True
+        
         return self._complete(
             system=system_prompt,
             user=user_prompt,

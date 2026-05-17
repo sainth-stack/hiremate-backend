@@ -21,6 +21,7 @@ from backend.app.models.form_field_learning import (
     UserSubmissionHistory,
 )
 from backend.app.models.token_usage import TokenUsage
+from backend.app.models.scraper_run import ScraperRun
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -617,6 +618,123 @@ def get_admin_extension_errors(
 ) -> dict:
     """Extension error reporting - placeholder (extension errors not stored in DB yet)."""
     return {"errors": [], "message": "Extension errors are not persisted in DB yet. Placeholder for future."}
+
+
+# --- Ingestion Analytics ---
+
+
+def _normalize_portal_breakdown(detail_json: dict | None) -> list[dict]:
+    detail = detail_json or {}
+    pb = detail.get("portal_breakdown")
+    if isinstance(pb, list):
+        out = []
+        for row in pb:
+            if not isinstance(row, dict):
+                continue
+            out.append({
+                "portal": str(row.get("portal") or "unknown"),
+                "fetched_jobs": int(row.get("fetched_jobs") or 0),
+            })
+        return out
+
+    # Backward-compatible fallback used by unified ingest detail payload.
+    by_source = detail.get("unified_sources_seen")
+    if isinstance(by_source, dict):
+        return [
+            {"portal": str(k), "fetched_jobs": int(v or 0)}
+            for k, v in by_source.items()
+            if k
+        ]
+    return []
+
+
+@router.get("/ingestion-runs")
+def get_admin_ingestion_runs(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    source: str | None = Query(None),
+    success: bool | None = Query(None),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user),
+) -> dict:
+    """Paginated ingestion run analytics with per-portal fetched-job counts."""
+    cutoff_start = _parse_date(from_date) if from_date else None
+    cutoff_end = _parse_date(to_date) if to_date else None
+    if cutoff_end:
+        cutoff_end = datetime(cutoff_end.year, cutoff_end.month, cutoff_end.day, 23, 59, 59)
+
+    def _apply_filters(q):
+        if source and source.strip():
+            q = q.filter(ScraperRun.source == source.strip())
+        if success is not None:
+            q = q.filter(ScraperRun.success == success)
+        if cutoff_start:
+            q = q.filter(ScraperRun.started_at >= cutoff_start)
+        if cutoff_end:
+            q = q.filter(ScraperRun.started_at <= cutoff_end)
+        return q
+
+    q = _apply_filters(db.query(ScraperRun))
+    total = q.count()
+    rows = (
+        q.order_by(ScraperRun.started_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+
+    summary = _apply_filters(
+        db.query(
+            func.count(ScraperRun.id),
+            func.sum(ScraperRun.total_jobs_seen),
+            func.sum(ScraperRun.inserted),
+            func.sum(ScraperRun.updated),
+            func.sum(ScraperRun.skipped),
+            func.sum(ScraperRun.errors),
+        )
+    ).first()
+
+    items = []
+    for r in rows:
+        duration_seconds = None
+        if r.started_at and r.ended_at:
+            duration_seconds = max(0, int((r.ended_at - r.started_at).total_seconds()))
+        items.append({
+            "id": r.id,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+            "duration_seconds": duration_seconds,
+            "source": r.source,
+            "success": bool(r.success),
+            "dry_run": bool(r.dry_run),
+            "inserted": int(r.inserted or 0),
+            "updated": int(r.updated or 0),
+            "skipped": int(r.skipped or 0),
+            "filtered_out": int(r.filtered_out or 0),
+            "errors": int(r.errors or 0),
+            "total_jobs_seen": int(r.total_jobs_seen or 0),
+            "total_tokens": int(r.total_tokens or 0),
+            "total_cost": float(r.total_cost or 0.0),
+            "error_summary": r.error_summary,
+            "portal_breakdown": _normalize_portal_breakdown(r.detail_json),
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "summary": {
+            "runs": int((summary[0] if summary else 0) or 0),
+            "total_jobs_seen": int((summary[1] if summary else 0) or 0),
+            "inserted": int((summary[2] if summary else 0) or 0),
+            "updated": int((summary[3] if summary else 0) or 0),
+            "skipped": int((summary[4] if summary else 0) or 0),
+            "errors": int((summary[5] if summary else 0) or 0),
+        },
+    }
 
 @router.get("/token-usage")
 def get_admin_token_usage(

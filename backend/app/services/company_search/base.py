@@ -44,7 +44,28 @@ class BaseATSScraper(ABC):
 
     @staticmethod
     def role_matches(title: str, role: str) -> bool:
-        return role.strip().lower() in title.strip().lower()
+        role_text = (role or "").strip().lower()
+        title_text = (title or "").strip().lower()
+        if not role_text:
+            return True
+        if not title_text:
+            return False
+        if role_text in title_text:
+            return True
+
+        # Handle variants like "fullstack" vs "full stack".
+        role_compact = re.sub(r"[\s\-_]+", "", role_text)
+        title_compact = re.sub(r"[\s\-_]+", "", title_text)
+        if role_compact and role_compact in title_compact:
+            return True
+
+        stop_words = {"and", "or", "for", "with", "the", "a", "an", "of", "to", "in"}
+        tokens = [t for t in re.split(r"[\s,./()_-]+", role_text) if len(t) > 2 and t not in stop_words]
+        if not tokens:
+            return role_text in title_text
+        matched = sum(1 for t in tokens if t in title_text)
+        required = max(1, int(len(tokens) * 0.6 + 0.5))
+        return matched >= required
 
     @staticmethod
     def location_matches(job_location: Optional[str], filter_loc: str) -> bool:
