@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from backend.app.core.dependencies import get_db, get_current_user
+from backend.app.core.dependencies import get_db, get_current_user, require_ai_token_balance
 from backend.app.models.user import User
 from backend.jobradar.models.application import Application
 from backend.jobradar.services.briefing_service import BriefingService
@@ -10,7 +10,7 @@ from backend.jobradar.services.briefing_service import BriefingService
 router = APIRouter()
 
 
-@router.get("/briefing")
+@router.get("/briefing", dependencies=[Depends(require_ai_token_balance)])
 def get_company_briefing(
     application_id: int,
     current_user: User = Depends(get_current_user),
