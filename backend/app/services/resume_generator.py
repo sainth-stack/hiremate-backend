@@ -39,7 +39,7 @@ from backend.app.core.logging_config import get_logger
 from backend.app.services.keyword_analyzer import extract_keywords_for_resume
 
 from backend.jobradar.services.llm_factory import LLMFactory
-from backend.app.services.profile_service import ProfileService, build_resume_text_from_payload
+from backend.app.services.profile_service import ProfileService, migrate_legacy_skills_to_categories, build_resume_text_from_payload
 from backend.app.services.s3_service import upload_file_to_s3, generate_presigned_url
 
 logger = get_logger("services.resume_generator")
@@ -927,6 +927,7 @@ def build_resume_context_from_payload(
         "github": _ensure_url(getattr(links, "githubUrl", "") if hasattr(links, "githubUrl") else (links.get("githubUrl", "") if isinstance(links, dict) else "")),
         "portfolio": _ensure_url(getattr(links, "portfolioUrl", "") if hasattr(links, "portfolioUrl") else (links.get("portfolioUrl", "") if isinstance(links, dict) else "")),
         "skills": skills,
+        "skill_categories": _build_skill_categories_list(payload, skills),
         "experiences": experiences,
         "educations": educations,
         "projects": projects,
@@ -1041,13 +1042,18 @@ def render_html_resume(context: dict, template_dir: Path | None = None, template
     """Render HTML resume from Jinja2 template with context. Returns HTML string."""
     if template_dir is None:
         template_dir = Path(__file__).resolve().parent.parent.parent / "templates"
+    ctx = dict(context)
+    if 'section_labels' not in ctx:
+        ctx['section_labels'] = DEFAULT_SECTION_LABELS.copy()
+    if 'skill_categories' not in ctx:
+        ctx['skill_categories'] = []
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)
     template_name = TEMPLATE_MAP.get((template_id or "classic").lower(), "resume.html")
     try:
         template = env.get_template(template_name)
     except Exception:
         template = env.get_template("resume.html")
-    return template.render(**context)
+    return template.render(**ctx)
 
 
 def html_to_pdf_weasyprint(html_content: str, work_dir: Path) -> bytes:
@@ -1131,6 +1137,7 @@ def generate_resume_preview_pdf(
     if profile_override:
         try:
             payload = ProfilePayload(**profile_override)
+            migrate_legacy_skills_to_categories(payload)
         except Exception:
             payload = ProfilePayload()
         context = build_resume_context_from_payload(
@@ -1140,8 +1147,10 @@ def generate_resume_preview_pdf(
         )
     else:
         profile = ProfileService.get_or_create_profile(db, user)
+        pl_payload = profile_model_to_payload(profile)
+        migrate_legacy_skills_to_categories(pl_payload)
         context = build_resume_context_from_payload(
-            profile_model_to_payload(profile), job_title or "", job_description or "",
+            pl_payload, job_title or "", job_description or "",
             for_html=True, skip_llm=True, date_format_style=date_fmt,
             page_limits=page_limits,
         )
@@ -1191,17 +1200,64 @@ _SECTION_CTX_MAP = {
 }
 
 _SECTION_TITLE_PATTERNS = {
-    'summary': re.compile(r'summary', re.I),
+    'summary': re.compile(r'summary|profile|executive summary', re.I),
     'experience': re.compile(r'experience', re.I),
-    'skills': re.compile(r'skills', re.I),
+    'skills': re.compile(r'skills|competencies', re.I),
     'education': re.compile(r'education', re.I),
     'projects': re.compile(r'projects', re.I),
-    'certifications': re.compile(r'awards|certif', re.I),
+    'certifications': re.compile(r'awards|certif|honors', re.I),
+}
+
+DEFAULT_SECTION_LABELS = {
+    'summary': 'Professional Summary',
+    'experience': 'Work Experience',
+    'skills': 'Skills',
+    'education': 'Education',
+    'projects': 'Projects',
+    'certifications': 'Awards and Certificates',
 }
 
 
+def _resolve_section_labels(design_config: dict | None) -> dict:
+    labels = DEFAULT_SECTION_LABELS.copy()
+    if design_config and design_config.get('section_labels'):
+        for key, val in design_config['section_labels'].items():
+            if val and str(val).strip():
+                labels[key] = str(val).strip()
+    return labels
+
+
+def _build_skill_categories_list(payload, skills_dict: dict) -> list[dict]:
+    """Structured skill rows preserving user category labels for templates."""
+    rows: list[dict] = []
+    if hasattr(payload, 'skillCategories') and payload.skillCategories:
+        for cat in payload.skillCategories:
+            name = (getattr(cat, 'categoryName', None) or '').strip()
+            skill_list = getattr(cat, 'skills', None) or []
+            cleaned: list[str] = []
+            seen: set[str] = set()
+            for s in skill_list:
+                sn = str(s or '').strip()
+                if sn and sn.lower() not in seen:
+                    seen.add(sn.lower())
+                    cleaned.append(sn)
+            if name and cleaned:
+                rows.append({'label': name, 'value': ', '.join(cleaned)})
+    if not rows and skills_dict:
+        for key, value in skills_dict.items():
+            if value:
+                rows.append({
+                    'label': key.replace('_', ' ').title(),
+                    'value': value,
+                })
+    return rows
+
+
 def _apply_design_config_to_context(context: dict, design_config: dict) -> dict:
-    """Hide sections not in sections_visible by clearing their context keys."""
+    """Hide sections not in sections_visible; inject customizable section labels."""
+    context['section_labels'] = _resolve_section_labels(design_config)
+    if 'skill_categories' not in context or not context.get('skill_categories'):
+        context['skill_categories'] = []
     sections_visible = (design_config or {}).get('sections_visible') or []
     if not sections_visible:
         return context  # Empty list = all sections visible
@@ -1214,6 +1270,8 @@ def _apply_design_config_to_context(context: dict, design_config: dict) -> dict:
                 context[ctx_key] = {}
             elif isinstance(val, str):
                 context[ctx_key] = ''
+            if ctx_key == 'skills':
+                context['skill_categories'] = []
     return context
 
 
@@ -1569,6 +1627,7 @@ def generate_resume_preview_html(
     if profile_override:
         try:
             payload = ProfilePayload(**profile_override)
+            migrate_legacy_skills_to_categories(payload)
         except Exception:
             payload = ProfilePayload()
         # skip_llm=True: preview must be fast (~50ms). LLM enhancement already ran at generation time.
@@ -1579,9 +1638,11 @@ def generate_resume_preview_html(
         )
     else:
         profile = ProfileService.get_or_create_profile(db, user)
+        pl_payload = profile_model_to_payload(profile)
+        migrate_legacy_skills_to_categories(pl_payload)
         # Even without override, skip LLM for preview — this endpoint is for display only.
         context = build_resume_context_from_payload(
-            profile_model_to_payload(profile), job_title or "", job_description or "",
+            pl_payload, job_title or "", job_description or "",
             for_html=True, skip_llm=True, date_format_style=date_fmt,
             page_limits=page_limits,
         )

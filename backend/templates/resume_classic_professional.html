@@ -136,7 +136,7 @@ ul.bullets li {
 
 {% if professional_summary %}
 <div class="section">
-  <h2 class="section-title">Summary</h2>
+  <h2 class="section-title">{{ section_labels.summary }}</h2>
   <div class="section-rule"></div>
   <p class="summary-text">{{ professional_summary }}</p>
 </div>
@@ -144,7 +144,7 @@ ul.bullets li {
 
 {% if experiences %}
 <div class="section">
-  <h2 class="section-title">Experience</h2>
+  <h2 class="section-title">{{ section_labels.experience }}</h2>
   <div class="section-rule"></div>
   {% for exp in experiences %}
   <div class="entry">
@@ -163,9 +163,9 @@ ul.bullets li {
 </div>
 {% endif %}
 
-{% if skills %}
+{% if skill_categories or skills %}
 <div class="section">
-  <h2 class="section-title">Skills</h2>
+  <h2 class="section-title">{{ section_labels.skills }}</h2>
   <div class="section-rule"></div>
   {% set all_skills = [] %}
   {% for _, v in skills.items() %}
@@ -190,7 +190,7 @@ ul.bullets li {
 
 {% if educations %}
 <div class="section">
-  <h2 class="section-title">Education</h2>
+  <h2 class="section-title">{{ section_labels.education }}</h2>
   <div class="section-rule"></div>
   {% for edu in educations %}
   <div class="edu-row">
@@ -206,7 +206,7 @@ ul.bullets li {
 
 {% if projects %}
 <div class="section projects">
-  <h2 class="section-title">Projects</h2>
+  <h2 class="section-title">{{ section_labels.projects }}</h2>
   <div class="section-rule"></div>
   {% for proj in projects %}
   <div class="proj-item">
@@ -220,7 +220,7 @@ ul.bullets li {
 
 {% if awards %}
 <div class="section">
-  <h2 class="section-title">Additional Information</h2>
+  <h2 class="section-title">{{ section_labels.certifications }}</h2>
   <div class="section-rule"></div>
   <ul class="bullets">
     {% for award in awards %}<li>{{ award }}</li>{% endfor %}

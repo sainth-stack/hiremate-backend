@@ -292,16 +292,22 @@ ul.bullets li {
         </div>
         {% endif %}
 
-        {% if skills %}
+        {% if skill_categories or skills %}
         <div class="s-section">
-          <div class="s-title skills">Skills</div>
+          <div class="s-title skills">{{ section_labels.skills }}</div>
           <ul class="skills-list">
+            {% if skill_categories %}
+            {% for cat in skill_categories %}
+            <li><strong>{{ cat.label }}:</strong> {{ cat.value }}</li>
+            {% endfor %}
+            {% else %}
             {% if skills.languages %}<li>{{ skills.languages }}</li>{% endif %}
             {% if skills.frontend %}<li>{{ skills.frontend }}</li>{% endif %}
             {% if skills.backend %}<li>{{ skills.backend }}</li>{% endif %}
             {% if skills.genai %}<li>{{ skills.genai }}</li>{% endif %}
             {% if skills.tools %}<li>{{ skills.tools }}</li>{% endif %}
             {% if skills.devops %}<li>{{ skills.devops }}</li>{% endif %}
+            {% endif %}
           </ul>
         </div>
         {% endif %}
@@ -311,7 +317,7 @@ ul.bullets li {
     <td class="main">
       {% if educations %}
       <div class="m-section">
-        <div class="m-title education">Education</div>
+        <div class="m-title education">{{ section_labels.education }}</div>
         {% for edu in educations %}
         <div class="timeline-item">
           <div class="head-row">
@@ -327,7 +333,7 @@ ul.bullets li {
 
       {% if experiences %}
       <div class="m-section">
-        <div class="m-title experience">Experience</div>
+        <div class="m-title experience">{{ section_labels.experience }}</div>
         {% for exp in experiences %}
         <div class="timeline-item">
           <div class="head-row">
@@ -349,7 +355,7 @@ ul.bullets li {
 
       {% if projects %}
       <div class="m-section">
-        <div class="m-title">Projects</div>
+        <div class="m-title">{{ section_labels.projects }}</div>
         {% for proj in projects %}
         <div class="project">
           <div class="project-name">{{ proj.name }}</div>

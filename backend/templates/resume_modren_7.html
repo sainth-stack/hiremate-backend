@@ -85,7 +85,7 @@ ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
 {% if professional_summary %}
 <div class="block">
   <div class="row">
-    <div class="lbl">Summary</div>
+    <div class="lbl">{{ section_labels.summary }}</div>
     <div class="body"><div class="summary-text">{{ professional_summary }}</div></div>
   </div>
 </div>
@@ -94,7 +94,7 @@ ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
 {% if experiences %}
 <div class="block">
   <div class="row">
-    <div class="lbl">Experience</div>
+    <div class="lbl">{{ section_labels.experience }}</div>
     <div class="body">
       {% for exp in experiences %}
       <div class="exp-item">
@@ -118,10 +118,10 @@ ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
 </div>
 {% endif %}
 
-{% if skills %}
+{% if skill_categories or skills %}
 <div class="block">
   <div class="row">
-    <div class="lbl">Skills</div>
+    <div class="lbl">{{ section_labels.skills }}</div>
     <div class="body">
       {% set skill_items = [] %}
       {% for cat in ['languages','frontend','backend','genai','tools','devops'] %}
@@ -147,7 +147,7 @@ ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
 {% if educations %}
 <div class="block">
   <div class="row">
-    <div class="lbl">Education</div>
+    <div class="lbl">{{ section_labels.education }}</div>
     <div class="body">
       {% for edu in educations %}
       <div style="margin-bottom:12px;">

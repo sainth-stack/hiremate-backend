@@ -97,14 +97,14 @@ ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
 
 {% if professional_summary %}
 <div class="section">
-  <div class="sec-head"><span class="sec-title">Summary</span><span class="sec-rule"></span></div>
+  <div class="sec-head"><span class="sec-title">{{ section_labels.summary }}</span><span class="sec-rule"></span></div>
   <p class="summary">{{ professional_summary }}</p>
 </div>
 {% endif %}
 
 {% if experiences %}
 <div class="section">
-  <div class="sec-head"><span class="sec-title">Experience</span><span class="sec-rule"></span></div>
+  <div class="sec-head"><span class="sec-title">{{ section_labels.experience }}</span><span class="sec-rule"></span></div>
   {% for exp in experiences %}
   <div class="exp">
     <div class="exp-top">
@@ -120,9 +120,9 @@ ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
 </div>
 {% endif %}
 
-{% if skills %}
+{% if skill_categories or skills %}
 <div class="section">
-  <div class="sec-head"><span class="sec-title">Skills</span><span class="sec-rule"></span></div>
+  <div class="sec-head"><span class="sec-title">{{ section_labels.skills }}</span><span class="sec-rule"></span></div>
   {% set skill_items = [] %}
   {% for cat in ['languages','frontend','backend','genai','tools','devops'] %}
     {% if skills[cat] %}
@@ -152,7 +152,7 @@ ul.bullets li { margin-bottom: 2px; font-size: 9.5pt; }
 
 {% if educations %}
 <div class="section">
-  <div class="sec-head"><span class="sec-title">Education</span><span class="sec-rule"></span></div>
+  <div class="sec-head"><span class="sec-title">{{ section_labels.education }}</span><span class="sec-rule"></span></div>
   {% for edu in educations %}
   <div class="edu-row">
     <div class="edu-top">

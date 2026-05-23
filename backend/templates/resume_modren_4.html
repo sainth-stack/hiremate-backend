@@ -82,11 +82,11 @@ ul.bullets li { margin-bottom: 2px; font-size: 8.6pt; color: #444; }
     <div class="grid">
       <div class="col-l">
         {% if professional_summary %}
-        <div class="h">Summary</div>
+        <div class="h">{{ section_labels.summary }}</div>
         <div class="summary">{{ professional_summary }}</div>
         {% endif %}
         {% if experiences %}
-        <div style="margin-top:14px;" class="h">Experience</div>
+        <div style="margin-top:14px;" class="h">{{ section_labels.experience }}</div>
         {% for exp in experiences %}
         <div class="exp">
           <div class="exp-row">
@@ -109,8 +109,8 @@ ul.bullets li { margin-bottom: 2px; font-size: 8.6pt; color: #444; }
         {% if phone %}<div class="contact-line">{{ phone }}</div>{% endif %}
         {% if city or country %}<div class="contact-line">{% if city %}{{ city }}{% endif %}{% if city and country %}, {% endif %}{{ country }}</div>{% endif %}
         {% if linkedin %}<div class="contact-line"><a href="{{ linkedin }}">{{ linkedin.replace('https://','').replace('http://','') }}</a></div>{% endif %}
-        {% if skills %}
-        <div style="margin-top:12px;" class="h">Skills</div>
+        {% if skill_categories or skills %}
+        <div style="margin-top:12px;" class="h">{{ section_labels.skills }}</div>
         <ul class="skills-ul">
           {% for cat in ['languages','frontend','backend','genai','tools','devops'] %}
             {% if skills[cat] %}

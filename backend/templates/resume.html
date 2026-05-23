@@ -147,21 +147,27 @@ li {
 <!-- ================= PROFESSIONAL SUMMARY ================= -->
 {% if professional_summary %}
 <div class="section">
-    <div class="section-title">Professional Summary</div>
+    <div class="section-title">{{ section_labels.summary }}</div>
     <p class="summary-text">{{ professional_summary }}</p>
 </div>
 {% endif %}
 
 <!-- ================= SKILLS ================= -->
-{% if skills %}
+{% if skill_categories or skills %}
 <div class="section">
-    <div class="section-title">Skills</div>
+    <div class="section-title">{{ section_labels.skills }}</div>
     <div class="skills">
+        {% if skill_categories %}
+        {% for cat in skill_categories %}
+        <p><strong>{{ cat.label }}:</strong> {{ cat.value }}</p>
+        {% endfor %}
+        {% else %}
         {% for key, value in skills.items() %}
         {% if value %}
         <p><strong>{{ key.replace('_', ' ').title() }}:</strong> {{ value }}</p>
         {% endif %}
         {% endfor %}
+        {% endif %}
     </div>
 </div>
 {% endif %}
@@ -169,7 +175,7 @@ li {
 <!-- ================= WORK EXPERIENCE ================= -->
 {% if experiences %}
 <div class="section">
-    <div class="section-title">Work Experience</div>
+    <div class="section-title">{{ section_labels.experience }}</div>
     {% for exp in experiences %}
     <div class="job">
         <div class="job-header">
@@ -195,7 +201,7 @@ li {
 <!-- ================= EDUCATION ================= -->
 {% if educations %}
 <div class="section">
-    <div class="section-title">Education</div>
+    <div class="section-title">{{ section_labels.education }}</div>
     {% for edu in educations %}
     <div class="education">
         <div>
@@ -213,7 +219,7 @@ li {
 <!-- ================= PROJECTS ================= -->
 {% if projects %}
 <div class="section">
-    <div class="section-title">Projects</div>
+    <div class="section-title">{{ section_labels.projects }}</div>
     {% for proj in projects %}
     <div class="project">
         <strong>{{ proj.name }}</strong>
@@ -254,7 +260,7 @@ li {
 <!-- ================= AWARDS ================= -->
 {% if awards %}
 <div class="section awards">
-    <div class="section-title">Awards and Certificates</div>
+    <div class="section-title">{{ section_labels.certifications }}</div>
     <ul>
         {% for award in awards %}
         <li>{{ award }}</li>

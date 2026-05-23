@@ -101,8 +101,8 @@ ul.bullets li { margin-bottom: 2px; font-size: 8.8pt; color: #333; }
           {% if phone %}<div>{{ phone }}</div>{% endif %}
           {% if email %}<div>{{ email }}</div>{% endif %}
         </div>
-        {% if skills %}
-        <div class="side-h">Skills</div>
+        {% if skill_categories or skills %}
+        <div class="side-h">{{ section_labels.skills }}</div>
         <div class="side-body">
           <ul>
             {% for cat in ['languages','frontend','backend','genai','tools','devops'] %}
@@ -116,7 +116,7 @@ ul.bullets li { margin-bottom: 2px; font-size: 8.8pt; color: #333; }
         </div>
         {% endif %}
         {% if educations %}
-        <div class="side-h">Education</div>
+        <div class="side-h">{{ section_labels.education }}</div>
         <div class="side-body">
           {% for edu in educations %}
           <div style="margin-bottom:10px;">
@@ -131,13 +131,13 @@ ul.bullets li { margin-bottom: 2px; font-size: 8.8pt; color: #333; }
     </td>
     <td class="main">
       {% if professional_summary %}
-      <div class="main-h">Summary</div>
+      <div class="main-h">{{ section_labels.summary }}</div>
       <div class="main-h-line"></div>
       <div class="summary">{{ professional_summary }}</div>
       {% endif %}
       {% if experiences %}
       <div style="margin-top:14px;">
-        <div class="main-h">Experience</div>
+        <div class="main-h">{{ section_labels.experience }}</div>
         <div class="main-h-line"></div>
         {% for exp in experiences %}
         <div class="exp-block">

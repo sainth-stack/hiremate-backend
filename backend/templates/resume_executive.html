@@ -46,28 +46,34 @@ li { margin-bottom: 2px; }
 
 {% if professional_summary %}
 <div class="section">
-  <div class="section-title">Executive Summary</div>
+  <div class="section-title">{{ section_labels.summary }}</div>
   <p class="summary-text">{{ professional_summary }}</p>
 </div>
 {% endif %}
 
-{% if skills %}
+{% if skill_categories or skills %}
 <div class="section">
-  <div class="section-title">Core Competencies</div>
+  <div class="section-title">{{ section_labels.skills }}</div>
   <div class="skills-grid">
-    {% if skills.languages %}<span class="sk-label">Languages:</span><span class="sk-val">{{ skills.languages }}</span>{% endif %}
+    {% if skill_categories %}
+        {% for cat in skill_categories %}
+        <p><strong>{{ cat.label }}:</strong> {{ cat.value }}</p>
+        {% endfor %}
+        {% else %}
+        {% if skills.languages %}<span class="sk-label">Languages:</span><span class="sk-val">{{ skills.languages }}</span>{% endif %}
     {% if skills.frontend %}<span class="sk-label">Frontend:</span><span class="sk-val">{{ skills.frontend }}</span>{% endif %}
     {% if skills.backend %}<span class="sk-label">Backend:</span><span class="sk-val">{{ skills.backend }}</span>{% endif %}
     {% if skills.genai %}<span class="sk-label">AI/GenAI:</span><span class="sk-val">{{ skills.genai }}</span>{% endif %}
     {% if skills.tools %}<span class="sk-label">Tools:</span><span class="sk-val">{{ skills.tools }}</span>{% endif %}
     {% if skills.devops %}<span class="sk-label">DevOps & Cloud:</span><span class="sk-val">{{ skills.devops }}</span>{% endif %}
+        {% endif %}
   </div>
 </div>
 {% endif %}
 
 {% if experiences %}
 <div class="section">
-  <div class="section-title">Professional Experience</div>
+  <div class="section-title">{{ section_labels.experience }}</div>
   {% for exp in experiences %}
   <div class="job">
     <div class="job-header">
@@ -90,7 +96,7 @@ li { margin-bottom: 2px; }
 
 {% if educations %}
 <div class="section">
-  <div class="section-title">Education</div>
+  <div class="section-title">{{ section_labels.education }}</div>
   {% for edu in educations %}
   <div class="education">
     <div><strong>{{ edu.institution }}</strong><br>{{ edu.degree }}</div>
@@ -102,7 +108,7 @@ li { margin-bottom: 2px; }
 
 {% if projects %}
 <div class="section">
-  <div class="section-title">Key Projects</div>
+  <div class="section-title">{{ section_labels.projects }}</div>
   {% for proj in projects %}
   <div class="project">
     <strong>{{ proj.name }}</strong>
@@ -115,7 +121,7 @@ li { margin-bottom: 2px; }
 
 {% if awards %}
 <div class="section awards">
-  <div class="section-title">Awards & Certifications</div>
+  <div class="section-title">{{ section_labels.certifications }}</div>
   <ul>{% for award in awards %}<li>{{ award }}</li>{% endfor %}</ul>
 </div>
 {% endif %}

@@ -179,7 +179,7 @@ ul.bullets li {
     <div class="main-col">
       {% if professional_summary %}
       <div class="section">
-        <div class="section-title">Summary</div>
+        <div class="section-title">{{ section_labels.summary }}</div>
         <div class="title-accent"></div>
         <div class="summary">{{ professional_summary }}</div>
         <div class="section-rule"></div>
@@ -188,7 +188,7 @@ ul.bullets li {
 
       {% if experiences %}
       <div class="section">
-        <div class="section-title">Experience</div>
+        <div class="section-title">{{ section_labels.experience }}</div>
         <div class="title-accent"></div>
         {% for exp in experiences %}
         <div class="experience-item">
@@ -209,7 +209,7 @@ ul.bullets li {
 
       {% if educations %}
       <div class="section">
-        <div class="section-title">Education</div>
+        <div class="section-title">{{ section_labels.education }}</div>
         <div class="title-accent"></div>
         {% for edu in educations %}
         <div class="education-item">
@@ -234,17 +234,23 @@ ul.bullets li {
         <div class="section-rule"></div>
       </div>
 
-      {% if skills %}
+      {% if skill_categories or skills %}
       <div class="section">
-        <div class="section-title">Skills</div>
+        <div class="section-title">{{ section_labels.skills }}</div>
         <div class="title-accent"></div>
         <ul class="skills-list">
+          {% if skill_categories %}
+          {% for cat in skill_categories %}
+          <li><strong>{{ cat.label }}:</strong> {{ cat.value }}</li>
+          {% endfor %}
+          {% else %}
           {% if skills.languages %}{% for item in skills.languages.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
           {% if skills.frontend %}{% for item in skills.frontend.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
           {% if skills.backend %}{% for item in skills.backend.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
           {% if skills.genai %}{% for item in skills.genai.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
           {% if skills.tools %}{% for item in skills.tools.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
           {% if skills.devops %}{% for item in skills.devops.split(',') %}{% if item.strip() %}<li>{{ item.strip() }}</li>{% endif %}{% endfor %}{% endif %}
+          {% endif %}
         </ul>
       </div>
       {% endif %}
