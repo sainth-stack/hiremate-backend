@@ -156,7 +156,7 @@ def _score_bullet(bullet: str, keywords: set[str]) -> int:
     return sum(1 for k in keywords if k in bullet_lower)
 
 
-def _process_skill_categories(payload) -> dict[str, str]:
+def _process_skill_categories(payload, max_skills_per_category: int = 12) -> dict[str, str]:
     """
     Process skillCategories from profile payload.
     If skillCategories exist, use them directly (user's custom structure).
@@ -174,7 +174,7 @@ def _process_skill_categories(payload) -> dict[str, str]:
                 # Deduplicate and limit skills per category
                 seen = set()
                 unique_skills = []
-                for skill in skills[:12]:  # Max 12 skills per category
+                for skill in skills[:max_skills_per_category]:
                     skill = skill.strip()
                     norm = _normalize_skill_for_dedup(skill)
                     if norm and norm not in seen:
@@ -184,10 +184,10 @@ def _process_skill_categories(payload) -> dict[str, str]:
         return result
     
     # Fall back to legacy techSkills categorization
-    return _categorize_skills(payload.techSkills or [])
+    return _categorize_skills(payload.techSkills or [], max_skills_per_category=max_skills_per_category)
 
 
-def _categorize_skills(tech_skills: list[TechSkill]) -> dict[str, str]:
+def _categorize_skills(tech_skills: list[TechSkill], max_skills_per_category: int = 8) -> dict[str, str]:
     """Group tech skills into template categories. Deduplicates aliases (React/React.js)."""
     categories: dict[str, list[str]] = {
         "languages": [],
@@ -219,8 +219,89 @@ def _categorize_skills(tech_skills: list[TechSkill]) -> dict[str, str]:
 
     for ts in tech_skills or []:
         add_to_category(ts.name)
-    # Single-page: max 8 skills per category
-    return {k: ", ".join(v[:8]) for k, v in categories.items() if v}
+    return {k: ", ".join(v[:max_skills_per_category]) for k, v in categories.items() if v}
+
+
+def _resolve_target_page_count(design_config: dict | None) -> str | int:
+    """Return 'auto' or int page target (1–5). Default auto = include all content."""
+    if not design_config:
+        return "auto"
+    raw = design_config.get("target_page_count", "auto")
+    if raw in ("auto", "Auto", None, ""):
+        return "auto"
+    try:
+        return max(1, min(5, int(raw)))
+    except (TypeError, ValueError):
+        return "auto"
+
+
+def _get_page_content_limits(target_page_count: str | int) -> dict:
+    """Content caps scaled by target page count. 'auto' = include all user content."""
+    if target_page_count == "auto":
+        return {
+            "max_experiences": 50,
+            "max_bullets_per_exp": 20,
+            "max_education": 20,
+            "max_projects": 20,
+            "max_bullets_per_project": 15,
+            "max_awards": 20,
+            "max_skills_per_category": 50,
+            "max_custom_bullets": 30,
+            "summary_max_len": 3000,
+            "bullet_max_len": 600,
+            "paragraph_max_len": 2000,
+        }
+
+    n = int(target_page_count) if target_page_count else 1
+    base = {
+        "max_experiences": 3,
+        "max_bullets_per_exp": 4,
+        "max_education": 2,
+        "max_projects": 2,
+        "max_bullets_per_project": 5,
+        "max_awards": 2,
+        "max_skills_per_category": 8,
+        "max_custom_bullets": 6,
+        "summary_max_len": 1000,
+        "bullet_max_len": 350,
+        "paragraph_max_len": 800,
+    }
+    if n == 1:
+        return base
+
+    return {
+        "max_experiences": base["max_experiences"] * n,
+        "max_bullets_per_exp": min(12, base["max_bullets_per_exp"] + (n - 1) * 2),
+        "max_education": base["max_education"] * n,
+        "max_projects": base["max_projects"] * n,
+        "max_bullets_per_project": min(12, base["max_bullets_per_project"] + (n - 1) * 2),
+        "max_awards": base["max_awards"] * n,
+        "max_skills_per_category": base["max_skills_per_category"] * n,
+        "max_custom_bullets": base["max_custom_bullets"] * n,
+        "summary_max_len": min(3000, base["summary_max_len"] * n),
+        "bullet_max_len": min(600, base["bullet_max_len"] + (n - 1) * 50),
+        "paragraph_max_len": min(2000, base["paragraph_max_len"] * n),
+    }
+
+
+def _page_limits_from_design_config(design_config: dict | None) -> dict:
+    return _get_page_content_limits(_resolve_target_page_count(design_config))
+
+
+# Preview/download must mirror the editor — never drop lines the user typed.
+_PREVIEW_CONTENT_LIMITS = {
+    "max_experiences": 100,
+    "max_bullets_per_exp": 999,
+    "max_education": 100,
+    "max_projects": 100,
+    "max_bullets_per_project": 999,
+    "max_awards": 100,
+    "max_skills_per_category": 999,
+    "max_custom_bullets": 999,
+    "summary_max_len": 5000,
+    "bullet_max_len": 2000,
+    "paragraph_max_len": 5000,
+}
 
 
 def _enrich_skills_with_jd_keywords(
@@ -343,30 +424,41 @@ def _truncate_at_word(text: str, max_len: int = 200) -> str:
     return (truncated.rstrip() + "...") if len(text) > len(truncated) else truncated
 
 
-def _parse_bullets(description: str, max_bullets: int = 4) -> list[str]:
-    """Parse description into bullet points. Splits by newlines/dashes, or by sentences if single paragraph."""
+def _parse_bullets(description: str, max_bullets: int | None = None) -> list[str]:
+    """Parse description into bullet points. Each non-empty line is one bullet."""
     if not description:
         return []
-    text = description.replace("•", "\n").replace("–", "\n").replace("- ", "\n")
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    if len(lines) >= 2:
-        return lines[:max_bullets]
-    # Single long paragraph: split by sentence boundary for better bullet separation
-    if lines and len(lines[0]) > 150:
+
+    lines: list[str] = []
+    for raw_line in description.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Strip a single leading bullet/dash marker (editor stores plain text per line).
+        line = re.sub(r"^[•\-\–\*▸]\s*", "", line).strip()
+        if line:
+            lines.append(line)
+
+    if not lines:
+        return []
+
+    # Legacy: single paragraph with no newlines — split into sentences.
+    if len(lines) == 1 and len(lines[0]) > 150:
         parts = re.split(r"\s*\.\s+", lines[0])
-        result = []
+        sentence_lines: list[str] = []
         for p in parts:
             p = p.strip()
             if not p:
                 continue
             if not p.endswith(".") and not p.endswith("!"):
                 p = p + "."
-            result.append(p)
-            if len(result) >= max_bullets:
-                break
-        if result:
-            return result
-    return lines[:max_bullets]
+            sentence_lines.append(p)
+        if len(sentence_lines) >= 2:
+            lines = sentence_lines
+
+    if max_bullets is not None and max_bullets > 0:
+        return lines[:max_bullets]
+    return lines
 
 
 _MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -595,6 +687,7 @@ def _build_professional_summary(
     skip_llm: bool = False,
     user_id: int = None,
     email: str = None,
+    summary_max_len: int = 1000,
 ) -> str:
     """
     Build professional summary from user profile.
@@ -606,11 +699,11 @@ def _build_professional_summary(
 
     # Always prefer the user's own text — left panel must match right panel
     if summary and len(summary) >= 80:
-        return escape_fn(_truncate_at_word(summary, max_len=1000))
+        return escape_fn(_truncate_at_word(summary, max_len=summary_max_len))
 
     # For live preview: use whatever the user typed, even if short
     if skip_llm:
-        return escape_fn(_truncate_at_word(summary or headline, max_len=1000)) if (summary or headline) else ""
+        return escape_fn(_truncate_at_word(summary or headline, max_len=summary_max_len)) if (summary or headline) else ""
 
     # LLM tailoring only during initial generation when summary is empty or very short
     all_skills: list[str] = []
@@ -643,10 +736,24 @@ def build_resume_context_from_payload(
     date_format_style: str = 'Long Name (January YYYY)',
     user_id: int = None,
     email: str = None,
+    page_limits: dict | None = None,
 ) -> dict:
     """Build Jinja2 context directly from a ProfilePayload (no DB access needed).
     skip_llm=True: skip all LLM enhancement calls — use for live preview (~50ms response).
-    skip_llm=False: run LLM bullet/project/summary enhancement — use for initial generation."""
+    skip_llm=False: run LLM bullet/project/summary enhancement — use for initial generation.
+    page_limits: content caps from _get_page_content_limits(); defaults to auto (all content)."""
+    limits = _PREVIEW_CONTENT_LIMITS if skip_llm else (page_limits or _get_page_content_limits("auto"))
+    max_exp = limits["max_experiences"]
+    max_bullets_exp = limits["max_bullets_per_exp"]
+    max_edu = limits["max_education"]
+    max_proj = limits["max_projects"]
+    max_bullets_proj = limits["max_bullets_per_project"]
+    max_awards = limits["max_awards"]
+    max_skills = limits["max_skills_per_category"]
+    max_custom_bullets = limits["max_custom_bullets"]
+    summary_max_len = limits["summary_max_len"]
+    bullet_max_len = limits["bullet_max_len"]
+    paragraph_max_len = limits["paragraph_max_len"]
     escape_fn = _identity if for_html else _latex_escape
     keywords = _get_jd_keywords(job_description or "")
 
@@ -662,35 +769,32 @@ def build_resume_context_from_payload(
         return u
 
     # Skills - use new skillCategories or fall back to legacy techSkills
-    skills = _process_skill_categories(payload)
+    skills = _process_skill_categories(payload, max_skills_per_category=max_skills)
     if not any(skills.values()) and payload.techSkills:
-        skills["languages"] = ", ".join((s.name or "").strip() for s in payload.techSkills[:10])
+        skills["languages"] = ", ".join((s.name or "").strip() for s in payload.techSkills[:max_skills])
     skills = _enrich_skills_with_jd_keywords(skills, payload, keywords)
 
-    # Experiences: max 3 roles, 4 bullets each
+    # Experiences
     experiences: list[dict] = []
-    for exp in (payload.experiences or [])[:3]:
-        bullets = _parse_bullets(exp.description or "", max_bullets=4)
-        if keywords and bullets:
-            # Only re-sort by keyword score during initial AI generation (skip_llm=False).
-            # When skip_llm=True (preview/download), preserve the order the user sees in the editor.
-            if not skip_llm:
-                bullets = sorted(bullets, key=lambda b: -_score_bullet(b, keywords))[:4]
-            else:
-                bullets = bullets[:4]
-            if not skip_llm:
-                total_score = sum(_score_bullet(b, keywords) for b in bullets)
-                if total_score < len(keywords) * 0.3 and len(keywords) >= 3:
-                    enhanced = _enhance_bullets_for_jd_llm(
-                        bullets, job_title or "", job_description or "",
-                        exp.companyName or "Company", exp.jobTitle or "Role", keywords,
-                        user_id=user_id, email=email
-                    )
-                    if enhanced:
-                        bullets = enhanced
-        elif bullets:
-            bullets = bullets[:4]
-        bullet_texts = [_truncate_at_word(b or "", max_len=350) for b in bullets]
+    for exp in (payload.experiences or [])[:max_exp]:
+        bullets = _parse_bullets(
+            exp.description or "",
+            max_bullets=None if skip_llm else max_bullets_exp,
+        )
+        if keywords and bullets and not skip_llm:
+            bullets = sorted(bullets, key=lambda b: -_score_bullet(b, keywords))[:max_bullets_exp]
+            total_score = sum(_score_bullet(b, keywords) for b in bullets)
+            if total_score < len(keywords) * 0.3 and len(keywords) >= 3:
+                enhanced = _enhance_bullets_for_jd_llm(
+                    bullets, job_title or "", job_description or "",
+                    exp.companyName or "Company", exp.jobTitle or "Role", keywords,
+                    user_id=user_id, email=email
+                )
+                if enhanced:
+                    bullets = enhanced[:max_bullets_exp]
+        elif bullets and not skip_llm:
+            bullets = bullets[:max_bullets_exp]
+        bullet_texts = [_truncate_at_word(b or "", max_len=bullet_max_len) for b in bullets]
         if for_html and keywords:
             bullets_out = [_bold_keywords_in_bullet(t, keywords) for t in bullet_texts]
         else:
@@ -704,9 +808,9 @@ def build_resume_context_from_payload(
             "bullets": bullets_out,
         })
 
-    # Education: max 2
+    # Education
     educations: list[dict] = []
-    for edu in (payload.educations or [])[:2]:
+    for edu in (payload.educations or [])[:max_edu]:
         degree = edu.degree or ""
         if edu.fieldOfStudy:
             degree = f"{degree} in {edu.fieldOfStudy}" if degree else edu.fieldOfStudy
@@ -718,13 +822,15 @@ def build_resume_context_from_payload(
             "grade": escape_fn(edu.grade or ""),
         })
 
-    # Projects: max 2, parse bullets properly
+    # Projects
     projects: list[dict] = []
-    for proj in (payload.projects or [])[:2]:
+    for proj in (payload.projects or [])[:max_proj]:
         desc = proj.description or ""
         
-        # Parse bullets from the description
-        bullets = _parse_bullets(desc, max_bullets=5)
+        bullets = _parse_bullets(
+            desc,
+            max_bullets=None if skip_llm else max_bullets_proj,
+        )
         
         if not skip_llm and keywords and bullets and _score_bullet(" ".join(bullets), keywords) < len(keywords) * 0.2 and len(keywords) >= 3:
             enhanced = _enhance_project_for_jd_llm(
@@ -733,10 +839,12 @@ def build_resume_context_from_payload(
                 user_id=user_id, email=email
             )
             if enhanced:
-                bullets = _parse_bullets(enhanced, max_bullets=5)
+                bullets = _parse_bullets(enhanced, max_bullets=max_bullets_proj)
+        elif bullets and not skip_llm:
+            bullets = bullets[:max_bullets_proj]
         
         # Format bullets for output
-        bullet_texts = [_truncate_at_word(b or "", max_len=350) for b in bullets]
+        bullet_texts = [_truncate_at_word(b or "", max_len=bullet_max_len) for b in bullets]
         if for_html and keywords:
             bullets_out = [_bold_keywords_in_bullet(t, keywords) for t in bullet_texts]
         else:
@@ -760,12 +868,13 @@ def build_resume_context_from_payload(
         skip_llm=skip_llm,
         user_id=user_id,
         email=email,
+        summary_max_len=summary_max_len,
     )
 
     # Awards
     aw = raw_awards if raw_awards is not None else []
     if isinstance(aw, list):
-        awards = [escape_fn(str(a)) for a in aw if a][:2]
+        awards = [escape_fn(str(a)) for a in aw if a][:max_awards]
     elif isinstance(aw, str):
         awards = [escape_fn(aw)]
     else:
@@ -784,7 +893,7 @@ def build_resume_context_from_payload(
                 if section_name and content:
                     if format_type == 'paragraph':
                         # Paragraph format - just escape and truncate
-                        paragraph_text = _truncate_at_word(content, max_len=800)
+                        paragraph_text = _truncate_at_word(content, max_len=paragraph_max_len)
                         custom_sections.append({
                             "sectionName": escape_fn(section_name),
                             "paragraph": escape_fn(paragraph_text),
@@ -792,9 +901,13 @@ def build_resume_context_from_payload(
                             "order": getattr(section, 'order', len(custom_sections))
                         })
                     else:
-                        # Bullets format (default)
-                        bullets = _parse_bullets(content, max_bullets=6)
-                        bullet_texts = [_truncate_at_word(b or "", max_len=350) for b in bullets]
+                        bullets = _parse_bullets(
+                            content,
+                            max_bullets=None if skip_llm else max_custom_bullets,
+                        )
+                        if not skip_llm:
+                            bullets = bullets[:max_custom_bullets]
+                        bullet_texts = [_truncate_at_word(b or "", max_len=bullet_max_len) for b in bullets]
                         bullets_out = [escape_fn(t) for t in bullet_texts]
                         custom_sections.append({
                             "sectionName": escape_fn(section_name),
@@ -838,7 +951,8 @@ def build_resume_context(
         raw_aw = []
     return build_resume_context_from_payload(
         payload, job_title, job_description, for_html, raw_aw,
-        user_id=profile.user_id, email=profile.user.email if hasattr(profile, "user") and profile.user else None
+        user_id=profile.user_id, email=profile.user.email if hasattr(profile, "user") and profile.user else None,
+        page_limits=_get_page_content_limits("auto"),
     )
 
 
@@ -1012,6 +1126,7 @@ def generate_resume_preview_pdf(
                 del _PREVIEW_CACHE[cache_key]
 
     date_fmt = dcfg.get('format_dates', 'Long Name (January YYYY)')
+    page_limits = _page_limits_from_design_config(dcfg)
 
     if profile_override:
         try:
@@ -1021,12 +1136,14 @@ def generate_resume_preview_pdf(
         context = build_resume_context_from_payload(
             payload, job_title or "", job_description or "",
             for_html=True, skip_llm=True, date_format_style=date_fmt,
+            page_limits=page_limits,
         )
     else:
         profile = ProfileService.get_or_create_profile(db, user)
         context = build_resume_context_from_payload(
             profile_model_to_payload(profile), job_title or "", job_description or "",
             for_html=True, skip_llm=True, date_format_style=date_fmt,
+            page_limits=page_limits,
         )
 
     _apply_design_config_to_context(context, dcfg)
@@ -1334,6 +1451,21 @@ def _build_design_css_overrides(design_config: dict, template_id: str) -> str:
     if design_config.get('page_size') == 'A4':
         lines.append("@page { size: A4 !important; }")
 
+    # ── Multi-page layout: page breaks + remove single-page min-height constraints ──
+    target_pages = _resolve_target_page_count(design_config)
+    lines += [
+        ".job, .entry, .proj-item, .edu-row, .education-row, .project { "
+        "page-break-inside: avoid; break-inside: avoid; }",
+        ".section-title { page-break-after: avoid; break-after: avoid; }",
+        "ul.bullets li, ul li { page-break-inside: avoid; break-inside: avoid; }",
+    ]
+    if target_pages != 1:
+        lines += [
+            ".page { min-height: auto !important; height: auto !important; }",
+            "table.layout { page-break-inside: auto; }",
+            "td.sidebar { page-break-inside: avoid; }",
+        ]
+
     # ── Bullet indent ─────────────────────────────────────────────────────────
     # Uses padding-left (not margin-left) so 0 is truly 0 regardless of bullet style.
     # list-style-position:inside keeps disc bullets visible even at 0px indent.
@@ -1385,6 +1517,31 @@ def _inject_resume_typography(html: str) -> str:
     return html.replace("</head>", _RESUME_GLOBAL_TYPOGRAPHY + "\n</head>")
 
 
+def _build_preview_multipage_screen_css(design_config: dict) -> str:
+    """Screen-only CSS: page shadows between virtual pages in iframe preview."""
+    page_size = design_config.get("page_size", "Letter")
+    page_h_px = 1123 if page_size == "A4" else 1056
+    return f"""<style>
+@media screen {{
+  body {{
+    box-shadow:
+      0 1px 0 0 #d1d5db,
+      0 {page_h_px}px 0 0 #d1d5db,
+      0 {page_h_px + 1}px 0 0 transparent;
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent {page_h_px - 1}px,
+      #d1d5db {page_h_px - 1}px,
+      #d1d5db {page_h_px}px
+    );
+    background-size: 100% {page_h_px}px;
+    background-repeat: repeat-y;
+  }}
+}}
+</style>"""
+
+
 def generate_resume_preview_html(
     db: Session,
     user: User,
@@ -1407,6 +1564,7 @@ def generate_resume_preview_html(
     """
     dcfg = design_config or {}
     date_fmt = dcfg.get('format_dates', 'Long Name (January YYYY)')
+    page_limits = _page_limits_from_design_config(dcfg)
 
     if profile_override:
         try:
@@ -1417,6 +1575,7 @@ def generate_resume_preview_html(
         context = build_resume_context_from_payload(
             payload, job_title or "", job_description or "",
             for_html=True, skip_llm=True, date_format_style=date_fmt,
+            page_limits=page_limits,
         )
     else:
         profile = ProfileService.get_or_create_profile(db, user)
@@ -1424,6 +1583,7 @@ def generate_resume_preview_html(
         context = build_resume_context_from_payload(
             profile_model_to_payload(profile), job_title or "", job_description or "",
             for_html=True, skip_llm=True, date_format_style=date_fmt,
+            page_limits=page_limits,
         )
 
     _apply_design_config_to_context(context, dcfg)
@@ -1470,6 +1630,9 @@ def generate_resume_preview_html(
 }
 </style>"""
     html = html.replace("</head>", _preview_screen_gutter + "\n</head>")
+
+    if dcfg:
+        html = html.replace("</head>", _build_preview_multipage_screen_css(dcfg) + "\n</head>")
 
     html = _inject_resume_typography(html)
     return html

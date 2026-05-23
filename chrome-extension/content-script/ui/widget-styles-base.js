@@ -17,6 +17,13 @@ function getWidgetStylesBase() {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: #1a1a1a;
         box-sizing: border-box;
+        pointer-events: auto;
+      }
+      #${INPAGE_ROOT_ID}.collapsed {
+        pointer-events: none;
+      }
+      #${INPAGE_ROOT_ID}.collapsed .ja-mini {
+        pointer-events: auto;
       }
       #${INPAGE_ROOT_ID} * { box-sizing: border-box; }
       #${INPAGE_ROOT_ID} .ja-card {

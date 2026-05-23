@@ -46,6 +46,17 @@ function getWidgetHTML() {
           <span class="ja-settings-title">Settings</span>
         </div>
         <div class="ja-settings-body">
+          <div class="ja-settings-section-title">General</div>
+          <div class="ja-settings-row">
+            <div class="ja-settings-row-info">
+              <div class="ja-settings-row-label">Auto-Open Widget</div>
+              <div class="ja-settings-row-desc">Automatically open widget on job application pages</div>
+            </div>
+            <label class="hm-toggle">
+              <input type="checkbox" id="hm-auto-open-toggle" checked />
+              <span class="hm-toggle-slider"></span>
+            </label>
+          </div>
           <div class="ja-settings-section-title">LinkedIn</div>
           <div class="ja-settings-row">
             <div class="ja-settings-row-info">

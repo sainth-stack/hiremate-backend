@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpsBrain Autofill – Instant Job Applications, Job Match, AI Tailor Resume",
-  "version": "2.0.0",
+  "version": "4.0.0",
   "description": "Fill job application forms with your resume data. Learns new questions and reuses answers.",
   "homepage_url": "https://opsbrainai.com",
   "permissions": ["storage", "activeTab", "scripting", "webNavigation", "tabs"],

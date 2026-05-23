@@ -1,24 +1,74 @@
-function mountInPageUI() {
-  if (window.self !== window.top) return;
-  const existing = document.getElementById(INPAGE_ROOT_ID);
-  if (existing) {
-    existing.classList.remove("collapsed");
-    updateWidgetAuthUI(existing);
-    if (isCareerPage()) trackCareerPageView();
-    updateSavedTimeDisplay(existing);
-    return;
-  }
+// Widget state management - professional popup behavior
+const WIDGET_STATE_KEY = `hm_widget_dismissed_${location.href}`;
+const WIDGET_SESSION_KEY = `hm_widget_session_${Date.now()}`;
+const WIDGET_AUTO_OPEN_PREF = "hm_auto_open_enabled"; // Global preference
 
-  const root = document.createElement("div");
-  root.id = INPAGE_ROOT_ID;
-  if (typeof window.__HM_PREACT_MOUNT_INPAGE__ === "function") {
-    document.documentElement.appendChild(root);
-    window.__HM_PREACT_MOUNT_INPAGE__(root);
-    return;
+async function isAutoOpenEnabled() {
+  try {
+    const result = await chrome.storage.local.get([WIDGET_AUTO_OPEN_PREF]);
+    return result[WIDGET_AUTO_OPEN_PREF] !== false; // Default: enabled
+  } catch {
+    return true;
   }
-  mountInPageUILegacyInto(root);
-  document.documentElement.appendChild(root);
-  initColdEmailRadio();
+}
+
+function isWidgetDismissedForThisPage() {
+  try {
+    const dismissed = sessionStorage.getItem(WIDGET_STATE_KEY);
+    return dismissed === "true";
+  } catch {
+    return false;
+  }
+}
+
+function markWidgetAsDismissed() {
+  try {
+    sessionStorage.setItem(WIDGET_STATE_KEY, "true");
+  } catch {}
+}
+
+function clearWidgetDismissal() {
+  try {
+    sessionStorage.removeItem(WIDGET_STATE_KEY);
+  } catch {}
+}
+
+function mountInPageUI(options = {}) {
+  if (window.self !== window.top) return;
+  
+  try {
+    const existing = document.getElementById(INPAGE_ROOT_ID);
+    if (existing) {
+      // Only auto-expand if explicitly requested or not dismissed by user
+      const shouldExpand = options.forceOpen || !isWidgetDismissedForThisPage();
+      if (shouldExpand) {
+        existing.classList.remove("collapsed");
+      }
+      updateWidgetAuthUI(existing);
+      if (isCareerPage()) trackCareerPageView();
+      updateSavedTimeDisplay(existing);
+      return;
+    }
+
+    const root = document.createElement("div");
+    root.id = INPAGE_ROOT_ID;
+    
+    // Preact mount (future-ready)
+    if (typeof window.__HM_PREACT_MOUNT_INPAGE__ === "function") {
+      document.documentElement.appendChild(root);
+      window.__HM_PREACT_MOUNT_INPAGE__(root);
+      return;
+    }
+    
+    // Legacy mount
+    mountInPageUILegacyInto(root);
+    document.documentElement.appendChild(root);
+    initColdEmailRadio();
+    
+    logInfo("Widget mounted successfully");
+  } catch (err) {
+    logWarn("Failed to mount widget", { error: String(err) });
+  }
 }
 
 function mountInPageUILegacyInto(root) {
@@ -224,11 +274,74 @@ function mountInPageUILegacyInto(root) {
     isDragging = false;
   });
 
-  closeBtn?.addEventListener("click", () => root.classList.add("collapsed"));
+  closeBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    try {
+      // Add smooth close animation
+      const card = root.querySelector(".ja-card");
+      if (card) {
+        card.style.animation = "fadeOutScale 0.2s ease-out";
+        setTimeout(() => {
+          if (root && root.isConnected) {
+            root.classList.add("collapsed");
+            card.style.animation = "";
+          }
+        }, 200);
+      } else {
+        root.classList.add("collapsed");
+      }
+      
+      markWidgetAsDismissed(); // Remember user dismissed it
+      logInfo("Widget closed by user");
+    } catch (err) {
+      logWarn("Error closing widget", { error: String(err) });
+      // Fallback: simple close
+      if (root && root.isConnected) root.classList.add("collapsed");
+    }
+  });
+  
   openBtn?.addEventListener("click", (e) => {
     if (didDrag) return;
-    root.classList.remove("collapsed");
+    e.preventDefault();
+    e.stopPropagation();
+    
+    try {
+      root.classList.remove("collapsed");
+      clearWidgetDismissal(); // User manually opened it
+      
+      // Trigger smooth open animation
+      const card = root.querySelector(".ja-card");
+      if (card) {
+        card.style.animation = "fadeInScale 0.3s ease-in";
+        setTimeout(() => {
+          if (card && card.isConnected) card.style.animation = "";
+        }, 300);
+      }
+      
+      logInfo("Widget opened by user");
+    } catch (err) {
+      logWarn("Error opening widget", { error: String(err) });
+      // Fallback: simple open
+      if (root && root.isConnected) root.classList.remove("collapsed");
+    }
   });
+  
+  // ESC key to close (professional UX)
+  const escHandler = (e) => {
+    if (e.key === "Escape" && root && !root.classList.contains("collapsed")) {
+      const card = root.querySelector(".ja-card");
+      if (card && document.activeElement && root.contains(document.activeElement)) {
+        closeBtn?.click();
+      }
+    }
+  };
+  
+  document.addEventListener("keydown", escHandler);
+  
+  // Cleanup on widget removal
+  root._escHandler = escHandler;
 
   // Report Issue button — opens the web app in a new tab
   root.querySelector("#ja-report-issue")?.addEventListener("click", async () => {
@@ -690,6 +803,7 @@ function mountInPageUILegacyInto(root) {
 // ── Settings Panel + Cold Email Toggle ──────────────────────────────────
 function initColdEmailRadio() {
   const STORAGE_KEY = "hm_cold_agent_mode";
+  const AUTO_OPEN_KEY = "hm_auto_open_enabled";
   const root = document.getElementById(INPAGE_ROOT_ID);
   if (!root) return;
 
@@ -697,20 +811,49 @@ function initColdEmailRadio() {
   const settingsPanel = root.querySelector("#ja-settings-panel");
   const settingsBack = root.querySelector("#ja-settings-back");
   const coldToggle = root.querySelector("#hm-cold-toggle");
+  const autoOpenToggle = root.querySelector("#hm-auto-open-toggle");
   const tabs = root.querySelector(".ja-tabs");
   const body = root.querySelector(".ja-body");
 
-  if (!settingsBtn || !settingsPanel || !settingsBack || !coldToggle) return;
+  if (!settingsBtn || !settingsPanel || !settingsBack) return;
 
-  // Restore saved toggle state (default: "cold" = enabled by default)
-  chrome.storage.local.get([STORAGE_KEY], (result) => {
-    const mode = result[STORAGE_KEY] || "cold";
-    coldToggle.checked = mode === "cold";
-    if (mode === "cold" && window.__HM_COLD_EMAIL__?.isLinkedInMessagingPage?.()) {
-      window.__HM_COLD_EMAIL__.stopColdEmailModule();
-      window.__HM_COLD_EMAIL__.startColdEmailModule();
-    }
-  });
+  // Restore saved auto-open state (default: enabled)
+  if (autoOpenToggle) {
+    chrome.storage.local.get([AUTO_OPEN_KEY], (result) => {
+      autoOpenToggle.checked = result[AUTO_OPEN_KEY] !== false;
+    });
+
+    // Save auto-open preference
+    autoOpenToggle.addEventListener("change", () => {
+      chrome.storage.local.set({ [AUTO_OPEN_KEY]: autoOpenToggle.checked });
+      logInfo(`Auto-open ${autoOpenToggle.checked ? "enabled" : "disabled"}`);
+    });
+  }
+
+  // Restore saved cold email toggle state (default: "cold" = enabled by default)
+  if (coldToggle) {
+    chrome.storage.local.get([STORAGE_KEY], (result) => {
+      const mode = result[STORAGE_KEY] || "cold";
+      coldToggle.checked = mode === "cold";
+      if (mode === "cold" && window.__HM_COLD_EMAIL__?.isLinkedInMessagingPage?.()) {
+        window.__HM_COLD_EMAIL__.stopColdEmailModule();
+        window.__HM_COLD_EMAIL__.startColdEmailModule();
+      }
+    });
+
+    // Toggle cold email mode
+    coldToggle.addEventListener("change", () => {
+      const mode = coldToggle.checked ? "cold" : "standard";
+      chrome.storage.local.set({ [STORAGE_KEY]: mode });
+      if (mode === "cold") {
+        // Stop first to reset internal state, then start fresh
+        window.__HM_COLD_EMAIL__?.stopColdEmailModule?.();
+        window.__HM_COLD_EMAIL__?.startColdEmailModule?.();
+      } else {
+        window.__HM_COLD_EMAIL__?.stopColdEmailModule?.();
+      }
+    });
+  }
 
   // Open settings
   settingsBtn.addEventListener("click", () => {
@@ -724,19 +867,6 @@ function initColdEmailRadio() {
     settingsPanel.style.display = "none";
     if (tabs) tabs.style.display = "";
     if (body) body.style.display = "";
-  });
-
-  // Toggle cold email mode
-  coldToggle.addEventListener("change", () => {
-    const mode = coldToggle.checked ? "cold" : "standard";
-    chrome.storage.local.set({ [STORAGE_KEY]: mode });
-    if (mode === "cold") {
-      // Stop first to reset internal state, then start fresh
-      window.__HM_COLD_EMAIL__?.stopColdEmailModule?.();
-      window.__HM_COLD_EMAIL__?.startColdEmailModule?.();
-    } else {
-      window.__HM_COLD_EMAIL__?.stopColdEmailModule?.();
-    }
   });
 }
 
@@ -820,12 +950,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   logInfo("Received message", { type: msg?.type || "unknown" });
 
   if (msg.type === "SHOW_WIDGET") {
-    mountInPageUI();
+    // Clear dismissal when user explicitly clicks extension icon
+    clearWidgetDismissal();
+    mountInPageUI({ forceOpen: true });
+    
     if (isCareerPage() && !/workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(window.location.href)) {
       runKeywordAnalysisAndMaybeShowWidget();
     }
     const widget = document.getElementById(INPAGE_ROOT_ID);
     if (widget) {
+      widget.classList.remove("collapsed");
       const card = widget.querySelector(".ja-card");
       if (card) card.classList.remove("collapsed");
     }
@@ -996,27 +1130,66 @@ function isJobFormPage() {
 }
 
 
-function tryAutoOpenPopup() {
+async function tryAutoOpenPopup() {
   if (window.self !== window.top) return;
-  if (window.__PAGE_DETECTOR__ && !window.__PAGE_DETECTOR__.shouldShowWidget()) return;
-  if (!isJobFormPage()) return;
-  mountInPageUI();
+  
+  // Check global auto-open preference
+  const autoOpenEnabled = await isAutoOpenEnabled();
+  if (!autoOpenEnabled) {
+    logInfo("Auto-open disabled by user preference");
+    return;
+  }
+  
+  // Don't auto-open if user dismissed it for this page
+  if (isWidgetDismissedForThisPage()) {
+    logInfo("Widget dismissed for this page, respecting user choice");
+    return;
+  }
+  
+  // Check if page detector says we should show
+  if (window.__PAGE_DETECTOR__ && !window.__PAGE_DETECTOR__.shouldShowWidget()) {
+    logInfo("Page detector: not a job page");
+    return;
+  }
+  
+  // Only auto-open on actual job application pages
+  if (!isJobFormPage()) {
+    logInfo("Not a job form page, skipping auto-open");
+    return;
+  }
+  
+  logInfo("Auto-opening widget on job page");
+  mountInPageUI({ forceOpen: false }); // Mount but respect dismissal state
   if (window.__FORM_WATCHER__) window.__FORM_WATCHER__.start();
   attachSubmitFeedbackListener();
+  
   const widget = document.getElementById(INPAGE_ROOT_ID);
-  if (widget) {
+  if (widget && !isWidgetDismissedForThisPage()) {
     const card = widget.querySelector(".ja-card");
     if (card) card.classList.remove("collapsed");
   }
+  
   if (!/workday\.com|myworkdayjobs\.com|wd\d+\.myworkday/i.test(window.location.href)) {
     runKeywordAnalysisAndMaybeShowWidget();
   }
 }
 
+// Single initialization with proper timing
 const initAutoOpen = () => {
+  // Mark that auto-open has been attempted for this page load
+  if (window.__OPSBRAIN_AUTO_OPEN_ATTEMPTED__) return;
+  window.__OPSBRAIN_AUTO_OPEN_ATTEMPTED__ = true;
+  
+  // Try immediate mount (for fast SPAs)
   tryAutoOpenPopup();
-  setTimeout(tryAutoOpenPopup, 1500);
-  setTimeout(tryAutoOpenPopup, 4000);
+  
+  // Single retry after DOM settles (for slow-loading pages)
+  setTimeout(() => {
+    if (!document.getElementById(INPAGE_ROOT_ID)) {
+      tryAutoOpenPopup();
+    }
+  }, 2000);
+  
   retryPendingSubmission();
 };
 
@@ -1045,11 +1218,17 @@ const _urlObserver = new MutationObserver(() => {
   const current = location.href;
   if (current !== _lastUrl) {
     _lastUrl = current;
+    
+    // Reset state for new page
+    window.__OPSBRAIN_AUTO_OPEN_ATTEMPTED__ = false;
+    
     if (window.__PAGE_DETECTOR__) window.__PAGE_DETECTOR__.reset();
     // Reset scraper's platform cache so the new URL is re-evaluated
     if (window.__OPSBRAIN_SCRAPER__?.resetPlatform) window.__OPSBRAIN_SCRAPER__.resetPlatform();
     if (window.__REQUEST_MANAGER__) window.__REQUEST_MANAGER__.clearCache("form_fields:" + current);
-    tryAutoOpenPopup();
+    
+    // Try auto-open on new page (respects dismissal per-URL)
+    setTimeout(() => tryAutoOpenPopup(), 500);
   }
 });
 if (document.body) _urlObserver.observe(document.body, { childList: true, subtree: true });
@@ -1058,4 +1237,28 @@ if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => setTimeout(initAutoOpen, 500));
 } else {
   setTimeout(initAutoOpen, 500);
+}
+
+// Production-ready console message (only on job pages, with debug mode)
+if (window.self === window.top && typeof console !== "undefined") {
+  const isDebug = localStorage.getItem("hm_debug") === "true";
+  if (isDebug) {
+    isAutoOpenEnabled().then((enabled) => {
+      console.log(
+        "%c🚀 OpsBrain Extension Loaded",
+        "color: #667eea; font-size: 14px; font-weight: bold;",
+        "\n📋 Version: 3.0.0",
+        `\n🎯 Auto-open: ${enabled ? "Enabled" : "Disabled"}`,
+        "\n🔍 Debug Mode: ON",
+        "\n💡 Tip: Open Settings to customize behavior"
+      );
+    }).catch(() => {
+      console.log(
+        "%c🚀 OpsBrain Extension Loaded",
+        "color: #667eea; font-size: 14px; font-weight: bold;",
+        "\n📋 Version: 3.0.0",
+        "\n🔍 Debug Mode: ON"
+      );
+    });
+  }
 }

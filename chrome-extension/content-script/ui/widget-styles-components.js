@@ -923,12 +923,23 @@ function getWidgetStylesComponents() {
         background: #f3f4f6;
         color: #374151;
       }
-      #${INPAGE_ROOT_ID}.collapsed .ja-card { display: none; }
+      #${INPAGE_ROOT_ID}.collapsed .ja-card { 
+        display: none;
+        opacity: 0;
+        transform: translateY(-10px) scale(0.95);
+        transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+      }
+      #${INPAGE_ROOT_ID} .ja-card {
+        transition: opacity 0.3s ease-in, transform 0.3s ease-in;
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
       #${INPAGE_ROOT_ID}.collapsed {
         width: 56px;
         height: 56px;
         min-width: 56px;
         max-height: 56px;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
       #${INPAGE_ROOT_ID} .ja-mini {
         display: none;
@@ -949,8 +960,55 @@ function getWidgetStylesComponents() {
         justify-content: center;
         transition: transform 0.2s;
       }
-      #${INPAGE_ROOT_ID} .ja-mini:hover { transform: translateY(-50%) scale(1.05); }
-      #${INPAGE_ROOT_ID}.collapsed .ja-mini { display: flex; }
+      #${INPAGE_ROOT_ID} .ja-mini:hover { 
+        transform: translateY(-50%) scale(1.05);
+        box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+      }
+      #${INPAGE_ROOT_ID}.collapsed .ja-mini { 
+        display: flex;
+        animation: slideInBounce 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+      }
+      @keyframes slideInBounce {
+        0% {
+          opacity: 0;
+          transform: translateY(-50%) scale(0.3);
+        }
+        70% {
+          transform: translateY(-50%) scale(1.1);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(-50%) scale(1);
+        }
+      }
+      @keyframes gentlePulse {
+        0%, 100% {
+          box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+        50% {
+          box-shadow: 0 6px 16px rgba(102, 126, 234, 0.5);
+        }
+      }
+      @keyframes fadeInScale {
+        from {
+          opacity: 0;
+          transform: translateY(-10px) scale(0.95);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+      @keyframes fadeOutScale {
+        from {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+        to {
+          opacity: 0;
+          transform: translateY(-10px) scale(0.95);
+        }
+      }
     </style>
   `;
 }
