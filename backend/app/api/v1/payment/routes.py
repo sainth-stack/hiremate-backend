@@ -15,6 +15,7 @@ from backend.app.db.session import get_db
 from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
 from backend.app.models.subscription_plan import SubscriptionPlan
+from backend.app.services.usage_service import UsageService
 
 logger = get_logger("api.payment")
 router = APIRouter()
@@ -52,8 +53,6 @@ def create_order(
     db: Session = Depends(get_db),
 ):
     """Create a Razorpay order for the given plan. Returns order_id for frontend checkout."""
-    print("Settings razorpay_key_id", settings.razorpay_key_id)
-    print("Settings razorpay_key_secret", settings.razorpay_key_secret)
     if not settings.razorpay_key_id or not settings.razorpay_key_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -79,7 +78,7 @@ def create_order(
         client = razorpay.Client(
             auth=(settings.razorpay_key_id, settings.razorpay_key_secret)
         )
-        receipt = f"sub_{body.plan_id}_{current_user.id}_{int(time.time())}"
+        receipt = f"sub_{body.plan_id}_{current_user.id}_{int(time.time())}"  # noqa: E501
 
         order = client.order.create(
             data={
@@ -138,6 +137,16 @@ def verify_payment(
             detail=f"Invalid or inactive plan_id: {body.plan_id}",
         )
 
+    # Idempotency: prevent replaying an already-processed payment
+    if current_user.last_payment_id == body.razorpay_payment_id:
+        return {
+            "success": True,
+            "message": f"Already subscribed to {body.plan_id} plan",
+            "plan_id": current_user.subscription_plan,
+            "expiry_date": current_user.subscription_expiry.isoformat() if current_user.subscription_expiry else None,
+            "payment_id": body.razorpay_payment_id,
+        }
+
     try:
         client = razorpay.Client(
             auth=(settings.razorpay_key_id, settings.razorpay_key_secret)
@@ -163,9 +172,17 @@ def verify_payment(
         current_user.subscription_plan = body.plan_id
         current_user.subscription_expiry = expiry_date
         current_user.last_payment_id = body.razorpay_payment_id
-        
+
         db.commit()
         db.refresh(current_user)
+
+        # Immediately replenish token balance to the new plan's quota so the
+        # user doesn't have to log out and back in to get their tokens.
+        # Force replenish by clearing last_token_reset so the 30-day guard passes.
+        current_user.last_token_reset = None
+        db.add(current_user)
+        db.commit()
+        UsageService.replenish_tokens_on_login(db, current_user)
 
         logger.info(
             "User %s upgraded to %s until %s",

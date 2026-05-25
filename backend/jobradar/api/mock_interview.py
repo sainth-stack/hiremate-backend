@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
-from backend.app.core.dependencies import get_current_user, get_db
+from backend.app.core.dependencies import get_current_user, get_db, require_ai_token_balance
 from backend.app.models.user import User
 from backend.jobradar.models.application import Application
 from backend.jobradar.models.mock_interview import MockInterviewSession
@@ -10,7 +10,7 @@ from backend.jobradar.services.interview_service import InterviewService
 
 router = APIRouter()
 
-@router.get("/questions")
+@router.get("/questions", dependencies=[Depends(require_ai_token_balance)])
 def get_interview_questions(
     application_id: int,
     current_user: User = Depends(get_current_user),

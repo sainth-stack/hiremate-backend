@@ -31,10 +31,10 @@ Be conservative with estimates. If the domain gives no hints, return nulls.
 Return ONLY valid JSON. No explanation, no markdown, no code fences."""
 
 
-def enrich_company(db: Session, domain: str) -> CompanyProfile:
+def enrich_company(db: Session, domain: str, user_id: int = None, email: str = None) -> CompanyProfile:
     """
     Enrich company profile by domain.
-    
+
     Strategy:
     1. Check cache (return if < 7 days old)
     2. Scrape domain for context
@@ -43,9 +43,9 @@ def enrich_company(db: Session, domain: str) -> CompanyProfile:
     """
     if not domain:
         raise ValueError("Domain is required")
-    
+
     domain = domain.lower().strip()
-    
+
     # Step 1: Check cache
     existing = db.query(CompanyProfile).filter(CompanyProfile.domain == domain).first()
     if existing and existing.last_enriched_at:
@@ -53,12 +53,12 @@ def enrich_company(db: Session, domain: str) -> CompanyProfile:
         if age < timedelta(days=7):
             print(f"Company profile for {domain} is fresh (cached)")
             return existing
-    
+
     # Step 2: Scrape domain for context
     context = _scrape_domain_context(domain)
-    
+
     # Step 3: Use AI to extract metadata
-    ai_data = _extract_with_ai(domain, context)
+    ai_data = _extract_with_ai(domain, context, user_id=user_id, email=email)
     
     # Step 4: Upsert profile
     if existing:
@@ -152,13 +152,13 @@ def _scrape_domain_context(domain: str) -> dict:
     return result
 
 
-def _extract_with_ai(domain: str, context: dict) -> dict:
+def _extract_with_ai(domain: str, context: dict, user_id: int = None, email: str = None) -> dict:
     """
     Use AI to extract company metadata.
     Returns: { 'industry': str, 'size_range': str, 'hq_location': str, 'tech_stack': list }
     """
     from backend.jobradar.services.llm_factory import LLMFactory
-    
+
     # Build context string
     context_parts = []
     if context.get('name'):
@@ -167,16 +167,18 @@ def _extract_with_ai(domain: str, context: dict) -> dict:
         context_parts.append(f"Description: {context['description']}")
     if context.get('raw_text'):
         context_parts.append(f"Website excerpt: {context['raw_text'][:500]}")
-    
+
     context_str = '\n'.join(context_parts) if context_parts else "No additional context available."
-    
+
     prompt = ENRICHMENT_PROMPT.format(domain=domain, context=context_str)
-    
+
     try:
         provider = LLMFactory.get_provider()
         raw = provider.generate(
             system_prompt="",
             user_prompt=prompt,
+            user_id=user_id,
+            email=email,
             feature="company_enrichment"
         )
         

@@ -27,6 +27,10 @@ class UserResponse(BaseModel):
     email: str
     is_admin: Optional[bool] = False
     gmail_sync_enabled: Optional[bool] = False
+    token_balance: Optional[int] = 0
+    monthly_tokens: Optional[int] = 0
+    total_tokens_consumed: Optional[int] = 0
+    last_token_reset: Optional[str] = None
 
     class Config:
         from_attributes = True

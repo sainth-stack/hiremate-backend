@@ -67,7 +67,8 @@ class GPTProvider(LLMProvider):
         feature: str = None,
         json_mode: bool = False,
         temperature: float = None,
-        max_tokens: int = None
+        max_tokens: int = None,
+        response_format: dict = None,
     ) -> str:
         messages = []
         if system:
@@ -78,7 +79,9 @@ class GPTProvider(LLMProvider):
             "model": settings.openai_model,
             "messages": messages,
         }
-        if json_mode:
+        if response_format:
+            kwargs["response_format"] = response_format
+        elif json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -158,6 +161,19 @@ class GPTProvider(LLMProvider):
             msg = response.choices[0].message
 
             if not msg.tool_calls:
+                # Record token usage before returning — no tool path skipped this
+                if response.usage:
+                    toks, cost = record_token_usage(
+                        model=settings.openai_model,
+                        provider="openai",
+                        prompt_tokens=response.usage.prompt_tokens,
+                        completion_tokens=response.usage.completion_tokens,
+                        user_id=user_id,
+                        email=email,
+                        feature=feature or "agent_chat"
+                    )
+                    self.total_session_tokens += toks
+                    self.total_session_cost += cost
                 return msg.content or ""
 
             oai_messages.append(msg)

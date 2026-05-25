@@ -11,10 +11,7 @@ class SubscriptionPlan(Base):
     amount = Column(Integer, default=0)  # In Paise
     
     # Quotas
-    resume_slots = Column(Integer, default=0)
-    ai_tailor_credits = Column(Integer, default=0)
-    ats_match_checks = Column(Integer, default=0)
-    job_tracking = Column(Integer, default=0)
+    monthly_tokens = Column(Integer, default=0)  # Total tokens allowed per month (-1 for unlimited)
     
     # Extra features as a list of strings/objects
     features = Column(JSON, default=list)

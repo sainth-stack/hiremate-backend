@@ -10,7 +10,8 @@ from backend.jobradar.tasks.sync_task import sync_user_emails
 router = APIRouter()
 
 
-from backend.app.services.usage_service import check_feature_limit
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
+from sqlalchemy.orm import Session
 
 @router.post("")
 def trigger_sync(
@@ -21,11 +22,6 @@ def trigger_sync(
     db: Session = Depends(get_db),
 ):
     """Manually trigger a Gmail sync with optional date range (YYYY-MM-DD)."""
-    # Check plan limits
-    allowed, message = check_feature_limit(db, current_user, "job_tracking")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=message)
-
     # Check if already running
     sync = db.query(SyncStatus).filter(SyncStatus.user_id == current_user.id).first()
     if sync and sync.status == "running":

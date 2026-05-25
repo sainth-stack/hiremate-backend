@@ -14,6 +14,7 @@ from backend.app.core.security import create_access_token
 from backend.app.models.user import User
 from backend.app.schemas.user import UserRegister, UserLogin, TokenResponse, UserResponse
 from backend.app.services.auth_service import AuthService
+from backend.app.services.usage_service import UsageService
 from backend.app.services import google_oauth
 from fastapi.security import HTTPAuthorizationCredentials
 
@@ -52,6 +53,10 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             user.id,
             user.email,
         )
+
+        # Token Replenishment for first-time users
+        UsageService.replenish_tokens_on_login(db, user)
+
         return TokenResponse(
             access_token=result["access_token"],
             token_type=result["token_type"],
@@ -62,6 +67,10 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
                 email=user.email,
                 is_admin=getattr(user, "is_admin", False),
                 gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
+                token_balance=user.token_balance, # Use updated balance
+                monthly_tokens=user.monthly_tokens,
+                total_tokens_consumed=user.total_tokens_consumed,
+                last_token_reset=user.last_token_reset.isoformat() if user.last_token_reset else None
             ),
             message=result["message"],
         )
@@ -109,6 +118,10 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
             user.id,
             user.email,
         )
+
+        # Token Replenishment Check
+        UsageService.replenish_tokens_on_login(db, user)
+
         return TokenResponse(
             access_token=result["access_token"],
             token_type=result["token_type"],
@@ -119,6 +132,10 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
                 email=user.email,
                 is_admin=getattr(user, "is_admin", False),
                 gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
+                token_balance=user.token_balance,
+                monthly_tokens=user.monthly_tokens,
+                total_tokens_consumed=user.total_tokens_consumed,
+                last_token_reset=user.last_token_reset.isoformat() if user.last_token_reset else None
             ),
         )
     except HTTPException:
@@ -150,6 +167,10 @@ def get_current_user_profile(
         email=current_user.email or "",
         is_admin=getattr(current_user, "is_admin", False),
         gmail_sync_enabled=getattr(current_user, "gmail_sync_enabled", False),
+        token_balance=current_user.token_balance,
+        monthly_tokens=current_user.monthly_tokens,
+        total_tokens_consumed=current_user.total_tokens_consumed,
+        last_token_reset=current_user.last_token_reset.isoformat() if current_user.last_token_reset else None
     )
 
 
@@ -248,6 +269,7 @@ def refresh_access_token(
                 email=user.email or "",
                 is_admin=getattr(user, "is_admin", False),
                 gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
+                token_balance=getattr(user, "token_balance", 0),
             ),
         )
     except JWTError:
@@ -338,8 +360,12 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
         if not result["success"]:
             raise HTTPException(status_code=401, detail=result["message"])
 
-        # 3. Subscribe to Gmail watch + capture initial historyId (non-blocking)
         user = result["user"]
+
+        # 3. Token Replenishment Check
+        UsageService.replenish_tokens_on_login(db, user)
+
+        # 4. Subscribe to Gmail watch + capture initial historyId (non-blocking)
         try:
             from backend.jobradar.services.gmail_service import subscribe_to_watch, get_latest_history_id
             creds = google_oauth.get_credentials_for_user(db, user)

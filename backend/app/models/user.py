@@ -32,6 +32,11 @@ class User(Base):
     subscription_expiry = Column(DateTime, nullable=True)
     last_payment_id = Column(String(100), nullable=True)
     
+    # Token Usage fields
+    token_balance = Column(Integer, default=0, nullable=False)
+    total_tokens_consumed = Column(Integer, default=0, nullable=False)
+    last_token_reset = Column(DateTime, nullable=True) # Nullable so first login triggers replenishment
+    
     # User profile fields for salary estimation
     years_of_experience = Column(Integer, nullable=True)
     skills = Column(JSON, nullable=True)  # Array of skill strings
@@ -41,3 +46,18 @@ class User(Base):
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def monthly_tokens(self) -> int:
+        """
+        Returns the monthly token budget for the user's current plan.
+        Uses a hardcoded fallback map to avoid opening an extra DB session
+        on every auth response. The canonical value lives in the subscription_plans
+        table; this property is only used when a DB session is not available.
+        """
+        _fallback = {
+            "free": 25000,
+            "pro": 500000,
+            "elite": -1,
+        }
+        return _fallback.get(self.subscription_plan, 25000)

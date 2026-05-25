@@ -44,11 +44,18 @@ def update_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_admin_user)
 ):
-    """Update a subscription plan."""
+    """
+    Update a subscription plan.
+    If monthly_tokens is changed, all users currently on this plan have their
+    token_balance immediately updated to the new quota so they don't have to
+    wait for their next 30-day login reset.
+    """
     plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_id).first()
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
-    
+
+    old_monthly_tokens = plan.monthly_tokens
+
     # If this plan is being set as featured, unset all others first
     if plan_data.get("is_featured") is True:
         db.query(SubscriptionPlan).filter(SubscriptionPlan.id != plan_id).update(
@@ -59,9 +66,24 @@ def update_plan(
     for key, value in plan_data.items():
         if hasattr(plan, key) and key not in ['id', 'created_at', 'updated_at']:
             setattr(plan, key, value)
-    
+
     db.commit()
     db.refresh(plan)
+
+    # If monthly_tokens changed, immediately reflect the new quota on all
+    # users currently subscribed to this plan.
+    new_monthly_tokens = plan.monthly_tokens
+    if new_monthly_tokens != old_monthly_tokens:
+        from datetime import datetime
+        db.query(User).filter(User.subscription_plan == plan_id).update(
+            {
+                "token_balance": new_monthly_tokens,
+                "last_token_reset": datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
+        db.commit()
+
     return {"data": plan}
 
 @router.delete("/plans/{plan_id}", status_code=204)

@@ -116,7 +116,8 @@ class LLMProvider(ABC):
         feature: str = None,
         json_mode: bool = False,
         temperature: float = None,
-        max_tokens: int = None
+        max_tokens: int = None,
+        response_format: dict = None,
     ) -> str:
         """
         Internal: Make a single text completion call.
@@ -132,7 +133,7 @@ class LLMProvider(ABC):
         json_mode: bool = False,
         temperature: float = None,
         max_tokens: int = None,
-        response_format: dict = None
+        response_format: dict = None,
     ) -> str:
         """
         Public API for single-turn generation.
@@ -150,7 +151,8 @@ class LLMProvider(ABC):
             feature=feature,
             json_mode=json_mode,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            response_format=response_format,
         )
 
     @abstractmethod

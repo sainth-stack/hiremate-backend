@@ -4,7 +4,7 @@ FastAPI application entry point
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from backend.app.api.v1.activity import router as activity_router
@@ -33,6 +33,7 @@ from backend.jobradar.api.insights import router as insights_router
 from backend.app.api.v1.jobs_ingest import router as jobs_ingest_router
 from sqlalchemy import text
 from backend.app.db.session import engine
+from backend.app.core.dependencies import check_token_balance
 # Import models so they register with Base.metadata (for migrations)
 import backend.app.models  # noqa: F401
 
@@ -77,64 +78,65 @@ def _advance_history_ids_on_startup():
 
 
 def _seed_subscription_plans():
-    """Seed initial subscription plans if the table is empty."""
+    """Upsert default subscription plans on every startup."""
     from backend.app.db.session import SessionLocal
     from backend.app.models.subscription_plan import SubscriptionPlan
     db = SessionLocal()
+    defaults = [
+        dict(
+            id="free",
+            name="Free",
+            description="Basic plan for individuals",
+            amount=0,
+            monthly_tokens=25000,
+            is_featured=False,
+            features=[
+                "25,000 AI Tokens / month",
+                "Basic Design Templates",
+                "Email Support",
+            ],
+        ),
+        dict(
+            id="pro",
+            name="Pro",
+            description="Professional plan for serious job seekers",
+            amount=49900,  # ₹499
+            monthly_tokens=500000,
+            is_featured=True,
+            features=[
+                "500,000 AI Tokens / month",
+                "Premium Design Kit",
+                "Chrome Extension Access",
+                "Priority Email Support",
+            ],
+        ),
+        dict(
+            id="elite",
+            name="Elite",
+            description="The ultimate plan for maximum success",
+            amount=99900,  # ₹999
+            monthly_tokens=-1,  # Unlimited
+            is_featured=False,
+            features=[
+                "Unlimited AI Tokens",
+                "AI Mock Interviews",
+                "Priority AI Processing",
+                "24/7 Priority Support",
+            ],
+        ),
+    ]
     try:
-        count = db.query(SubscriptionPlan).count()
-        if count == 0:
-            logger.info("STARTUP: Seeding default subscription plans...")
-            plans = [
-                SubscriptionPlan(
-                    id="free",
-                    name="Free",
-                    description="Basic plan for individuals",
-                    amount=0,
-                    resume_slots=1,
-                    ai_tailor_credits=5,
-                    ats_match_checks=3,
-                    job_tracking=10,
-                    features=[
-                        "Basic Design Templates",
-                        "Email Support"
-                    ]
-                ),
-                SubscriptionPlan(
-                    id="pro",
-                    name="Pro",
-                    description="Professional plan for serious job seekers",
-                    amount=49900,  # ₹499
-                    resume_slots=5,
-                    ai_tailor_credits=999999,
-                    ats_match_checks=999999,
-                    job_tracking=50,
-                    features=[
-                        "Premium Design Kit",
-                        "Chrome Extension Access",
-                        "Priority Email Support"
-                    ]
-                ),
-                SubscriptionPlan(
-                    id="elite",
-                    name="Elite",
-                    description="The ultimate plan for maximum success",
-                    amount=99900,  # ₹999
-                    resume_slots=999999,
-                    ai_tailor_credits=999999,
-                    ats_match_checks=999999,
-                    job_tracking=999999,
-                    features=[
-                        "AI Mock Interviews",
-                        "Priority AI Processing",
-                        "24/7 Priority Support",
-                        "Advanced Analytics"
-                    ]
-                ),
-            ]
-            db.add_all(plans)
-            db.commit()
-            logger.info("STARTUP: Successfully seeded %d plans", len(plans))
+        for plan_data in defaults:
+            plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_data["id"]).first()
+            if plan is None:
+                db.add(SubscriptionPlan(**plan_data))
+                logger.info("STARTUP: Created plan %s", plan_data["id"])
+            else:
+                # Only patch fields that should be authoritative from code
+                plan.is_featured = plan_data["is_featured"]
+                plan.is_active = True
+        db.commit()
+        logger.info("STARTUP: Subscription plans upserted (%d plans)", len(defaults))
     except Exception as e:
         logger.warning("Could not seed subscription plans: %s", str(e))
         db.rollback()
@@ -186,35 +188,49 @@ app = FastAPI(
 
 # Add CORS middleware
 app.add_middleware(
-    CORSMiddleware,
+    CORSMiddleware,                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Token-Balance", "X-Token-Low-Balance"],
 )
 
-# Include routers
+# 1. Public / Administrative Routers (No token check required)
 app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
 app.include_router(payment_router, prefix="/api/payment", tags=["payment"])
-app.include_router(resume_router, prefix="/api/resume", tags=["resume"])
-app.include_router(profile_router, prefix="/api/profile", tags=["profile"])
-app.include_router(dashboard_router, prefix="/api")
-app.include_router(chrome_extension_router, prefix="/api")
-app.include_router(activity_router, prefix="/api")
-app.include_router(admin_router, prefix="/api")
-app.include_router(admin_plans_router, prefix="/api/admin")
 app.include_router(legal_router, prefix="/api", tags=["legal"])
-app.include_router(issues_router, prefix="/api", tags=["issues"])
-app.include_router(company_search_router, prefix="/api")
-app.include_router(applications_router, prefix="/api/applications", tags=["applications"])
-app.include_router(sync_router, prefix="/api/sync", tags=["sync"])
-app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 app.include_router(webhooks_router, prefix="/api/webhooks", tags=["webhooks"])
-# app.include_router(nudges_router, prefix="/api/nudges", tags=["nudges"])
-app.include_router(mock_interview_router, prefix="/api/mock-interview", tags=["mock-interview"])
-app.include_router(briefing_router, prefix="/api/mock-interview", tags=["mock-interview"])
-app.include_router(insights_router, prefix="/api/insights", tags=["insights"])
+
+# These were requested to be ignored from token limitations
+app.include_router(dashboard_router, prefix="/api", tags=["dashboard"])
+app.include_router(admin_router, prefix="/api", tags=["admin"])
+app.include_router(admin_plans_router, prefix="/api/admin", tags=["admin"])
+app.include_router(company_search_router, prefix="/api", tags=["research"])
+app.include_router(activity_router, prefix="/api", tags=["activity"])
+app.include_router(issues_router, prefix="/api", tags=["issues"])
 app.include_router(jobs_ingest_router, prefix="/api/v1", tags=["jobs-ingest"])
+
+# 2. Protected Routers (Apply global token + auth gate)
+protected_api_routers = [
+    (resume_router, "/api/resume", ["resume"]),
+    (profile_router, "/api/profile", ["profile"]),
+    (chrome_extension_router, "/api", ["extension"]),
+    (applications_router, "/api/applications", ["applications"]),
+    (sync_router, "/api/sync", ["sync"]),
+    (chat_router, "/api/chat", ["chat"]),
+    (mock_interview_router, "/api/mock-interview", ["mock-interview"]),
+    (briefing_router, "/api/mock-interview", ["mock-interview"]),
+    (insights_router, "/api/insights", ["insights"]),
+]
+
+for router, prefix, tags in protected_api_routers:
+    app.include_router(
+        router, 
+        prefix=prefix, 
+        tags=tags, 
+        dependencies=[Depends(check_token_balance)]
+    )
 
 # Serve uploaded resumes (create dir if missing)
 upload_path = Path(settings.upload_dir)

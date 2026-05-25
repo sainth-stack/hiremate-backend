@@ -31,12 +31,13 @@ class GeminiProvider(LLMProvider):
         feature: str = None,
         json_mode: bool = False,
         temperature: float = None,
-        max_tokens: int = None
+        max_tokens: int = None,
+        response_format: dict = None,
     ) -> str:
         config = types.GenerateContentConfig(
             system_instruction=system or None,
         )
-        if json_mode:
+        if json_mode or (response_format and response_format.get("type") == "json_object"):
             config.response_mime_type = "application/json"
         if temperature is not None:
             config.temperature = temperature

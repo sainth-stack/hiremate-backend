@@ -4,7 +4,7 @@ from sqlalchemy import func, case
 from datetime import datetime, timedelta
 from typing import List
 
-from backend.app.core.dependencies import get_current_user, get_db
+from backend.app.core.dependencies import get_current_user, get_db, require_ai_token_balance
 from backend.jobradar.models.application import (
     Application, StatusHistory, InterviewEvent, HRContact, CompanyProfile
 )
@@ -124,8 +124,6 @@ def get_application(
     return app
 
 
-from backend.app.services.usage_service import check_feature_limit
-
 @router.post("")
 def create_application(
     payload: dict,
@@ -133,10 +131,6 @@ def create_application(
     db: Session = Depends(get_db),
 ):
     """Manually add a new application to the tracker."""
-    allowed, message = check_feature_limit(db, current_user, "job_tracking")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=message)
-
     new_app = Application(
         user_id=current_user.id,
         company=payload.get("company"),
@@ -168,10 +162,8 @@ def create_application_from_jd(
     """
     Extracts company and role from a JD using AI, then creates an application.
     Also enriches company profile if domain can be extracted.
+    Token usage is tracked via real LLM consumption in classify_jd().
     """
-    allowed, message = check_feature_limit(db, current_user, "job_tracking")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=message)
     import re
     from urllib.parse import urlparse
     
@@ -198,7 +190,7 @@ def create_application_from_jd(
             # Skip job boards
             job_boards = ['linkedin.com', 'indeed.com', 'naukri.com', 'monster.com', 'glassdoor.com']
             if domain and not any(board in domain for board in job_boards):
-                profile = enrich_company(db, domain)
+                profile = enrich_company(db, domain, user_id=current_user.id, email=current_user.email)
                 company_profile_id = profile.id
         except Exception as e:
             print(f"Failed to enrich company from URL: {e}")
@@ -451,7 +443,7 @@ def remove_event_from_calendar(
         raise HTTPException(status_code=500, detail="Failed to remove calendar event")
 
 
-@router.get("/{app_id}/salary-estimate")
+@router.get("/{app_id}/salary-estimate", dependencies=[Depends(require_ai_token_balance)])
 def get_salary_estimate(
     app_id: int,
     refresh: bool = Query(False, description="Force recalculate estimate"),
@@ -505,7 +497,7 @@ def get_salary_estimate(
     return result
 
 
-@router.get("/companies/{domain}/profile", response_model=CompanyProfileResponse)
+@router.get("/companies/{domain}/profile", response_model=CompanyProfileResponse, dependencies=[Depends(require_ai_token_balance)])
 def get_company_profile(
     domain: str,
     refresh: bool = Query(False, description="Force re-enrich the company profile"),
@@ -523,7 +515,7 @@ def get_company_profile(
             existing.last_enriched_at = datetime.utcnow() - timedelta(days=8)  # Force stale
             db.commit()
     
-    profile = enrich_company(db, domain)
+    profile = enrich_company(db, domain, user_id=current_user.id, email=current_user.email)
     return profile
 
 

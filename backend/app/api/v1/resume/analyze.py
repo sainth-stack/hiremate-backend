@@ -85,7 +85,6 @@ def _build_analyze_report(resume_text: str, file_name: str) -> dict:
 
 from sqlalchemy.orm import Session
 from backend.app.db.session import get_db
-from backend.app.services.usage_service import check_feature_limit
 
 @router.post("/analyze")
 async def analyze_resume(
@@ -96,11 +95,8 @@ async def analyze_resume(
     """
     Resume Analyze: upload resume (PDF), get deep insights, top fixes, and strengths.
     Returns score, top_fixes, completed, issues, did_well for the analyze-score UI.
+    Token usage is tracked via real LLM consumption in get_resume_insights().
     """
-    # Check plan limits
-    allowed, message = check_feature_limit(db, current_user, "ats_match_checks")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=message)
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(

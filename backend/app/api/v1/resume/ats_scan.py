@@ -103,7 +103,6 @@ def _build_ats_report(resume_text: str, job_description: str, file_name: str) ->
 
 from sqlalchemy.orm import Session
 from backend.app.db.session import get_db
-from backend.app.services.usage_service import check_feature_limit
 
 @router.post("/ats-scan")
 async def ats_scan(
@@ -115,11 +114,8 @@ async def ats_scan(
     """
     ATS Scan: upload resume (PDF) + job description, get ATS score and report.
     Returns score, categories, and check rows for the scan report UI.
+    Token usage is tracked via real LLM consumption in get_ats_improvements().
     """
-    # Check plan limits
-    allowed, message = check_feature_limit(db, current_user, "ats_match_checks")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=message)
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(
