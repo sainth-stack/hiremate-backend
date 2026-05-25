@@ -33,7 +33,7 @@ class InterviewEventData(BaseModel):
 
 
 class HRContactData(BaseModel):
-    name: str
+    name: Optional[str] = None
     email: Optional[str] = None
     linkedin_url: Optional[str] = None
     title: Optional[str] = None

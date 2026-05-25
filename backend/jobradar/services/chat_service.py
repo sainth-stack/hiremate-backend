@@ -39,22 +39,27 @@ class ChatService:
         system_instruction = (
             f"Today's date is {today}. Always use this date when the user says 'today', 'yesterday', 'this week', or any relative time reference.\n\n"
             "You are JobRadar, an intelligent job search assistant. "
-            "You have access to the user's current job application data below. "
-            "Your ONLY purpose is to help the user with their job hunt, career advice, and application tracking. \n\n"
+            "You have access to the user's current job application data AND live Gmail search tools. "
+            "Your ONLY purpose is to help the user with their job hunt, career advice, and application tracking.\n\n"
             "STRICT GUARDRAILS:\n"
             "- DO NOT answer questions about general programming, cooking, history, or anything unrelated to job searching.\n"
             "- If the user asks an off-topic question, politely refuse and redirect them to ask about their applications or career.\n"
-            "- Never provide code snippets unless they are related to job application automation or data analysis (e.g., writing a follow-up email is okay, but 'HelloWorld in Python' is NOT).\n\n"
+            "- Never provide code snippets unless they are related to job application automation or data analysis.\n\n"
+            "MANDATORY TOOL USAGE — NEVER SKIP THIS:\n"
+            "- NEVER say 'I cannot search', 'I am unable to search', or 'I don't have access to your emails'. You DO have access via the tools.\n"
+            "- ALWAYS call a tool first before responding to any question about emails, companies, recruiters, or application status.\n"
+            "- If the user mentions any name, company, recruiter, or job reference — immediately call 'search_threads' with that as the query.\n"
+            "- Do NOT make assumptions about whether something is in the inbox. Always search first, answer after.\n\n"
             "COGNITIVE PROTOCOL:\n"
-            "1. If a company is IN the list below, use 'fetch_raw_email' for deep dives.\n"
-            "2. If a company is NOT in the list (e.g., Glassdoor, Naukri, or random job emails), you MUST use 'search_gmail_inbox' to find relevant threads first.\n"
-            "3. Once you have a Thread ID from the search results, you can then use 'fetch_raw_email' to read its text.\n"
-            "Never tell the user you lack access—you have the tools to search and fetch anything in their live inbox.\n\n"
+            "1. If a company/name is IN the application list below AND has an email_thread_id → call 'get_thread' with that thread_id.\n"
+            "2. If NOT in the list, or no thread_id → call 'search_threads' with the company/name/keyword as query.\n"
+            "3. After 'search_threads' returns results → extract the thread_id from results and call 'get_thread' to read the full email.\n"
+            "4. Only after reading the actual email content should you answer the user's question.\n\n"
             f"Application Data:\n{context}"
         )
         
         llm = LLMFactory.get_provider()
-        
+
         # 3. Fetch chat history (limit 15)
         history_msgs = (
             db.query(ChatMessage)
@@ -64,16 +69,22 @@ class ChatService:
             .all()
         )
         history_msgs.reverse()
-        
+
         messages = [{"role": msg.role, "content": msg.content} for msg in history_msgs]
-        
-        # 4. Query the LLM
+
+        # 4. Build MCP client (connects to remote MCP server if configured, else uses direct API)
+        from backend.jobradar.services.mcp_gmail_client import GmailMCPClient
+        mcp_client = GmailMCPClient(user_id, db).connect()
+
+        # 5. Query the LLM
         reply = llm.chat(
-            messages, 
-            system_instruction, 
-            user_id=user_id, 
+            messages,
+            system_instruction,
+            user_id=user_id,
             email=email,
-            feature="chat_interaction"
+            feature="chat_interaction",
+            
+            mcp_client=mcp_client,
         )
         
         # 5. Save and return reply

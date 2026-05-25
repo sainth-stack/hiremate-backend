@@ -170,10 +170,11 @@ class LLMProvider(ABC):
         """
 
     @abstractmethod
-    def chat(self, messages: List[Dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None) -> str:
+    def chat(self, messages: List[Dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None, mcp_client=None) -> str:
         """
         Handle a conversational, agentic chat with tool-calling support.
         Provider-specific because tool formats differ across SDKs.
+        mcp_client: GmailMCPClient instance for tool dispatch; None uses direct fallback.
         """
 
     # ── Shared logic — all providers inherit these ───────────────────────────

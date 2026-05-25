@@ -47,9 +47,10 @@ class Settings(BaseSettings):
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
-        "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/gmail.modify",   # Required for Gmail Watch API (push notifications)
+        "https://www.googleapis.com/auth/gmail.readonly", # Required for reading/searching emails
+        "https://www.googleapis.com/auth/calendar",       # Required for calendar event creation
+        # "https://mail.google.com/"                      # Only needed for Gmail MCP API (Developer Preview — disabled)
     ]
     encryption_key: str = "your-encryption-key-for-tokens"  # Fernet key
 
@@ -113,6 +114,12 @@ class Settings(BaseSettings):
     # Razorpay payment gateway
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
+
+    # Gmail MCP server (Google's remote MCP endpoint for Gmail — Developer Preview)
+    # Leave empty to use direct Gmail API calls (default / always works).
+    # Set to the URL below to route chat agent tool calls through Google's MCP server:
+    # GMAIL_MCP_SERVER_URL=https://gmailmcp.googleapis.com/mcp/v1
+    gmail_mcp_server_url: str = ""
 
     # Gmail Pub/Sub push notifications
     gmail_push_topic: str = ""  # e.g. "projects/my-project/topics/gmail-push"
