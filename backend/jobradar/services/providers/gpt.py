@@ -5,50 +5,6 @@ from backend.app.core.config import settings
 from backend.app.services.usage_service import record_token_usage
 from backend.jobradar.services.llm_base import LLMProvider
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_raw_email",
-            "description": (
-                "MANDATORY: Use this tool to read the actual live email thread for a company. "
-                "Trigger this if the user asks for details, specifics, next steps, or drafts of "
-                "follow-ups that require reading the email body beyond the summary metadata."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "company_name": {
-                        "type": "string",
-                        "description": "The exact or approximate company name mentioned in the user's query.",
-                    }
-                },
-                "required": ["company_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_gmail_inbox",
-            "description": (
-                "Searches the entire live Gmail inbox for any query string. "
-                "Use this if a company is NOT in the provided database summary to find relevant email threads."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The Gmail search query (e.g. 'Glassdoor', 'from:recruiter@google.com').",
-                    }
-                },
-                "required": ["query"],
-            },
-        },
-    },
-]
-
 
 class GPTProvider(LLMProvider):
     def __init__(self):
@@ -143,37 +99,44 @@ class GPTProvider(LLMProvider):
 
     # ── Agentic chat with OpenAI tool-calling ────────────────────────────────
 
-    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None) -> str:
-        from backend.jobradar.services.chat_tool import fetch_raw_email, search_gmail_inbox
+    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None, mcp_client=None) -> str:
+        # Fall back to a local MCP-less client when none provided
+        if mcp_client is None:
+            from backend.jobradar.services.mcp_gmail_client import GmailMCPClient
+            mcp_client = GmailMCPClient(user_id, None)
+
+        tools = mcp_client.tools_openai()
 
         oai_messages = [{"role": "system", "content": system_instruction}]
         for m in messages:
             role = "user" if m.get("role") == "user" else "assistant"
             oai_messages.append({"role": role, "content": str(m.get("content", ""))})
 
-        for _ in range(2):
+        for _ in range(5):
             response = self._client.chat.completions.create(
                 model=settings.openai_model,
                 messages=oai_messages,
-                tools=TOOLS,
+                tools=tools,
                 tool_choice="auto",
             )
+
+            # Always record usage for every round (not just final)
+            if response.usage:
+                toks, cost = record_token_usage(
+                    model=settings.openai_model,
+                    provider="openai",
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    user_id=user_id,
+                    email=email,
+                    feature=feature or "agent_chat",
+                )
+                self.total_session_tokens += toks
+                self.total_session_cost += cost
+
             msg = response.choices[0].message
 
             if not msg.tool_calls:
-                # Record token usage before returning — no tool path skipped this
-                if response.usage:
-                    toks, cost = record_token_usage(
-                        model=settings.openai_model,
-                        provider="openai",
-                        prompt_tokens=response.usage.prompt_tokens,
-                        completion_tokens=response.usage.completion_tokens,
-                        user_id=user_id,
-                        email=email,
-                        feature=feature or "agent_chat"
-                    )
-                    self.total_session_tokens += toks
-                    self.total_session_cost += cost
                 return msg.content or ""
 
             oai_messages.append(msg)
@@ -183,12 +146,7 @@ class GPTProvider(LLMProvider):
                 fn_args = json.loads(tool_call.function.arguments)
                 print(f"AGENT: GPT requested tool: {fn_name} with args: {fn_args}")
 
-                if fn_name == "fetch_raw_email":
-                    result = fetch_raw_email(user_id, fn_args["company_name"])
-                elif fn_name == "search_gmail_inbox":
-                    result = search_gmail_inbox(user_id, fn_args["query"])
-                else:
-                    result = f"Error: Tool '{fn_name}' not implemented."
+                result = mcp_client.call(fn_name, fn_args)
 
                 oai_messages.append({
                     "role": "tool",
@@ -196,23 +154,22 @@ class GPTProvider(LLMProvider):
                     "content": str(result),
                 })
 
+        # Loop exhausted — ask the model to summarize without tools
         final = self._client.chat.completions.create(
             model=settings.openai_model,
             messages=oai_messages,
         )
-        
-        # Log usage for the final response
         if final.usage:
-             toks, cost = record_token_usage(
+            toks, cost = record_token_usage(
                 model=settings.openai_model,
                 provider="openai",
                 prompt_tokens=final.usage.prompt_tokens,
                 completion_tokens=final.usage.completion_tokens,
                 user_id=user_id,
                 email=email,
-                feature=feature or "agent_chat"
+                feature=feature or "agent_chat",
             )
-             self.total_session_tokens += toks
-             self.total_session_cost += cost
-            
+            self.total_session_tokens += toks
+            self.total_session_cost += cost
+
         return final.choices[0].message.content or ""

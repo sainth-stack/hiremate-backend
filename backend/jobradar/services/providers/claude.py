@@ -69,28 +69,69 @@ class ClaudeProvider(LLMProvider):
             for text in stream.text_stream:
                 yield text
 
-    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None) -> str:
+    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None, mcp_client=None) -> str:
+        if mcp_client is None:
+            from backend.jobradar.services.mcp_gmail_client import GmailMCPClient
+            mcp_client = GmailMCPClient(user_id, None)
+
+        tools = mcp_client.tools_claude()
+
         claude_messages = [
-            {"role": "user" if m.get("role") == "user" else "assistant", "content": str(m.get("content", ""))}
+            {
+                "role": "user" if m.get("role") == "user" else "assistant",
+                "content": str(m.get("content", "")),
+            }
             for m in messages
         ]
-        response = self._client.messages.create(
-            model=settings.claude_model,
-            max_tokens=2048,
-            system=system_instruction,
-            messages=claude_messages,
-        )
-        
-        # Log usage
-        if hasattr(response, 'usage'):
-            record_token_usage(
+
+        for _ in range(5):
+            response = self._client.messages.create(
                 model=settings.claude_model,
-                provider="anthropic",
-                prompt_tokens=response.usage.input_tokens,
-                completion_tokens=response.usage.output_tokens,
-                user_id=user_id,
-                email=email,
-                feature=feature or "agent_chat"
+                max_tokens=2048,
+                system=system_instruction,
+                messages=claude_messages,
+                tools=tools,
             )
-            
-        return response.content[0].text
+
+            # Record usage for every round
+            if hasattr(response, "usage"):
+                record_token_usage(
+                    model=settings.claude_model,
+                    provider="anthropic",
+                    prompt_tokens=response.usage.input_tokens,
+                    completion_tokens=response.usage.output_tokens,
+                    user_id=user_id,
+                    email=email,
+                    feature=feature or "agent_chat",
+                )
+
+            if response.stop_reason != "tool_use":
+                # No tool call — extract the text reply
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        return block.text
+                return ""
+
+            # Append assistant turn with all content blocks (text + tool_use)
+            claude_messages.append({"role": "assistant", "content": response.content})
+
+            # Execute each tool call and collect results
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                print(f"AGENT: Claude requested tool: {block.name} with args: {block.input}")
+                result = mcp_client.call(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": str(result),
+                })
+
+            claude_messages.append({"role": "user", "content": tool_results})
+
+        # Loop exhausted — return whatever text is available
+        for block in response.content:
+            if hasattr(block, "text"):
+                return block.text
+        return ""

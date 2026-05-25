@@ -20,8 +20,9 @@ def fetch_raw_email(user_id: str, company_name: str) -> str:
         if not apps:
             return f"No tracked application found for '{company_name}' in the database."
 
-        # Pick the most recently active application
-        app = sorted(apps, key=lambda a: a.last_activity or a.applied_date, reverse=True)[0]
+        # Pick the most recently active application (guard against both dates being None)
+        from datetime import datetime
+        app = sorted(apps, key=lambda a: a.last_activity or a.applied_date or datetime.min, reverse=True)[0]
         thread_id = app.email_thread_id
 
         if not thread_id:
