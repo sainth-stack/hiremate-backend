@@ -81,7 +81,7 @@ class MistralProvider(LLMProvider):
             if delta:
                 yield delta
 
-    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None) -> str:
+    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None, mcp_client=None) -> str:
         mistral_messages = [{"role": "system", "content": system_instruction}]
         for m in messages:
             role = "user" if m.get("role") == "user" else "assistant"

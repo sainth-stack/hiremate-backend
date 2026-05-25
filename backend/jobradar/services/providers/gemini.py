@@ -110,8 +110,12 @@ class GeminiProvider(LLMProvider):
 
     # ── Agentic chat with Gemini tool-calling ────────────────────────────────
 
-    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None) -> str:
-        from backend.jobradar.services.chat_tool import fetch_raw_email, search_gmail_inbox
+    def chat(self, messages: list[dict], system_instruction: str, user_id: int = None, email: str = None, feature: str = None, mcp_client=None) -> str:
+        if mcp_client is None:
+            from backend.jobradar.services.mcp_gmail_client import GmailMCPClient
+            mcp_client = GmailMCPClient(user_id, None)
+
+        tools = mcp_client.tools_gemini()
 
         contents = []
         for m in messages:
@@ -120,109 +124,71 @@ class GeminiProvider(LLMProvider):
                 "parts": [{"text": str(m.get("content", ""))}],
             })
 
-        tools = [
-            types.Tool(
-                function_declarations=[
-                    types.FunctionDeclaration(
-                        name="fetch_raw_email",
-                        description=(
-                            "MANDATORY: Use this tool to read the actual live email thread for a company. "
-                            "Trigger this if the user asks for details, specifics, next steps, or drafts of "
-                            "follow-ups that require reading the email body beyond the summary metadata."
-                        ),
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={
-                                "company_name": types.Schema(
-                                    type="STRING",
-                                    description="The exact or approximate company name mentioned in the user's query.",
-                                )
-                            },
-                            required=["company_name"],
-                        ),
-                    ),
-                    types.FunctionDeclaration(
-                        name="search_gmail_inbox",
-                        description=(
-                            "Searches the entire live Gmail inbox for any query string. "
-                            "Use this if a company is NOT in the provided database summary to find relevant email threads."
-                        ),
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={
-                                "query": types.Schema(
-                                    type="STRING",
-                                    description="The Gmail search query (e.g. 'Glassdoor', 'from:recruiter@google.com').",
-                                )
-                            },
-                            required=["query"],
-                        ),
-                    ),
-                ]
-            )
-        ]
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=tools,
+        )
 
         response = self._client.models.generate_content(
             model=settings.gemini_model,
             contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=tools,
-            ),
+            config=config,
         )
 
-        for _ in range(2):
-            if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
-                break
+        for _ in range(5):
+            # Record usage for each round
+            if response.usage_metadata:
+                record_token_usage(
+                    model=settings.gemini_model,
+                    provider="google",
+                    prompt_tokens=response.usage_metadata.prompt_token_count or 0,
+                    completion_tokens=response.usage_metadata.candidates_token_count or 0,
+                    user_id=user_id,
+                    email=email,
+                    feature=feature or "agent_chat",
+                )
 
+            # Extract function call if present
             tool_call = None
-            for part in response.candidates[0].content.parts:
-                if part.function_call:
-                    tool_call = part.function_call
-                    break
+            if (
+                response.candidates
+                and response.candidates[0].content
+                and response.candidates[0].content.parts
+            ):
+                for part in response.candidates[0].content.parts:
+                    if part.function_call:
+                        tool_call = part.function_call
+                        break
 
             if not tool_call:
                 break
 
             print(f"AGENT: Gemini requested tool: {tool_call.name} with args: {tool_call.args}")
 
-            if tool_call.name == "fetch_raw_email":
-                tool_result = fetch_raw_email(user_id, tool_call.args["company_name"])
-            elif tool_call.name == "search_gmail_inbox":
-                tool_result = search_gmail_inbox(user_id, tool_call.args["query"])
-            else:
-                tool_result = f"Error: Tool '{tool_call.name}' not implemented."
+            tool_result = mcp_client.call(tool_call.name, dict(tool_call.args))
 
             contents.append(response.candidates[0].content)
-            contents.append(types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_function_response(
-                        name=tool_call.name,
-                        response={"result": tool_result},
-                    )
-                ],
-            ))
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_function_response(
+                            name=tool_call.name,
+                            response={"result": tool_result},
+                        )
+                    ],
+                )
+            )
 
             response = self._client.models.generate_content(
                 model=settings.gemini_model,
                 contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    tools=tools,
-                ),
+                config=config,
             )
 
-        # Log usage for the final response
-        if response.usage_metadata:
-            record_token_usage(
-                model=settings.gemini_model,
-                provider="google",
-                prompt_tokens=response.usage_metadata.prompt_token_count,
-                completion_tokens=response.usage_metadata.candidates_token_count,
-                user_id=user_id,
-                email=email,
-                feature=feature or "agent_chat"
-            )
-
-        return response.text
+        # Extract text safely — final response may still be a function_call with no text
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "text") and part.text:
+                    return part.text
+        return ""
