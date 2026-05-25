@@ -54,7 +54,9 @@ def update_plan(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 
-    old_monthly_tokens = plan.monthly_tokens
+    from backend.app.core.token_pricing import TokenPricing
+
+    old_monthly_tokens = TokenPricing.resolve_monthly_tokens(plan, plan_id)
 
     # If this plan is being set as featured, unset all others first
     if plan_data.get("is_featured") is True:
@@ -72,7 +74,7 @@ def update_plan(
 
     # If monthly_tokens changed, immediately reflect the new quota on all
     # users currently subscribed to this plan.
-    new_monthly_tokens = plan.monthly_tokens
+    new_monthly_tokens = TokenPricing.resolve_monthly_tokens(plan, plan_id)
     if new_monthly_tokens != old_monthly_tokens:
         from datetime import datetime
         db.query(User).filter(User.subscription_plan == plan_id).update(

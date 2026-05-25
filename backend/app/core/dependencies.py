@@ -119,11 +119,8 @@ def _enforce_subscription_expiry(current_user: User, db: Session) -> None:
 
 def _is_unlimited(current_user: User, db: Session) -> bool:
     """Returns True if the user is on an unlimited (Elite) plan."""
-    from backend.app.models.subscription_plan import SubscriptionPlan
-    plan = db.query(SubscriptionPlan).filter(
-        SubscriptionPlan.id == current_user.subscription_plan
-    ).first()
-    return bool(plan and plan.monthly_tokens == TokenPricing.UNLIMITED_PLAN_THRESHOLD)
+    from backend.app.services.usage_service import UsageService
+    return UsageService.is_unlimited_user(db, current_user)
 
 
 def check_token_balance(

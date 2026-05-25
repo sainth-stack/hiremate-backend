@@ -17,27 +17,52 @@ logger = get_logger("services.usage")
 
 class UsageService:
     @staticmethod
+    def get_plan_for_user(db, user: User) -> SubscriptionPlan | None:
+        plan = db.query(SubscriptionPlan).filter(
+            SubscriptionPlan.id == user.subscription_plan
+        ).first()
+        if not plan:
+            plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == "free").first()
+        return plan
+
+    @staticmethod
+    def resolve_monthly_tokens(db, user: User) -> int:
+        plan = UsageService.get_plan_for_user(db, user)
+        return TokenPricing.resolve_monthly_tokens(plan, user.subscription_plan or "free")
+
+    @staticmethod
+    def is_unlimited_user(db, user: User) -> bool:
+        return TokenPricing.is_unlimited(UsageService.resolve_monthly_tokens(db, user))
+
+    @staticmethod
+    def sync_unlimited_balance(db, user: User) -> None:
+        """Ensure unlimited-plan users always carry token_balance = -1."""
+        if not UsageService.is_unlimited_user(db, user):
+            return
+        if user.token_balance == TokenPricing.UNLIMITED_PLAN_THRESHOLD:
+            return
+        user.token_balance = TokenPricing.UNLIMITED_PLAN_THRESHOLD
+        db.add(user)
+        db.commit()
+
+    @staticmethod
     def replenish_tokens_on_login(db, user: User):
         """
         Resets token balance to plan amount every 30 days.
-        Triggered on login, register, and Google OAuth callback.
+        Triggered on login, register, profile fetch, and Google OAuth callback.
         """
         now = datetime.utcnow()
         if not user.last_token_reset or (now - user.last_token_reset).days >= 30:
-            plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == user.subscription_plan).first()
-            if not plan:
-                plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == "free").first()
-
-            if plan:
-                user.token_balance = plan.monthly_tokens
-                user.last_token_reset = now
-                db.add(user)
-                db.commit()
-                logger.info(
-                    "USAGE_SERVICE: Replenished tokens for %s (%s tokens)",
-                    user.email,
-                    plan.monthly_tokens,
-                )
+            monthly_tokens = UsageService.resolve_monthly_tokens(db, user)
+            user.token_balance = monthly_tokens
+            user.last_token_reset = now
+            db.add(user)
+            db.commit()
+            logger.info(
+                "USAGE_SERVICE: Replenished tokens for %s (%s tokens)",
+                user.email,
+                monthly_tokens,
+            )
 
 
 def record_token_usage(
@@ -78,7 +103,10 @@ def record_token_usage(
                 plan = db.query(SubscriptionPlan).filter(
                     SubscriptionPlan.id == user.subscription_plan
                 ).first()
-                is_unlimited = plan and plan.monthly_tokens == TokenPricing.UNLIMITED_PLAN_THRESHOLD
+                monthly_tokens = TokenPricing.resolve_monthly_tokens(
+                    plan, user.subscription_plan or "free"
+                )
+                is_unlimited = TokenPricing.is_unlimited(monthly_tokens)
 
                 if not is_unlimited:
                     user.token_balance = max(0, user.token_balance - total_tokens)

@@ -50,14 +50,8 @@ class User(Base):
     @property
     def monthly_tokens(self) -> int:
         """
-        Returns the monthly token budget for the user's current plan.
-        Uses a hardcoded fallback map to avoid opening an extra DB session
-        on every auth response. The canonical value lives in the subscription_plans
-        table; this property is only used when a DB session is not available.
+        Legacy fallback when no DB session is available.
+        Auth endpoints use UsageService.resolve_monthly_tokens() instead.
         """
-        _fallback = {
-            "free": 25000,
-            "pro": 500000,
-            "elite": -1,
-        }
-        return _fallback.get(self.subscription_plan, 25000)
+        from backend.app.core.token_pricing import TokenPricing
+        return TokenPricing.PLAN_DEFAULTS.get(self.subscription_plan, 25000)

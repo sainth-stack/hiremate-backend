@@ -29,6 +29,7 @@ class UserResponse(BaseModel):
     gmail_sync_enabled: Optional[bool] = False
     token_balance: Optional[int] = 0
     monthly_tokens: Optional[int] = 0
+    subscription_plan: Optional[str] = "free"
     total_tokens_consumed: Optional[int] = 0
     last_token_reset: Optional[str] = None
 

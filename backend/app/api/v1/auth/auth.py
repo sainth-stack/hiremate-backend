@@ -22,6 +22,27 @@ logger = get_logger("api.auth")
 router = APIRouter()
 
 
+def _build_user_response(db: Session, user: User) -> UserResponse:
+    """Build profile payload with DB-backed plan quotas and balance sync."""
+    UsageService.replenish_tokens_on_login(db, user)
+    UsageService.sync_unlimited_balance(db, user)
+    db.refresh(user)
+    monthly_tokens = UsageService.resolve_monthly_tokens(db, user)
+    return UserResponse(
+        id=user.id,
+        first_name=user.first_name or "",
+        last_name=user.last_name or "",
+        email=user.email or "",
+        is_admin=getattr(user, "is_admin", False),
+        gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
+        subscription_plan=user.subscription_plan or "free",
+        token_balance=user.token_balance,
+        monthly_tokens=monthly_tokens,
+        total_tokens_consumed=user.total_tokens_consumed,
+        last_token_reset=user.last_token_reset.isoformat() if user.last_token_reset else None,
+    )
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
     """
@@ -60,18 +81,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
         return TokenResponse(
             access_token=result["access_token"],
             token_type=result["token_type"],
-            user=UserResponse(
-                id=user.id,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                email=user.email,
-                is_admin=getattr(user, "is_admin", False),
-                gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
-                token_balance=user.token_balance, # Use updated balance
-                monthly_tokens=user.monthly_tokens,
-                total_tokens_consumed=user.total_tokens_consumed,
-                last_token_reset=user.last_token_reset.isoformat() if user.last_token_reset else None
-            ),
+            user=_build_user_response(db, user),
             message=result["message"],
         )
     except HTTPException:
@@ -125,18 +135,7 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
         return TokenResponse(
             access_token=result["access_token"],
             token_type=result["token_type"],
-            user=UserResponse(
-                id=user.id,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                email=user.email,
-                is_admin=getattr(user, "is_admin", False),
-                gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
-                token_balance=user.token_balance,
-                monthly_tokens=user.monthly_tokens,
-                total_tokens_consumed=user.total_tokens_consumed,
-                last_token_reset=user.last_token_reset.isoformat() if user.last_token_reset else None
-            ),
+            user=_build_user_response(db, user),
         )
     except HTTPException:
         raise
@@ -155,23 +154,13 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
 @router.get("/profile", response_model=UserResponse)
 def get_current_user_profile(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Get the current authenticated user's profile (id, first_name, last_name, email).
     Used to refresh auth state on app load.
     """
-    return UserResponse(
-        id=current_user.id,
-        first_name=current_user.first_name or "",
-        last_name=current_user.last_name or "",
-        email=current_user.email or "",
-        is_admin=getattr(current_user, "is_admin", False),
-        gmail_sync_enabled=getattr(current_user, "gmail_sync_enabled", False),
-        token_balance=current_user.token_balance,
-        monthly_tokens=current_user.monthly_tokens,
-        total_tokens_consumed=current_user.total_tokens_consumed,
-        last_token_reset=current_user.last_token_reset.isoformat() if current_user.last_token_reset else None
-    )
+    return _build_user_response(db, current_user)
 
 
 @router.patch("/profile")
@@ -262,15 +251,7 @@ def refresh_access_token(
         return TokenResponse(
             access_token=access_token,
             token_type="bearer",
-            user=UserResponse(
-                id=user.id,
-                first_name=user.first_name or "",
-                last_name=user.last_name or "",
-                email=user.email or "",
-                is_admin=getattr(user, "is_admin", False),
-                gmail_sync_enabled=getattr(user, "gmail_sync_enabled", False),
-                token_balance=getattr(user, "token_balance", 0),
-            ),
+            user=_build_user_response(db, user),
         )
     except JWTError:
         raise HTTPException(

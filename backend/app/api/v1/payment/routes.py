@@ -16,17 +16,45 @@ from backend.app.core.logging_config import get_logger
 from backend.app.models.user import User
 from backend.app.models.subscription_plan import SubscriptionPlan
 from backend.app.services.usage_service import UsageService
+from backend.app.core.token_pricing import TokenPricing
 
 logger = get_logger("api.payment")
 router = APIRouter()
+
+
+class PublicPlanResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    amount: int = 0
+    monthly_tokens: int = 0
+    features: list = []
+    is_active: bool = True
+    is_featured: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+def _serialize_public_plan(plan: SubscriptionPlan) -> PublicPlanResponse:
+    return PublicPlanResponse(
+        id=plan.id,
+        name=plan.name,
+        description=plan.description,
+        amount=plan.amount or 0,
+        monthly_tokens=TokenPricing.resolve_monthly_tokens(plan, plan.id),
+        features=plan.features or [],
+        is_active=bool(plan.is_active),
+        is_featured=bool(plan.is_featured),
+    )
+
 
 @router.get("/plans")
 def list_public_plans(db: Session = Depends(get_db)):
     """List all active subscription plans for the pricing page."""
     plans = db.query(SubscriptionPlan).filter(SubscriptionPlan.is_active == True).all()
-    # Sort by amount to show Free -> Pro -> Elite
     plans.sort(key=lambda p: p.amount)
-    return {"data": plans}
+    return {"data": [_serialize_public_plan(p) for p in plans]}
 
 class CreateOrderRequest(BaseModel):
     plan_id: str  # pro | elite
