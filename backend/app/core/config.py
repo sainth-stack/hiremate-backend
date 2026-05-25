@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Google OAuth
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
+    google_redirect_uri: str = "https://opsbrainai.com/api/auth/google/callback"
     google_scopes: list[str] = [
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
