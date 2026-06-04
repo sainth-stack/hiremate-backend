@@ -135,6 +135,16 @@ class Settings(BaseSettings):
     default_sync_days: int = 7   # Look-back window for scheduled incremental sync
     ghosted_days: int = 21       # Days of inactivity before marking as ghosted
 
+    # Background workers (Celery + optional in-process APScheduler fallback)
+    enable_in_process_scheduler: bool = False  # True = APScheduler inside uvicorn (dev only)
+    enable_job_scheduler: bool = True
+    job_ingestion_interval_hours: int = 2
+    celery_broker_url: str = ""  # Defaults to redis_url when empty
+    celery_result_backend: str = ""
+
+    # Job recommendations (corpus sort=recommended)
+    recommended_sort_max_jobs: int = 500
+
     # Logging
     log_level: str = "INFO"
 

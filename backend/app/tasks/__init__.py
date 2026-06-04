@@ -1,1 +1,1 @@
-"""Background tasks — cleanup and maintenance."""
+"""Sync maintenance helpers (cleanup). Celery workers live in backend.celery.workers."""

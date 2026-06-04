@@ -55,11 +55,18 @@ def start_scheduler():
         logger.warning("Scheduler already running")
         return
     
-    if not getattr(settings, "enable_job_scheduler", True):
+    if not settings.enable_in_process_scheduler:
+        logger.info(
+            "In-process job scheduler skipped (use Celery beat: "
+            "backend.celery.workers.ingestion.run_public_apis_ingestion)"
+        )
+        return
+
+    if not settings.enable_job_scheduler:
         logger.info("Job scheduler disabled via settings")
         return
-    
-    schedule_interval_hours = getattr(settings, "job_ingestion_interval_hours", 2)
+
+    schedule_interval_hours = settings.job_ingestion_interval_hours
     
     scheduler = AsyncIOScheduler()
     

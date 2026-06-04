@@ -156,6 +156,19 @@ def calculate_overall_match(
     return round(overall, 1)
 
 
+def format_match_data_for_client(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize match payload for API consumers (camelCase + snake_case)."""
+    return {
+        "overall": raw.get("overall", 0),
+        "experience_level": raw.get("experience_level", 0),
+        "skills": raw.get("skills", 0),
+        "industry_experience": raw.get("industry_experience", 0),
+        "description": raw.get("description", ""),
+        "experienceLevel": raw.get("experience_level", 0),
+        "industryExperience": raw.get("industry_experience", 0),
+    }
+
+
 def calculate_job_match(user_profile: Profile, job: Job) -> dict[str, Any]:
     """
     Calculate complete match data for a job.
@@ -176,13 +189,15 @@ def calculate_job_match(user_profile: Profile, job: Job) -> dict[str, Any]:
     
     description = _generate_match_description(job, overall_match)
     
-    return {
-        "overall": int(overall_match),
-        "experience_level": int(experience_match),
-        "skills": int(skills_match),
-        "industry_experience": int(industry_match),
-        "description": description,
-    }
+    return format_match_data_for_client(
+        {
+            "overall": int(overall_match),
+            "experience_level": int(experience_match),
+            "skills": int(skills_match),
+            "industry_experience": int(industry_match),
+            "description": description,
+        }
+    )
 
 
 def _extract_years_of_experience(experience_text: str) -> int:

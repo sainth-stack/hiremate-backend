@@ -40,6 +40,7 @@ from backend.app.services.company_search_service import (
     resolve_links,
     search_jobs_for_company,
 )
+from backend.app.core.config import settings
 from backend.app.services.job_matching_service import calculate_job_match
 from backend.app.models.profile import Profile
 
@@ -200,6 +201,10 @@ def list_jobs_corpus(
     ),
     posted_from: Optional[date] = Query(None, description="Include jobs posted on or after this date (UTC)"),
     posted_to: Optional[date] = Query(None, description="Include jobs posted on or before this date (UTC)"),
+    sort: str = Query(
+        "recent",
+        description="Sort order: recent (posted_at desc) or recommended (match score desc, requires profile)",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
@@ -327,6 +332,24 @@ def list_jobs_corpus(
         query = query.filter(Job.posted_at <= datetime.combine(posted_to, time.max))
 
     total = query.count()
+    user_profile = db.query(Profile).filter_by(user_id=current_user.id).first()
+    sort_normalized = (sort or "recent").strip().lower()
+
+    if sort_normalized == "recommended" and user_profile:
+        cap = max(page_size, min(settings.recommended_sort_max_jobs, 2000))
+        candidate_rows = (
+            query.order_by(desc(Job.posted_at), desc(Job.id)).limit(cap).all()
+        )
+        scored = []
+        for row in candidate_rows:
+            item_dict = JobCorpusItem.model_validate(row).model_dump()
+            match_data = calculate_job_match(user_profile, row)
+            item_dict["match_data"] = match_data
+            scored.append((match_data.get("overall", 0), row.posted_at, row.id, item_dict))
+        scored.sort(key=lambda x: (-x[0], x[1] or datetime.min, -x[2]))
+        offset = (page - 1) * page_size
+        page_items = [item for _, _, _, item in scored[offset : offset + page_size]]
+        return JobCorpusPage(items=page_items, total=total, page=page, page_size=page_size)
 
     rows = (
         query.order_by(desc(Job.posted_at), desc(Job.id))
@@ -335,14 +358,11 @@ def list_jobs_corpus(
         .all()
     )
 
-    user_profile = db.query(Profile).filter_by(user_id=current_user.id).first()
-
     items = []
     for row in rows:
         item_dict = JobCorpusItem.model_validate(row).model_dump()
         if user_profile:
-            match_data = calculate_job_match(user_profile, row)
-            item_dict["match_data"] = match_data
+            item_dict["match_data"] = calculate_job_match(user_profile, row)
         items.append(item_dict)
-    
+
     return JobCorpusPage(items=items, total=total, page=page, page_size=page_size)

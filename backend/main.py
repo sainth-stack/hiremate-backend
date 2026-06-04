@@ -167,9 +167,14 @@ async def lifespan(app: FastAPI):
     # Advance Gmail history cursors so queued Pub/Sub notifications from downtime are ignored
     _advance_history_ids_on_startup()
 
-    # Start job ingestion scheduler (runs every 2 hours)
+    # Optional in-process scheduler (disabled when Celery beat handles ingestion)
     start_scheduler()
-    logger.info("Job ingestion scheduler started")
+    if settings.enable_in_process_scheduler:
+        logger.info("In-process job ingestion scheduler started")
+    else:
+        logger.info(
+            "API-only mode for scheduled jobs — run Celery worker + beat (see ecosystem.config.cjs)"
+        )
 
     yield
 
