@@ -10,6 +10,11 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.api.v1.activity import router as activity_router
 from backend.app.api.v1.admin import router as admin_router
 from backend.app.api.v1.admin.plans import router as admin_plans_router
+from backend.app.api.v1.admin.interviews import router as admin_interviews_router
+from backend.app.api.v1.admin.interview_requests import router as admin_interview_requests_router
+from backend.app.api.v1.launched_interviews import router as launched_interviews_router
+from backend.app.api.v1.interview import router as live_interview_router
+from backend.app.api.v1.interview_requests import router as interview_requests_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.chrome_extension.routes import router as chrome_extension_router
 from backend.app.api.v1.dashboard import router as dashboard_router
@@ -75,6 +80,64 @@ def _advance_history_ids_on_startup():
         db.rollback()
     finally:
         db.close()
+
+
+def _ensure_interviews_table():
+    """Create interview-related tables if missing (handles out-of-sync Alembic state)."""
+    from sqlalchemy import inspect
+
+    from backend.app.models.interview import Interview
+    from backend.app.models.interview_question import InterviewQuestion
+    from backend.app.models.interview_request import InterviewRequest
+    from backend.app.models.launched_interview import LaunchedInterview, LaunchedInterviewUser
+
+    if not inspect(engine).has_table("interviews"):
+        Interview.__table__.create(bind=engine, checkfirst=True)
+        logger.info("STARTUP: Created missing interviews table")
+    if not inspect(engine).has_table("interview_questions"):
+        InterviewQuestion.__table__.create(bind=engine, checkfirst=True)
+        logger.info("STARTUP: Created missing interview_questions table")
+    if not inspect(engine).has_table("interview_requests"):
+        InterviewRequest.__table__.create(bind=engine, checkfirst=True)
+        logger.info("STARTUP: Created missing interview_requests table")
+    if not inspect(engine).has_table("launched_interviews"):
+        LaunchedInterview.__table__.create(bind=engine, checkfirst=True)
+        logger.info("STARTUP: Created missing launched_interviews table")
+    if not inspect(engine).has_table("launched_interview_users"):
+        LaunchedInterviewUser.__table__.create(bind=engine, checkfirst=True)
+        logger.info("STARTUP: Created missing launched_interview_users table")
+    else:
+        _ensure_launched_interview_user_columns()
+
+
+def _ensure_launched_interview_user_columns():
+    """Add submit-tracking columns if missing (handles out-of-sync Alembic state)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("launched_interview_users"):
+        return
+    existing = {col["name"] for col in inspector.get_columns("launched_interview_users")}
+    alters = []
+    if "status" not in existing:
+        alters.append(
+            "ALTER TABLE launched_interview_users "
+            "ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending'"
+        )
+    if "submitted_at" not in existing:
+        alters.append(
+            "ALTER TABLE launched_interview_users ADD COLUMN submitted_at TIMESTAMP NULL"
+        )
+    if "submission_data" not in existing:
+        alters.append(
+            "ALTER TABLE launched_interview_users ADD COLUMN submission_data JSON NULL"
+        )
+    if not alters:
+        return
+    with engine.begin() as conn:
+        for stmt in alters:
+            conn.execute(text(stmt))
+    logger.info("STARTUP: Added missing launched_interview_users columns")
 
 
 def _seed_subscription_plans():
@@ -164,6 +227,9 @@ async def lifespan(app: FastAPI):
 
     clear_stale_ingest_locks_on_startup()
 
+    _ensure_interviews_table()
+    _seed_subscription_plans()
+
     # Advance Gmail history cursors so queued Pub/Sub notifications from downtime are ignored
     _advance_history_ids_on_startup()
 
@@ -211,6 +277,11 @@ app.include_router(webhooks_router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(dashboard_router, prefix="/api", tags=["dashboard"])
 app.include_router(admin_router, prefix="/api", tags=["admin"])
 app.include_router(admin_plans_router, prefix="/api/admin", tags=["admin"])
+app.include_router(admin_interviews_router, prefix="/api/admin", tags=["admin"])
+app.include_router(admin_interview_requests_router, prefix="/api/admin", tags=["admin"])
+app.include_router(interview_requests_router, prefix="/api", tags=["interview-requests"])
+app.include_router(launched_interviews_router, prefix="/api", tags=["launched-interviews"])
+app.include_router(live_interview_router, prefix="/api/interview", tags=["interview"])
 app.include_router(company_search_router, prefix="/api", tags=["research"])
 app.include_router(activity_router, prefix="/api", tags=["activity"])
 app.include_router(issues_router, prefix="/api", tags=["issues"])
@@ -258,6 +329,8 @@ async def on_startup():
 
     from backend.app.utils import cache
     await cache.connect()
+
+    _ensure_interviews_table()
 
     # Seed default legal policies if the table is empty
     try:

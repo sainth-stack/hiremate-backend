@@ -8,6 +8,10 @@ __pycache__/
 
 # Environment variables
 .env
+backend/.env
+**/.env
+.env.*
+!.env.example
 
 # VSCode
 .vscode/

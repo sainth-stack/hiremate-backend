@@ -23,3 +23,7 @@ from backend.jobradar.models.nudge import Nudge
 from backend.jobradar.models.mock_interview import MockInterviewQuestion, MockInterviewSession, MockInterviewAnswer
 from backend.jobradar.models.briefing import CompanyBriefing
 from backend.app.models.subscription_plan import SubscriptionPlan
+from backend.app.models.interview import Interview
+from backend.app.models.interview_question import InterviewQuestion
+from backend.app.models.interview_request import InterviewRequest
+from backend.app.models.launched_interview import LaunchedInterview, LaunchedInterviewUser

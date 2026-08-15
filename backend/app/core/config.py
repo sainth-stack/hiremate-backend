@@ -159,6 +159,14 @@ class Settings(BaseSettings):
     # Set false if you run multiple app instances that could ingest concurrently (same Redis).
     ingest_clear_locks_on_startup: bool = True
 
+    # SMTP (optional — interview invitation emails; logs link if unset)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_use_tls: bool = True
+
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
         env_file_encoding="utf-8",
