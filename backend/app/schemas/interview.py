@@ -1,7 +1,7 @@
 """Pydantic schemas for admin Interview endpoints."""
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.app.services.voice.constants import VALID_LANGUAGE_CODES, VALID_SPEAKER_IDS
 
