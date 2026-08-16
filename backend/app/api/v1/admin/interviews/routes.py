@@ -327,6 +327,9 @@ def launch_interview(
         voice_label=(body.voice_label or resolved_label or storage_voice_id)[:255],
         tts_language_code=body.tts_language_code or "en-IN",
         question_count=interview.question_count or 15,
+        silence_submit_seconds=body.silence_submit_seconds,
+        pause_duration_seconds=body.pause_duration_seconds,
+        max_pauses_per_interview=body.max_pauses_per_interview,
     )
     db.add(launch)
     db.flush()

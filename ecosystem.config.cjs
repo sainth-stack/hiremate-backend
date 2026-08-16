@@ -14,18 +14,24 @@ const PY = pythonBin();
 const ENV = {
   PYTHONPATH: ROOT,
   PYTHONUNBUFFERED: '1',
+  PORT: '8000',
 };
+
+const apiStartScript = path.join(ROOT, 'scripts/start-api.sh');
 
 module.exports = {
   apps: [
     {
       name: 'hiremate-api',
       cwd: ROOT,
-      script: PY,
-      args: '-m uvicorn backend.main:app --host 0.0.0.0 --port 8000',
+      script: apiStartScript,
+      interpreter: 'bash',
       env: ENV,
       instances: 1,
       autorestart: true,
+      max_restarts: 5,
+      min_uptime: 5000,
+      restart_delay: 3000,
       max_memory_restart: '1G',
       watch: false,
     },
@@ -38,6 +44,9 @@ module.exports = {
       env: ENV,
       instances: 1,
       autorestart: true,
+      max_restarts: 5,
+      min_uptime: 5000,
+      restart_delay: 3000,
       max_memory_restart: '1G',
     },
     {
@@ -48,6 +57,9 @@ module.exports = {
       env: ENV,
       instances: 1,
       autorestart: true,
+      max_restarts: 5,
+      min_uptime: 5000,
+      restart_delay: 3000,
       max_memory_restart: '256M',
     },
   ],

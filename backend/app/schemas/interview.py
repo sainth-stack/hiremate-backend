@@ -179,6 +179,9 @@ class LaunchInterviewRequest(BaseModel):
     voice_id: str | None = None
     voice_label: str | None = None
     tts_language_code: str | None = "en-IN"
+    silence_submit_seconds: int = Field(default=10, ge=5, le=30)
+    pause_duration_seconds: int = Field(default=10, ge=5, le=60)
+    max_pauses_per_interview: int = Field(default=3, ge=0, le=10)
     users: list[LaunchInterviewUserInput]
     user_ids: list[int] = []
     user_emails: list[str] = []

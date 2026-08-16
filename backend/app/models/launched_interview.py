@@ -25,6 +25,9 @@ class LaunchedInterview(Base):
     voice_label = Column(String(255), nullable=True)
     tts_language_code = Column(String(16), nullable=True)
     question_count = Column(Integer, nullable=True)
+    silence_submit_seconds = Column(Integer, nullable=False, default=10)
+    pause_duration_seconds = Column(Integer, nullable=False, default=10)
+    max_pauses_per_interview = Column(Integer, nullable=False, default=3)
 
     assignments = relationship(
         "LaunchedInterviewUser",

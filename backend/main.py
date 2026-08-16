@@ -108,6 +108,7 @@ def _ensure_interviews_table():
     else:
         _ensure_launched_interview_columns()
         _ensure_launched_interview_voice_columns()
+        _ensure_launched_interview_session_config_columns()
     if not inspect(engine).has_table("launched_interview_users"):
         LaunchedInterviewUser.__table__.create(bind=engine, checkfirst=True)
         logger.info("STARTUP: Created missing launched_interview_users table")
@@ -208,6 +209,35 @@ def _ensure_launched_interview_voice_columns():
         for stmt in alters:
             conn.execute(text(stmt))
     logger.info("STARTUP: Added launched_interviews voice columns")
+
+
+def _ensure_launched_interview_session_config_columns():
+    """Add session timing columns to launched_interviews if missing."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("launched_interviews"):
+        return
+    existing = {col["name"] for col in inspector.get_columns("launched_interviews")}
+    alters = []
+    if "silence_submit_seconds" not in existing:
+        alters.append(
+            "ALTER TABLE launched_interviews ADD COLUMN silence_submit_seconds INTEGER NOT NULL DEFAULT 10"
+        )
+    if "pause_duration_seconds" not in existing:
+        alters.append(
+            "ALTER TABLE launched_interviews ADD COLUMN pause_duration_seconds INTEGER NOT NULL DEFAULT 10"
+        )
+    if "max_pauses_per_interview" not in existing:
+        alters.append(
+            "ALTER TABLE launched_interviews ADD COLUMN max_pauses_per_interview INTEGER NOT NULL DEFAULT 3"
+        )
+    if not alters:
+        return
+    with engine.begin() as conn:
+        for stmt in alters:
+            conn.execute(text(stmt))
+    logger.info("STARTUP: Added launched_interviews session config columns")
 
 
 def _seed_subscription_plans():

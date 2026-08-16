@@ -116,6 +116,12 @@ class InterviewSessionProgressResponse(BaseModel):
     tts_speaker: str | None = None
     tts_language_code: str | None = None
     question_count: int | None = None
+    silence_submit_seconds: int = 10
+    pause_duration_seconds: int = 10
+    max_pauses_per_interview: int = 3
+    pauses_used: int = 0
+    pauses_remaining: int = 3
+    auto_advance_enabled: bool = True
 
 
 class InterviewVoiceConfigResponse(BaseModel):
@@ -126,8 +132,27 @@ class InterviewVoiceConfigResponse(BaseModel):
     stt_language_code: str
     auto_advance_enabled: bool = True
     question_count: int | None = None
+    silence_submit_seconds: int = 10
+    pause_duration_seconds: int = 10
+    max_pauses_per_interview: int = 3
+    pauses_used: int = 0
+    pauses_remaining: int = 3
     # Legacy
     tts_speaker: str | None = None
+
+
+class InterviewPauseRequest(BaseModel):
+    user_id: int
+    interview_id: int
+
+
+class InterviewPauseResponse(BaseModel):
+    user_id: int
+    interview_id: int
+    pauses_used: int
+    pauses_remaining: int
+    max_pauses_per_interview: int
+    pause_duration_seconds: int
 
 
 class CustomVoiceCloneResponse(BaseModel):

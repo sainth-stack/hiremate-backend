@@ -13,6 +13,8 @@ from backend.app.schemas.voice import (
     CustomVoiceCloneResponse,
     InterviewAnswerCheckpointResponse,
     InterviewAudioPlaybackResponse,
+    InterviewPauseRequest,
+    InterviewPauseResponse,
     InterviewSessionProgressResponse,
     InterviewTtsRequest,
     InterviewVoiceConfigResponse,
@@ -43,7 +45,13 @@ from backend.app.services.voice.custom_voice_service import (
     soft_delete_custom_voice_clone,
 )
 from backend.app.services.voice.sarvam_service import transcribe_audio
-from backend.app.services.voice.session_store import get_session_progress, save_answer_checkpoint
+from backend.app.services.voice.session_config import resolve_session_config
+from backend.app.services.voice.session_store import (
+    get_pause_state,
+    get_session_progress,
+    record_interview_pause,
+    save_answer_checkpoint,
+)
 from backend.app.services.voice.voice_config import (
     LaunchVoiceConfig,
     resolve_assignment_voice_config,
@@ -81,7 +89,20 @@ def _voice_config_response(db: Session, user_id: int, interview_id: int) -> tupl
     interview = db.query(Interview).filter(Interview.id == interview_id).first()
     voice = resolve_assignment_voice_config(db, user_id, interview_id)
     question_count = resolve_question_count(interview, launch)
-    return assignment, launch, interview, voice, question_count
+    session_config = resolve_session_config(launch)
+    pause_state = get_pause_state(assignment, session_config)
+    return assignment, launch, interview, voice, question_count, session_config, pause_state
+
+
+def _session_fields(session_config, pause_state) -> dict:
+    return {
+        "silence_submit_seconds": session_config.silence_submit_seconds,
+        "pause_duration_seconds": session_config.pause_duration_seconds,
+        "max_pauses_per_interview": session_config.max_pauses_per_interview,
+        "auto_advance_enabled": session_config.auto_advance_enabled,
+        "pauses_used": pause_state["pauses_used"],
+        "pauses_remaining": pause_state["pauses_remaining"],
+    }
 
 
 @router.get("/voices", response_model=InterviewVoicesResponse)
@@ -181,7 +202,7 @@ def get_interview_voice_config(
     subject_user_id = resolve_interview_subject_user(
         db, current_user, user_id, interview_id, read_only=True,
     )
-    _assignment, _launch, _interview, voice, question_count = _voice_config_response(
+    _assignment, _launch, _interview, voice, question_count, session_config, pause_state = _voice_config_response(
         db, subject_user_id, interview_id,
     )
     return InterviewVoiceConfigResponse(
@@ -190,9 +211,9 @@ def get_interview_voice_config(
         voice_label=voice.display_name,
         tts_language_code=voice.language_code,
         stt_language_code=voice.language_code,
-        auto_advance_enabled=True,
         question_count=question_count,
         tts_speaker=voice.voice_id if voice.provider == "sarvam" else None,
+        **_session_fields(session_config, pause_state),
     )
 
 
@@ -206,7 +227,7 @@ def get_interview_session_progress(
     subject_user_id = resolve_interview_subject_user(
         db, current_user, user_id, interview_id, read_only=True,
     )
-    assignment, _launch, _interview, voice, question_count = _voice_config_response(
+    assignment, _launch, _interview, voice, question_count, session_config, pause_state = _voice_config_response(
         db, subject_user_id, interview_id,
     )
     progress = get_session_progress(assignment)
@@ -233,6 +254,35 @@ def get_interview_session_progress(
         tts_speaker=voice.voice_id if voice.provider == "sarvam" else None,
         tts_language_code=voice.language_code,
         question_count=question_count,
+        **_session_fields(session_config, pause_state),
+    )
+
+
+@router.post("/voice/pause", response_model=InterviewPauseResponse)
+def consume_interview_pause(
+    body: InterviewPauseRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record one thinking pause for the interview session (whole-interview limit)."""
+    subject_user_id = resolve_interview_subject_user(
+        db, current_user, body.user_id, body.interview_id, read_only=False,
+    )
+    assignment, launch = get_user_assignment(db, subject_user_id, body.interview_id)
+
+    if normalize_assignment_status(assignment.status) == "completed":
+        raise HTTPException(status_code=400, detail="Interview already completed")
+
+    session_config = resolve_session_config(launch)
+    try:
+        pause_state = record_interview_pause(db, assignment, session_config)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return InterviewPauseResponse(
+        user_id=subject_user_id,
+        interview_id=body.interview_id,
+        **pause_state,
     )
 
 
@@ -328,21 +378,39 @@ async def submit_interview_voice_answer(
 
     content_type = audio.content_type or "audio/webm"
     filename = audio.filename or f"answer_q{question_order}.webm"
+    fallback_transcript = (client_transcript or "").strip()
+    min_client_transcript_chars = 8
 
-    try:
-        stt_result = transcribe_audio(
-            audio_bytes=audio_bytes,
-            filename=filename,
-            content_type=content_type,
-            language_code=voice.language_code,
-            client_transcript=client_transcript,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Speech transcription failed: {exc}",
-        ) from exc
+    stt_result: dict
+    if len(fallback_transcript) >= min_client_transcript_chars:
+        stt_result = {
+            "transcript": fallback_transcript,
+            "language_code": voice.language_code,
+        }
+    else:
+        try:
+            stt_result = transcribe_audio(
+                audio_bytes=audio_bytes,
+                filename=filename,
+                content_type=content_type,
+                language_code=voice.language_code,
+                client_transcript=client_transcript,
+            )
+        except Exception as exc:
+            if fallback_transcript:
+                stt_result = {
+                    "transcript": fallback_transcript,
+                    "language_code": voice.language_code,
+                }
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Speech transcription failed — please try again or speak longer.",
+                ) from exc
 
+    audio_key = None
+    audio_url = None
+    presigned_url = None
     try:
         storage = upload_interview_answer_audio(
             audio_bytes=audio_bytes,
@@ -352,11 +420,15 @@ async def submit_interview_voice_answer(
             question_order=question_order,
             mime_type=content_type,
         )
+        audio_key = storage["key"]
+        audio_url = storage["url"]
+        presigned_url = storage.get("presigned_url")
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Audio storage failed: {exc}",
-        ) from exc
+        if not fallback_transcript:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Audio storage failed: {exc}",
+            ) from exc
 
     checkpoint = save_answer_checkpoint(
         db,
@@ -365,8 +437,8 @@ async def submit_interview_voice_answer(
         question_order=question_order,
         question_text=question_text.strip(),
         transcript=stt_result["transcript"],
-        audio_key=storage["key"],
-        audio_url=storage["url"],
+        audio_key=audio_key,
+        audio_url=audio_url,
         duration_ms=duration_ms,
         stt_language_code=stt_result.get("language_code") or voice.language_code,
         current_question_index=current_question_index,
@@ -374,8 +446,8 @@ async def submit_interview_voice_answer(
 
     return InterviewAnswerCheckpointResponse(
         **checkpoint,
-        has_audio=True,
-        audio_presigned_url=storage.get("presigned_url"),
+        has_audio=bool(audio_key),
+        audio_presigned_url=presigned_url,
     )
 
 

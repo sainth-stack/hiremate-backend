@@ -7,10 +7,65 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.app.models.launched_interview import LaunchedInterviewUser
+from backend.app.services.voice.session_config import InterviewSessionConfig
 
 
 def _base_submission(assignment: LaunchedInterviewUser) -> dict[str, Any]:
     return dict(assignment.submission_data or {})
+
+
+def get_pauses_used(assignment: LaunchedInterviewUser) -> int:
+    data = _base_submission(assignment)
+    session = data.get("voice_session") or {}
+    try:
+        return max(0, int(session.get("pauses_used") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def get_pause_state(
+    assignment: LaunchedInterviewUser,
+    session_config: InterviewSessionConfig,
+) -> dict[str, int]:
+    used = get_pauses_used(assignment)
+    max_pauses = session_config.max_pauses_per_interview
+    return {
+        "pauses_used": used,
+        "pauses_remaining": max(0, max_pauses - used),
+        "max_pauses_per_interview": max_pauses,
+    }
+
+
+def record_interview_pause(
+    db: Session,
+    assignment: LaunchedInterviewUser,
+    session_config: InterviewSessionConfig,
+) -> dict[str, Any]:
+    data = _base_submission(assignment)
+    voice_session = dict(data.get("voice_session") or {})
+    used = get_pauses_used(assignment)
+    max_pauses = session_config.max_pauses_per_interview
+    if used >= max_pauses:
+        raise ValueError("Pause limit reached for this interview")
+
+    used += 1
+    voice_session["pauses_used"] = used
+    voice_session["updated_at"] = datetime.utcnow().isoformat()
+    pause_log = list(voice_session.get("pause_events") or [])
+    pause_log.append({"at": datetime.utcnow().isoformat()})
+    voice_session["pause_events"] = pause_log[-20:]
+
+    data["voice_session"] = voice_session
+    assignment.submission_data = data
+    db.commit()
+    db.refresh(assignment)
+
+    return {
+        "pauses_used": used,
+        "pauses_remaining": max(0, max_pauses - used),
+        "max_pauses_per_interview": max_pauses,
+        "pause_duration_seconds": session_config.pause_duration_seconds,
+    }
 
 
 def get_session_progress(assignment: LaunchedInterviewUser) -> dict[str, Any]:
