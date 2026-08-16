@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     app_name: str = "JobSeeker"
     app_version: str = "1.0.0"
     port: int = 8001
-    frontend_url: str = "https://opsbrainai.com"
+    # Public web app origin for interview links, OAuth redirects, emails (.env: FRONTEND_URL)
+    frontend_url: str = "https://student.opsbrainai.com"
 
     # Database
     database_url: str = "sqlite:///./jobseeker.db"

@@ -2,6 +2,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import settings
 from backend.app.models.launched_interview import LaunchedInterview, LaunchedInterviewUser
 from backend.app.models.user import User
 
@@ -91,8 +92,15 @@ def get_user_assignment(
     return assignment, launch
 
 
-def build_relative_interview_url(user_id: int, interview_id: int, access_token: str | None = None) -> str:
-    url = f"/interview/{user_id}?interview_id={interview_id}"
+def build_interview_url(user_id: int, interview_id: int, access_token: str | None = None) -> str:
+    """Full shareable interview URL using FRONTEND_URL from settings."""
+    base = settings.frontend_url.rstrip("/")
+    url = f"{base}/interview/{user_id}?interview_id={interview_id}"
     if access_token:
         url = f"{url}&token={access_token}"
     return url
+
+
+def build_relative_interview_url(user_id: int, interview_id: int, access_token: str | None = None) -> str:
+    """Backward-compatible alias — returns the full FRONTEND_URL-based link."""
+    return build_interview_url(user_id, interview_id, access_token)

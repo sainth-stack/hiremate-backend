@@ -8,6 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from backend.app.core.config import settings
+from backend.app.services.interview_assignment import build_interview_url
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +16,7 @@ COMPANY_NAME = "HireMate"
 
 
 def build_interview_link(user_id: int, interview_id: int, access_token: str | None = None) -> str:
-    base = settings.frontend_url.rstrip("/")
-    url = f"{base}/interview/{user_id}?interview_id={interview_id}"
-    if access_token:
-        url = f"{url}&token={access_token}"
-    return url
+    return build_interview_url(user_id, interview_id, access_token)
 
 
 def _build_email_content(
