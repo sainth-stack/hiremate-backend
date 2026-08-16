@@ -8,7 +8,7 @@ from backend.app.models.interview_request import InterviewRequest
 from backend.app.models.launched_interview import LaunchedInterview, LaunchedInterviewUser
 from backend.app.models.user import User
 from backend.app.services.interview_assignment import (
-    build_relative_interview_url,
+    build_interview_url,
     normalize_assignment_status,
 )
 from backend.app.services.interview_access import create_interview_access_token
@@ -215,7 +215,7 @@ def build_my_admin_interview_from_assignment(
             interview_id=interview_id,
             assignment_id=assignment.id,
         )
-        interview_url = build_relative_interview_url(assignment.user_id, interview_id, access_token)
+        interview_url = build_interview_url(assignment.user_id, interview_id, access_token)
     return {
         "id": assignment.id,
         "request_id": None,
@@ -271,7 +271,7 @@ def fetch_my_admin_interviews(db: Session, user_id: int) -> list[dict]:
 def build_my_admin_interview_item(request: InterviewRequest) -> dict:
     interview_url = None
     if request.interview_id and request.status in {"pending", "in_progress", "completed"}:
-        interview_url = build_relative_interview_url(request.user_id, request.interview_id)
+        interview_url = build_interview_url(request.user_id, request.interview_id)
 
     return {
         "id": request.id,

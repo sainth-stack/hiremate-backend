@@ -286,6 +286,7 @@ async def lifespan(app: FastAPI):
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         logger.info("Database connection verified")
+        logger.info("STARTUP: FRONTEND_URL=%s", settings.frontend_url)
     except Exception as e:
         logger.error("Database connection failed at startup: %s", str(e))
         raise RuntimeError(

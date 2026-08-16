@@ -17,7 +17,7 @@ from backend.app.services.interview_question_generator.persistence import (
 )
 from backend.app.services.interview_email_service import send_interview_invitation_email
 from backend.app.services.interview_summary import generate_interview_summary, resolve_interview_summary
-from backend.app.services.interview_assignment import build_relative_interview_url
+from backend.app.services.interview_assignment import build_interview_url
 from backend.app.services.interview_access import create_interview_access_token
 from backend.app.schemas.interview import (
     InterviewCreateRequest,
@@ -375,7 +375,7 @@ def launch_interview(
             LaunchAssignmentResponse(
                 user_id=row.user_id,
                 interview_id=launch.interview_id,
-                url=build_relative_interview_url(row.user_id, launch.interview_id, access_token),
+                url=build_interview_url(row.user_id, launch.interview_id, access_token),
             )
         )
 

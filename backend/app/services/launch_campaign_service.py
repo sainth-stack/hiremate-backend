@@ -15,7 +15,7 @@ from backend.app.schemas.interview import (
 )
 from backend.app.services.interview_summary import resolve_interview_summary
 from backend.app.services.interview_assignment import (
-    build_relative_interview_url,
+    build_interview_url,
     normalize_assignment_status,
 )
 from backend.app.services.interview_access import create_interview_access_token
@@ -79,7 +79,7 @@ def _build_assignee_summary(
         status=status,
         submitted_at=row.submitted_at,
         score=_score_from_submission(row.submission_data) if status == "completed" else None,
-        interview_url=build_relative_interview_url(
+        interview_url=build_interview_url(
             row.user_id,
             interview_id,
             create_interview_access_token(
