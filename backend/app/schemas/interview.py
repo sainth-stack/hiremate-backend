@@ -318,6 +318,13 @@ class InterviewQuestionReviewResponse(BaseModel):
     how_to_answer: str
     feedback: str | None = None
     score: int | None = None
+    question_type: str | None = None
+    category: str | None = None
+    what_went_well: str | None = None
+    what_was_missing: str | None = None
+    better_answer: str | None = None
+    recommended_improvement: str | None = None
+    dimensions: dict[str, int] | None = None
     audio_key: str | None = None
     has_audio: bool = False
 
@@ -327,6 +334,19 @@ class InterviewQuestionSummaryResponse(BaseModel):
     order: int
     question: str
     score: int | None = None
+    category: str | None = None
+    question_type: str | None = None
+
+
+class InterviewCategoryScoreResponse(BaseModel):
+    name: str
+    score: int
+
+
+class InterviewHiringRecommendationResponse(BaseModel):
+    recommendation: str
+    confidence: int
+    reason: str
 
 
 class InterviewReportResponse(BaseModel):
@@ -335,6 +355,10 @@ class InterviewReportResponse(BaseModel):
     evaluation_summary: str = ""
     strengths: list[str] = []
     improvements: list[str] = []
+    recommendations: list[str] = []
+    categories: list[InterviewCategoryScoreResponse] = []
+    score_status: str | None = None
+    score_calculation_note: str | None = None
     overall_score: int | None = None
     final_score: int | None = None
     feedback: str | None = None
@@ -342,6 +366,9 @@ class InterviewReportResponse(BaseModel):
     areas_for_improvement: list[str] | None = None
     weaknesses: list[str] | None = None
     average_question_score: int | None = None
+    hiring_recommendation: InterviewHiringRecommendationResponse | None = None
+    interview_title: str | None = None
+    interview_type: str | None = None
     question_summaries: list[InterviewQuestionSummaryResponse] = []
 
 

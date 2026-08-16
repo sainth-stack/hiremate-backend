@@ -40,6 +40,41 @@ from backend.app.services.interview_request_service import (
 router = APIRouter()
 
 
+def _enrich_submit_answers(
+    db: Session,
+    interview: Interview,
+    answers: list,
+    *,
+    user_id: int,
+    email: str | None,
+) -> list[dict]:
+    rows = ensure_interview_questions(db, interview, user_id=user_id, email=email)
+    by_text = {
+        (row.question_text or "").strip().lower(): row
+        for row in rows
+    }
+    by_order = {
+        int(row.order_index): row
+        for row in rows
+        if row.order_index is not None
+    }
+
+    enriched: list[dict] = []
+    for index, item in enumerate(answers, start=1):
+        payload = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+        question_text = (payload.get("question") or "").strip()
+        meta = by_text.get(question_text.lower())
+        if not meta:
+            meta = by_order.get(int(payload.get("order") or index))
+        if meta:
+            payload["category"] = meta.category
+            payload["complexity"] = meta.complexity
+            payload["template"] = meta.template
+            payload["expectations"] = meta.expectations
+        enriched.append(payload)
+    return enriched
+
+
 def _build_submit_response(
     *,
     user_id: int,
@@ -130,6 +165,18 @@ def submit_interview(
             )
         raise HTTPException(status_code=400, detail="Interview already submitted")
 
+    interview = db.query(Interview).filter(Interview.id == body.interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview template not found")
+
+    enriched_answers = _enrich_submit_answers(
+        db,
+        interview,
+        body.answers,
+        user_id=subject_user_id,
+        email=current_user.email,
+    )
+
     try:
         report = evaluate_interview_submission(
             user_id=subject_user_id,
@@ -138,7 +185,7 @@ def submit_interview(
             title=launch.title,
             difficulty=launch.difficulty,
             jd=body.jd,
-            answers=[item.model_dump() for item in body.answers],
+            answers=enriched_answers,
         )
     except RuntimeError as exc:
         raise HTTPException(
