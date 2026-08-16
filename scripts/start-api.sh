@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# PM2 entrypoint — free port 8000, then start FastAPI.
+# PM2 entrypoint — free port 8000, then start FastAPI with project venv only.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${PORT:-8000}"
+PY="$("$ROOT/scripts/resolve-python.sh")"
 
 free_port() {
   if command -v fuser >/dev/null 2>&1; then
@@ -19,26 +20,24 @@ free_port() {
   fi
 }
 
-# Drop stale uvicorn listeners (e.g. start-dev.sh or a crashed PM2 worker).
+# Drop stale uvicorn listeners before binding.
 pkill -f 'uvicorn backend.main:app' 2>/dev/null || true
 free_port
 
-for _ in {1..10}; do
+for _ in {1..15}; do
   if ! lsof -i :"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
     break
   fi
   sleep 0.3
 done
 
+if lsof -i :"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "ERROR: Port ${PORT} is still in use. Run: bash $ROOT/scripts/pm2-stop.sh" >&2
+  exit 1
+fi
+
 export PYTHONPATH="$ROOT"
 export PYTHONUNBUFFERED=1
 
-if [[ -x "$ROOT/backend/.venv/bin/python3" ]]; then
-  PY="$ROOT/backend/.venv/bin/python3"
-elif [[ -x "$ROOT/backend/.venv/bin/python" ]]; then
-  PY="$ROOT/backend/.venv/bin/python"
-else
-  PY="python3"
-fi
-
+echo "Starting API with $PY on port ${PORT}"
 exec "$PY" -m uvicorn backend.main:app --host 0.0.0.0 --port "$PORT"
