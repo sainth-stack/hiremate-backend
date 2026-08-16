@@ -51,29 +51,50 @@ def _normalize_dimensions(raw: dict | None) -> dict[str, int] | None:
     return cleaned or None
 
 
+def _coerce_text(value: object | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        parts = [str(item).strip() for item in value if item is not None and str(item).strip()]
+        return "\n".join(parts)
+    return str(value).strip()
+
+
+def _coerce_score(value: object | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_question_review(item: dict, order: int) -> InterviewQuestionReviewResponse:
+    user_answer = _coerce_text(item.get("user_answer"))
+    what_went_well = _coerce_text(item.get("what_went_well") or item.get("what_you_said"))
+    what_you_said = _coerce_text(item.get("what_you_said") or what_went_well or user_answer or "No answer provided.")
+    how_to_answer = _coerce_text(
+        item.get("how_to_answer")
+        or item.get("better_answer")
+        or item.get("coaching_tip")
+    )
+    better_answer = _coerce_text(item.get("better_answer") or how_to_answer)
     return InterviewQuestionReviewResponse(
         order=int(item.get("order") or order),
-        question=item.get("question") or "",
-        user_answer=item.get("user_answer") or "",
-        what_you_said=item.get("what_you_said") or item.get("user_answer") or "",
-        how_to_answer=(
-            item.get("how_to_answer")
-            or item.get("better_answer")
-            or item.get("coaching_tip")
-            or ""
-        ),
-        feedback=item.get("feedback"),
-        score=item.get("score"),
-        question_type=item.get("question_type"),
-        category=item.get("category"),
-        what_went_well=item.get("what_went_well") or item.get("what_you_said"),
-        what_was_missing=item.get("what_was_missing"),
-        better_answer=item.get("better_answer") or item.get("how_to_answer"),
-        recommended_improvement=(
-            item.get("recommended_improvement")
-            or item.get("feedback")
-        ),
+        question=_coerce_text(item.get("question")),
+        user_answer=user_answer,
+        what_you_said=what_you_said,
+        how_to_answer=how_to_answer,
+        feedback=_coerce_text(item.get("feedback")) or None,
+        score=_coerce_score(item.get("score")),
+        question_type=_coerce_text(item.get("question_type")) or None,
+        category=_coerce_text(item.get("category")) or None,
+        what_went_well=what_went_well or None,
+        what_was_missing=_coerce_text(item.get("what_was_missing")) or None,
+        better_answer=better_answer or None,
+        recommended_improvement=_coerce_text(
+            item.get("recommended_improvement") or item.get("feedback")
+        ) or None,
         dimensions=_normalize_dimensions(item.get("dimensions")),
     )
 

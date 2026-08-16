@@ -285,13 +285,16 @@ def get_question_analysis(
     audio_item = find_answer_audio(assignment.submission_data, order=order)
     audio_key = audio_item.get("audio_key") if audio_item else None
 
-    return InterviewQuestionAnalysisResponse(
-        user_id=user_id,
-        interview_id=interview_id,
-        audio_key=audio_key,
-        has_audio=bool(audio_key),
-        **review.model_dump(),
+    payload = review.model_dump()
+    payload.update(
+        {
+            "user_id": user_id,
+            "interview_id": interview_id,
+            "audio_key": audio_key,
+            "has_audio": bool(audio_key),
+        }
     )
+    return InterviewQuestionAnalysisResponse(**payload)
 
 
 @router.post("/retest", response_model=InterviewRetestResponse)
