@@ -182,6 +182,19 @@ class LaunchInterviewRequest(BaseModel):
     users: list[LaunchInterviewUserInput]
     user_ids: list[int] = []
     user_emails: list[str] = []
+    frontend_url: str | None = None
+
+    @field_validator("frontend_url")
+    @classmethod
+    def normalize_frontend_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        base = v.strip().rstrip("/")
+        if not base:
+            return None
+        if not base.startswith(("http://", "https://")):
+            raise ValueError("frontend_url must start with http:// or https://")
+        return base
 
     @field_validator("voice_provider")
     @classmethod

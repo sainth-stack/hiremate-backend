@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from backend.app.core.dependencies import get_admin_user, get_db
@@ -17,7 +17,7 @@ from backend.app.services.interview_question_generator.persistence import (
 )
 from backend.app.services.interview_email_service import send_interview_invitation_email
 from backend.app.services.interview_summary import generate_interview_summary, resolve_interview_summary
-from backend.app.services.interview_assignment import build_interview_url
+from backend.app.services.interview_assignment import build_interview_url, resolve_frontend_base
 from backend.app.services.interview_access import create_interview_access_token
 from backend.app.schemas.interview import (
     InterviewCreateRequest,
@@ -282,10 +282,15 @@ def _resolve_launch_assignees(
 )
 def launch_interview(
     body: LaunchInterviewRequest,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(get_admin_user),
 ):
     """Launch an interview template to selected users."""
+    frontend_base = resolve_frontend_base(
+        override=body.frontend_url,
+        origin=request.headers.get("origin"),
+    )
     interview = db.query(Interview).filter(Interview.id == body.interview_id).first()
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found")
@@ -370,12 +375,18 @@ def launch_interview(
             ),
             user_name=display_name,
             access_token=access_token,
+            frontend_base=frontend_base,
         )
         assignments.append(
             LaunchAssignmentResponse(
                 user_id=row.user_id,
                 interview_id=launch.interview_id,
-                url=build_interview_url(row.user_id, launch.interview_id, access_token),
+                url=build_interview_url(
+                    row.user_id,
+                    launch.interview_id,
+                    access_token,
+                    frontend_base=frontend_base,
+                ),
             )
         )
 

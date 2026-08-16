@@ -92,15 +92,46 @@ def get_user_assignment(
     return assignment, launch
 
 
-def build_interview_url(user_id: int, interview_id: int, access_token: str | None = None) -> str:
-    """Full shareable interview URL using FRONTEND_URL from settings."""
-    base = settings.frontend_url.rstrip("/")
+def resolve_frontend_base(
+    *,
+    override: str | None = None,
+    origin: str | None = None,
+) -> str:
+    """Pick the public site origin: request body > Origin header > FRONTEND_URL env."""
+    for candidate in (override, origin, settings.frontend_url):
+        if not candidate:
+            continue
+        base = str(candidate).strip().rstrip("/")
+        if base.startswith(("http://", "https://")):
+            return base
+    return settings.frontend_url.rstrip("/")
+
+
+def build_interview_url(
+    user_id: int,
+    interview_id: int,
+    access_token: str | None = None,
+    *,
+    frontend_base: str | None = None,
+) -> str:
+    """Full shareable interview URL."""
+    base = resolve_frontend_base(override=frontend_base)
     url = f"{base}/interview/{user_id}?interview_id={interview_id}"
     if access_token:
         url = f"{url}&token={access_token}"
     return url
 
 
-def build_relative_interview_url(user_id: int, interview_id: int, access_token: str | None = None) -> str:
-    """Backward-compatible alias — returns the full FRONTEND_URL-based link."""
-    return build_interview_url(user_id, interview_id, access_token)
+def build_relative_interview_url(
+    user_id: int,
+    interview_id: int,
+    access_token: str | None = None,
+    *,
+    frontend_base: str | None = None,
+) -> str:
+    return build_interview_url(
+        user_id,
+        interview_id,
+        access_token,
+        frontend_base=frontend_base,
+    )

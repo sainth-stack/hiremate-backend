@@ -15,8 +15,19 @@ logger = logging.getLogger(__name__)
 COMPANY_NAME = "HireMate"
 
 
-def build_interview_link(user_id: int, interview_id: int, access_token: str | None = None) -> str:
-    return build_interview_url(user_id, interview_id, access_token)
+def build_interview_link(
+    user_id: int,
+    interview_id: int,
+    access_token: str | None = None,
+    *,
+    frontend_base: str | None = None,
+) -> str:
+    return build_interview_url(
+        user_id,
+        interview_id,
+        access_token,
+        frontend_base=frontend_base,
+    )
 
 
 def _build_email_content(
@@ -29,8 +40,14 @@ def _build_email_content(
     difficulty: str,
     summary: str,
     access_token: str | None = None,
+    frontend_base: str | None = None,
 ) -> tuple[str, str, str]:
-    link = build_interview_link(user_id, interview_id, access_token)
+    link = build_interview_link(
+        user_id,
+        interview_id,
+        access_token,
+        frontend_base=frontend_base,
+    )
     greeting_name = user_name.strip() if user_name and user_name.strip() else "there"
     safe_title = html.escape(title)
     safe_difficulty = html.escape(difficulty.capitalize())
@@ -154,6 +171,7 @@ def send_interview_invitation_email(
     user_name: str | None = None,
     access_token: str | None = None,
     description: str | None = None,
+    frontend_base: str | None = None,
 ) -> bool:
     """Send interview link email. Returns True if sent (or skipped in dev), False on failure."""
     display_summary = (summary or description or title).strip()
@@ -166,8 +184,14 @@ def send_interview_invitation_email(
         difficulty=difficulty,
         summary=display_summary,
         access_token=access_token,
+        frontend_base=frontend_base,
     )
-    link = build_interview_link(user_id, interview_id, access_token)
+    link = build_interview_link(
+        user_id,
+        interview_id,
+        access_token,
+        frontend_base=frontend_base,
+    )
 
     if not settings.smtp_host:
         logger.info(
