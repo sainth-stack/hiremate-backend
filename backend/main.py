@@ -94,6 +94,8 @@ def _ensure_interviews_table():
     if not inspect(engine).has_table("interviews"):
         Interview.__table__.create(bind=engine, checkfirst=True)
         logger.info("STARTUP: Created missing interviews table")
+    else:
+        _ensure_interview_voice_columns()
     if not inspect(engine).has_table("interview_questions"):
         InterviewQuestion.__table__.create(bind=engine, checkfirst=True)
         logger.info("STARTUP: Created missing interview_questions table")
@@ -103,11 +105,37 @@ def _ensure_interviews_table():
     if not inspect(engine).has_table("launched_interviews"):
         LaunchedInterview.__table__.create(bind=engine, checkfirst=True)
         logger.info("STARTUP: Created missing launched_interviews table")
+    else:
+        _ensure_launched_interview_columns()
+        _ensure_launched_interview_voice_columns()
     if not inspect(engine).has_table("launched_interview_users"):
         LaunchedInterviewUser.__table__.create(bind=engine, checkfirst=True)
         logger.info("STARTUP: Created missing launched_interview_users table")
     else:
         _ensure_launched_interview_user_columns()
+
+
+def _ensure_interview_voice_columns():
+    """Add voice settings columns to interviews if missing."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("interviews"):
+        return
+    existing = {col["name"] for col in inspector.get_columns("interviews")}
+    alters = []
+    if "tts_speaker" not in existing:
+        alters.append("ALTER TABLE interviews ADD COLUMN tts_speaker VARCHAR(64) NULL")
+    if "tts_language_code" not in existing:
+        alters.append("ALTER TABLE interviews ADD COLUMN tts_language_code VARCHAR(16) NULL")
+    if "question_count" not in existing:
+        alters.append("ALTER TABLE interviews ADD COLUMN question_count INTEGER NOT NULL DEFAULT 15")
+    if not alters:
+        return
+    with engine.begin() as conn:
+        for stmt in alters:
+            conn.execute(text(stmt))
+    logger.info("STARTUP: Added interview voice columns")
 
 
 def _ensure_launched_interview_user_columns():
@@ -138,6 +166,48 @@ def _ensure_launched_interview_user_columns():
         for stmt in alters:
             conn.execute(text(stmt))
     logger.info("STARTUP: Added missing launched_interview_users columns")
+
+
+def _ensure_launched_interview_columns():
+    """Add launch_name column if missing."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("launched_interviews"):
+        return
+    existing = {col["name"] for col in inspector.get_columns("launched_interviews")}
+    if "launch_name" in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE launched_interviews ADD COLUMN launch_name VARCHAR(255) NULL"))
+    logger.info("STARTUP: Added launch_name to launched_interviews")
+
+
+def _ensure_launched_interview_voice_columns():
+    """Add voice settings columns to launched_interviews if missing."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("launched_interviews"):
+        return
+    existing = {col["name"] for col in inspector.get_columns("launched_interviews")}
+    alters = []
+    if "voice_provider" not in existing:
+        alters.append("ALTER TABLE launched_interviews ADD COLUMN voice_provider VARCHAR(32) NULL")
+    if "voice_id" not in existing:
+        alters.append("ALTER TABLE launched_interviews ADD COLUMN voice_id VARCHAR(128) NULL")
+    if "voice_label" not in existing:
+        alters.append("ALTER TABLE launched_interviews ADD COLUMN voice_label VARCHAR(255) NULL")
+    if "tts_language_code" not in existing:
+        alters.append("ALTER TABLE launched_interviews ADD COLUMN tts_language_code VARCHAR(16) NULL")
+    if "question_count" not in existing:
+        alters.append("ALTER TABLE launched_interviews ADD COLUMN question_count INTEGER NULL")
+    if not alters:
+        return
+    with engine.begin() as conn:
+        for stmt in alters:
+            conn.execute(text(stmt))
+    logger.info("STARTUP: Added launched_interviews voice columns")
 
 
 def _seed_subscription_plans():

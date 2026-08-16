@@ -1,4 +1,4 @@
-"""Difficulty mix for 15 generated questions."""
+"""Default difficulty mix ratios (scaled to total question count)."""
 from __future__ import annotations
 
 TOTAL_QUESTIONS = 15
@@ -70,5 +70,27 @@ def normalize_difficulty(value: str) -> str:
     return v
 
 
-def get_difficulty_mix(interview_difficulty: str) -> dict[str, int]:
-    return DIFFICULTY_MIX[normalize_difficulty(interview_difficulty)].copy()
+def get_difficulty_mix(interview_difficulty: str, total_questions: int = TOTAL_QUESTIONS) -> dict[str, int]:
+    base = DIFFICULTY_MIX[normalize_difficulty(interview_difficulty)].copy()
+    return scale_difficulty_mix(base, total_questions)
+
+
+def scale_difficulty_mix(base: dict[str, int], total: int) -> dict[str, int]:
+    """Scale easy/medium/hard counts to match total question count."""
+    total = max(3, min(int(total), 30))
+    base_total = sum(base.values()) or 1
+    keys = ["easy", "medium", "hard"]
+    result: dict[str, int] = {}
+    allocated = 0
+    for index, key in enumerate(keys):
+        if index == len(keys) - 1:
+            result[key] = max(0, total - allocated)
+        else:
+            count = int(round(base.get(key, 0) * total / base_total))
+            result[key] = count
+            allocated += count
+    if sum(result.values()) == 0:
+        result["medium"] = total
+    elif sum(result.values()) != total:
+        result["medium"] = max(0, result.get("medium", 0) + (total - sum(result.values())))
+    return result

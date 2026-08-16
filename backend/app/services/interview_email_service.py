@@ -14,9 +14,12 @@ logger = logging.getLogger(__name__)
 COMPANY_NAME = "HireMate"
 
 
-def build_interview_link(user_id: int, interview_id: int) -> str:
+def build_interview_link(user_id: int, interview_id: int, access_token: str | None = None) -> str:
     base = settings.frontend_url.rstrip("/")
-    return f"{base}/interview/{user_id}?interview_id={interview_id}"
+    url = f"{base}/interview/{user_id}?interview_id={interview_id}"
+    if access_token:
+        url = f"{url}&token={access_token}"
+    return url
 
 
 def _build_email_content(
@@ -27,13 +30,14 @@ def _build_email_content(
     interview_id: int,
     title: str,
     difficulty: str,
-    description: str,
+    summary: str,
+    access_token: str | None = None,
 ) -> tuple[str, str, str]:
-    link = build_interview_link(user_id, interview_id)
+    link = build_interview_link(user_id, interview_id, access_token)
     greeting_name = user_name.strip() if user_name and user_name.strip() else "there"
     safe_title = html.escape(title)
     safe_difficulty = html.escape(difficulty.capitalize())
-    safe_description = html.escape(description.strip())
+    safe_summary = html.escape(summary.strip())
     safe_email = html.escape(to_email)
     safe_link = html.escape(link, quote=True)
     safe_greeting = html.escape(greeting_name)
@@ -48,7 +52,7 @@ Interview details
 -----------------
 Title: {title}
 Difficulty: {difficulty.capitalize()}
-Description: {description.strip()}
+About: {summary.strip()}
 
 Complete your interview here:
 {link}
@@ -96,7 +100,7 @@ The {COMPANY_NAME} Team
                       <p style="margin:0 0 8px;font-size:14px;color:#6b7280;">Interview</p>
                       <p style="margin:0 0 12px;font-size:18px;font-weight:700;color:#111827;">{safe_title}</p>
                       <p style="margin:0 0 8px;font-size:14px;"><strong>Difficulty:</strong> {safe_difficulty}</p>
-                      <p style="margin:0;font-size:14px;line-height:1.6;"><strong>Description:</strong> {safe_description}</p>
+                      <p style="margin:0;font-size:14px;line-height:1.6;"><strong>About:</strong> {safe_summary}</p>
                     </td>
                   </tr>
                 </table>
@@ -149,10 +153,13 @@ def send_interview_invitation_email(
     interview_id: int,
     title: str,
     difficulty: str,
-    description: str,
+    summary: str,
     user_name: str | None = None,
+    access_token: str | None = None,
+    description: str | None = None,
 ) -> bool:
     """Send interview link email. Returns True if sent (or skipped in dev), False on failure."""
+    display_summary = (summary or description or title).strip()
     subject, text_body, html_body = _build_email_content(
         to_email=to_email,
         user_name=user_name,
@@ -160,9 +167,10 @@ def send_interview_invitation_email(
         interview_id=interview_id,
         title=title,
         difficulty=difficulty,
-        description=description,
+        summary=display_summary,
+        access_token=access_token,
     )
-    link = build_interview_link(user_id, interview_id)
+    link = build_interview_link(user_id, interview_id, access_token)
 
     if not settings.smtp_host:
         logger.info(

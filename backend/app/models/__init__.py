@@ -27,3 +27,4 @@ from backend.app.models.interview import Interview
 from backend.app.models.interview_question import InterviewQuestion
 from backend.app.models.interview_request import InterviewRequest
 from backend.app.models.launched_interview import LaunchedInterview, LaunchedInterviewUser
+from backend.app.models.custom_voice_clone import CustomVoiceClone

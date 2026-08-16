@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 
 from backend.app.models.interview import Interview
 from backend.app.models.interview_question import InterviewQuestion
+from backend.app.services.interview_question_generator.question_count import resolve_question_count
+from backend.app.services.interview_summary import resolve_interview_summary
 from backend.app.schemas.interview import InterviewDetailResponse, InterviewQuestionCardResponse
 
 
@@ -50,6 +52,15 @@ def build_interview_detail(interview: Interview, questions: list[InterviewQuesti
         title=interview.title,
         difficulty=interview.difficulty,
         description=interview.description,
+        summary=resolve_interview_summary(
+            title=interview.title,
+            description=interview.description,
+            difficulty=interview.difficulty,
+            summary=interview.summary,
+        ),
+        question_count=resolve_question_count(interview.question_count, interview.description),
+        tts_speaker=interview.tts_speaker,
+        tts_language_code=interview.tts_language_code,
         created_at=interview.created_at,
         questions=[
             InterviewQuestionCardResponse(

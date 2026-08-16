@@ -1,4 +1,4 @@
-"""LangGraph pipeline: description -> 15 difficulty-mixed question cards."""
+"""LangGraph pipeline: description -> difficulty-mixed question cards."""
 from __future__ import annotations
 
 import json
@@ -20,12 +20,22 @@ from backend.app.services.interview_question_generator.constants import (
     get_difficulty_mix,
     normalize_difficulty,
 )
+from backend.app.services.interview_question_generator.question_count import resolve_question_count
 from backend.app.services.interview_question_generator.state import (
     MAX_GENERATION_RETRIES,
     InterviewQuestionGenerationState,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_total_questions(state: InterviewQuestionGenerationState) -> int:
+    total = int(state.get("total_questions") or TOTAL_QUESTIONS)
+    return max(3, min(total, 30))
+
+
+def _generation_buffer(total: int) -> int:
+    return min(5, max(3, total // 5))
 
 
 def _parse_json_list(raw: str) -> list[dict[str, Any]]:
@@ -212,9 +222,18 @@ def _build_generation_prompt(
     )
 
     system_prompt = f"""
-You are a senior technical interviewer generating ONLY technical skill-based interview questions.
+You are an experienced human technical interviewer preparing questions for a live voice interview.
 
 Return ONLY a JSON array of exactly {count} objects.
+
+CONVERSATIONAL STYLE (how a real interviewer speaks):
+- Phrase each question naturally, as spoken in a 1:1 interview — not like an exam rubric
+- Prefer "Can you walk me through...", "How would you...", "What happens when..." over "Define X" or "Explain X"
+- One focused question per item; avoid stacking multiple sub-questions in one sentence
+- For scenarios: give 1–2 sentences of context, then ask one clear question
+- Keep question_text concise (ideally under 45 words) and easy to read aloud
+- Do NOT copy bullet lists, section headers, or markdown from the job description verbatim
+- Match topics and depth to the role description, but rewrite in your own words
 
 STRICT RULES — TECHNICAL ONLY:
 - category MUST always be "Technical" for every question
@@ -281,11 +300,13 @@ def _call_llm_for_questions(
 
 def prepare_plan_node(state: InterviewQuestionGenerationState) -> InterviewQuestionGenerationState:
     difficulty = normalize_difficulty(state.get("difficulty", "medium"))
+    total = int(state.get("total_questions") or TOTAL_QUESTIONS)
+    total = max(3, min(total, 30))
     return {
         **state,
         "difficulty": difficulty,
-        "total_questions": TOTAL_QUESTIONS,
-        "difficulty_mix": get_difficulty_mix(difficulty),
+        "total_questions": total,
+        "difficulty_mix": get_difficulty_mix(difficulty, total),
         "technical_skills": [],
         "raw_questions": [],
         "validated_questions": [],
@@ -333,8 +354,9 @@ Exclude soft skills. No markdown fences.
 
 def generate_questions_node(state: InterviewQuestionGenerationState) -> InterviewQuestionGenerationState:
     try:
+        total = _get_total_questions(state)
         # Request a small buffer — some items may fail coercion/validation.
-        raw_questions = _call_llm_for_questions(state, TOTAL_QUESTIONS + 3)
+        raw_questions = _call_llm_for_questions(state, total + _generation_buffer(total))
         if not raw_questions:
             return {**state, "error": "LLM returned no questions"}
         logger.info("LLM returned %d raw questions on initial generation", len(raw_questions))
@@ -345,8 +367,9 @@ def generate_questions_node(state: InterviewQuestionGenerationState) -> Intervie
 
 
 def fill_missing_questions_node(state: InterviewQuestionGenerationState) -> InterviewQuestionGenerationState:
+    total = _get_total_questions(state)
     validated = state.get("validated_questions") or []
-    missing = TOTAL_QUESTIONS - len(validated)
+    missing = total - len(validated)
     if missing <= 0:
         return {**state, "error": None}
 
@@ -369,7 +392,7 @@ def fill_missing_questions_node(state: InterviewQuestionGenerationState) -> Inte
             return {
                 **state,
                 "retry_count": retry_count,
-                "error": f"Expected {TOTAL_QUESTIONS} valid questions, got {len(validated)}",
+                "error": f"Expected {total} valid questions, got {len(validated)}",
             }
         return {
             **state,
@@ -390,20 +413,21 @@ def validate_questions_node(state: InterviewQuestionGenerationState) -> Intervie
     if state.get("error"):
         return state
 
+    total = _get_total_questions(state)
     validated = list(state.get("validated_questions") or [])
     for item in state.get("raw_questions", []):
         parsed = _validate_question_item(item)
         if parsed:
             validated = _merge_validated(validated, [parsed])
 
-    validated = validated[:TOTAL_QUESTIONS]
-    logger.info("Validated %d / %d questions", len(validated), TOTAL_QUESTIONS)
+    validated = validated[:total]
+    logger.info("Validated %d / %d questions", len(validated), total)
 
-    if len(validated) >= TOTAL_QUESTIONS:
+    if len(validated) >= total:
         return {
             **state,
-            "validated_questions": validated[:TOTAL_QUESTIONS],
-            "raw_questions": validated[:TOTAL_QUESTIONS],
+            "validated_questions": validated[:total],
+            "raw_questions": validated[:total],
             "error": None,
         }
 
@@ -419,7 +443,7 @@ def validate_questions_node(state: InterviewQuestionGenerationState) -> Intervie
     return {
         **state,
         "validated_questions": validated,
-        "error": f"Expected {TOTAL_QUESTIONS} valid questions, got {len(validated)}",
+        "error": f"Expected {total} valid questions, got {len(validated)}",
     }
 
 
@@ -427,9 +451,10 @@ def format_card_templates_node(state: InterviewQuestionGenerationState) -> Inter
     if state.get("error"):
         return state
 
+    total = _get_total_questions(state)
     source = state.get("validated_questions") or state.get("raw_questions") or []
     cards: list[dict[str, Any]] = []
-    for index, q in enumerate(source[:TOTAL_QUESTIONS], start=1):
+    for index, q in enumerate(source[:total], start=1):
         complexity = _normalize_complexity(q["complexity"])
         time_card = {
             **TIME_CARD_BY_COMPLEXITY[complexity],
@@ -473,8 +498,9 @@ def _route_on_llm_error(state: InterviewQuestionGenerationState) -> str:
 def _route_after_validate(state: InterviewQuestionGenerationState) -> str:
     if state.get("error"):
         return "__end__"
+    total = _get_total_questions(state)
     validated = state.get("validated_questions") or []
-    if len(validated) >= TOTAL_QUESTIONS:
+    if len(validated) >= total:
         return "format"
     if state.get("retry_count", 0) < MAX_GENERATION_RETRIES:
         return "fill_missing"
@@ -522,18 +548,20 @@ def generate_interview_questions(
     difficulty: str,
     user_id: int | None = None,
     email: str | None = None,
+    question_count: int = TOTAL_QUESTIONS,
 ) -> list[dict[str, Any]]:
     global _GRAPH
     if _GRAPH is None:
         _GRAPH = _build_graph()
 
+    count = resolve_question_count(question_count, description)
     initial: InterviewQuestionGenerationState = {
         "title": title.strip(),
         "description": description.strip(),
         "difficulty": difficulty,
         "user_id": user_id,
         "email": email,
-        "total_questions": TOTAL_QUESTIONS,
+        "total_questions": count,
         "difficulty_mix": {},
         "technical_skills": [],
         "raw_questions": [],

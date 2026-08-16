@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.app.core.dependencies import get_admin_user, get_db
@@ -6,24 +6,34 @@ from backend.app.models.interview import Interview
 from backend.app.models.interview_question import InterviewQuestion
 from backend.app.models.launched_interview import LaunchedInterview, LaunchedInterviewUser
 from backend.app.models.user import User
+from backend.app.services.voice.cartesia_service import resolve_voice_storage_id
+from backend.app.services.voice.custom_voice_service import list_active_custom_voices
 from backend.app.services.interview_question_generator import generate_interview_questions
+from backend.app.services.interview_question_generator.question_count import resolve_question_count
 from backend.app.services.interview_question_generator.persistence import (
     build_interview_detail,
     load_interview_questions,
     save_interview_questions,
 )
 from backend.app.services.interview_email_service import send_interview_invitation_email
+from backend.app.services.interview_summary import generate_interview_summary, resolve_interview_summary
 from backend.app.services.interview_assignment import build_relative_interview_url
+from backend.app.services.interview_access import create_interview_access_token
 from backend.app.schemas.interview import (
     InterviewCreateRequest,
     InterviewDetailResponse,
     InterviewListResponse,
+    InterviewQuestionsUpdateRequest,
+    InterviewRegenerateQuestionsRequest,
     InterviewResponse,
     InterviewUpdateRequest,
     LaunchAssignmentResponse,
+    LaunchCampaignDetailResponse,
+    LaunchCampaignListResponse,
     LaunchInterviewRequest,
     LaunchInterviewResponse,
 )
+from backend.app.services.launch_campaign_service import get_launch_campaign_detail, list_launch_campaigns
 
 router = APIRouter()
 
@@ -75,6 +85,7 @@ def create_interview(
             difficulty=body.difficulty,
             user_id=admin.id,
             email=admin.email,
+            question_count=body.question_count,
         )
     except RuntimeError as exc:
         raise HTTPException(
@@ -86,6 +97,14 @@ def create_interview(
         title=body.title,
         difficulty=body.difficulty,
         description=body.description,
+        summary=generate_interview_summary(
+            title=body.title,
+            description=body.description,
+            difficulty=body.difficulty,
+            user_id=admin.id,
+            email=admin.email,
+        ),
+        question_count=body.question_count,
     )
     db.add(interview)
     db.flush()
@@ -108,12 +127,109 @@ def update_interview(
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found")
 
+    title_changed = interview.title != body.title
+    difficulty_changed = interview.difficulty != body.difficulty
+    description_changed = interview.description != body.description
     interview.title = body.title
     interview.difficulty = body.difficulty
     interview.description = body.description
+    interview.question_count = body.question_count
+    if title_changed or difficulty_changed or description_changed:
+        interview.summary = generate_interview_summary(
+            title=body.title,
+            description=body.description,
+            difficulty=body.difficulty,
+            user_id=_admin.id,
+            email=_admin.email,
+        )
     db.commit()
     db.refresh(interview)
     return interview
+
+
+@router.patch("/interviews/{interview_id}/questions", response_model=InterviewDetailResponse)
+def update_interview_questions(
+    interview_id: int,
+    body: InterviewQuestionsUpdateRequest,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user),
+):
+    """Update question wording for an interview template."""
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    existing = {
+        row.id: row
+        for row in db.query(InterviewQuestion)
+        .filter(InterviewQuestion.interview_id == interview_id)
+        .all()
+    }
+    for item in body.questions:
+        row = existing.get(item.id)
+        if not row:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Question id {item.id} not found for this interview",
+            )
+        row.question_text = item.question_text.strip()
+        if row.view_card and isinstance(row.view_card, dict):
+            view_card = dict(row.view_card)
+            view_card["question"] = item.question_text.strip()
+            row.view_card = view_card
+
+    db.commit()
+    questions = load_interview_questions(db, interview_id)
+    return build_interview_detail(interview, questions)
+
+
+@router.post("/interviews/{interview_id}/regenerate-questions", response_model=InterviewDetailResponse)
+def regenerate_interview_questions(
+    interview_id: int,
+    body: InterviewRegenerateQuestionsRequest | None = None,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
+):
+    """Regenerate all questions from the interview description."""
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    payload = body or InterviewRegenerateQuestionsRequest()
+    question_count = resolve_question_count(
+        interview.question_count,
+        interview.description,
+        requested_count=payload.question_count,
+    )
+    interview.question_count = question_count
+    interview.summary = generate_interview_summary(
+        title=interview.title,
+        description=interview.description,
+        difficulty=interview.difficulty,
+        user_id=admin.id,
+        email=admin.email,
+    )
+
+    try:
+        generated = generate_interview_questions(
+            title=interview.title,
+            description=interview.description,
+            difficulty=interview.difficulty,
+            user_id=admin.id,
+            email=admin.email,
+            question_count=question_count,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Question generation failed: {exc}",
+        ) from exc
+
+    db.query(InterviewQuestion).filter(InterviewQuestion.interview_id == interview_id).delete()
+    question_rows = save_interview_questions(db, interview.id, generated)
+    db.commit()
+    db.refresh(interview)
+    return build_interview_detail(interview, question_rows)
 
 
 @router.delete("/interviews/{interview_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -179,13 +295,33 @@ def launch_interview(
         [(user.id, user.email) for user in body.users],
     )
 
+    allowed_custom = {voice.cartesia_voice_id for voice in list_active_custom_voices(db)}
+    custom_labels = {voice.cartesia_voice_id: voice.name for voice in list_active_custom_voices(db)}
+    storage_voice_id, resolved_label = resolve_voice_storage_id(
+        body.voice_id,
+        allowed_custom_ids=allowed_custom,
+        custom_labels=custom_labels,
+    )
+
     launch = LaunchedInterview(
         interview_id=body.interview_id,
         title=body.title.strip(),
+        launch_name=(body.launch_name or body.title).strip()[:255],
         difficulty=body.difficulty,
         description=body.description,
+        summary=resolve_interview_summary(
+            title=interview.title,
+            description=interview.description,
+            difficulty=interview.difficulty,
+            summary=interview.summary,
+        ),
         interview_created_at=body.created_at,
         launched_by_user_id=admin.id,
+        voice_provider="cartesia",
+        voice_id=storage_voice_id,
+        voice_label=(body.voice_label or resolved_label or storage_voice_id)[:255],
+        tts_language_code=body.tts_language_code or "en-IN",
+        question_count=interview.question_count or 15,
     )
     db.add(launch)
     db.flush()
@@ -205,22 +341,41 @@ def launch_interview(
     question_rows = load_interview_questions(db, body.interview_id)
     interview_detail = build_interview_detail(interview, question_rows)
 
+    assignment_rows = (
+        db.query(LaunchedInterviewUser)
+        .filter(LaunchedInterviewUser.launched_interview_id == launch.id)
+        .all()
+    )
+    name_by_user_id = {user_id: display_name for user_id, _email, display_name in assignees}
+
     assignments: list[LaunchAssignmentResponse] = []
-    for user_id, user_email, display_name in assignees:
+    for row in assignment_rows:
+        access_token = create_interview_access_token(
+            user_id=row.user_id,
+            interview_id=launch.interview_id,
+            assignment_id=row.id,
+        )
+        display_name = name_by_user_id.get(row.user_id)
         send_interview_invitation_email(
-            to_email=user_email,
-            user_id=user_id,
+            to_email=row.user_email,
+            user_id=row.user_id,
             interview_id=launch.interview_id,
             title=launch.title,
             difficulty=launch.difficulty,
-            description=launch.description,
+            summary=resolve_interview_summary(
+                title=launch.title,
+                description=launch.description,
+                difficulty=launch.difficulty,
+                summary=launch.summary,
+            ),
             user_name=display_name,
+            access_token=access_token,
         )
         assignments.append(
             LaunchAssignmentResponse(
-                user_id=user_id,
+                user_id=row.user_id,
                 interview_id=launch.interview_id,
-                url=build_relative_interview_url(user_id, launch.interview_id),
+                url=build_relative_interview_url(row.user_id, launch.interview_id, access_token),
             )
         )
 
@@ -229,3 +384,42 @@ def launch_interview(
         interview=interview_detail,
         assignments=assignments,
     )
+
+
+@router.get("/launches", response_model=LaunchCampaignListResponse)
+def list_launches(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user),
+):
+    """List all launched interview campaigns with assignee status counts."""
+    return list_launch_campaigns(db, page=page, limit=limit)
+
+
+@router.get("/launches/{launch_id}", response_model=LaunchCampaignDetailResponse)
+def get_launch_detail(
+    launch_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user),
+):
+    """Full launch campaign detail including assignee transcripts and evaluation results."""
+    detail = get_launch_campaign_detail(db, launch_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Launch campaign not found")
+    return detail
+
+
+@router.delete("/launches/{launch_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_launch(
+    launch_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user),
+):
+    """Delete a launch campaign and all assignee records."""
+    launch = db.query(LaunchedInterview).filter(LaunchedInterview.id == launch_id).first()
+    if not launch:
+        raise HTTPException(status_code=404, detail="Launch campaign not found")
+
+    db.delete(launch)
+    db.commit()

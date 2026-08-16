@@ -16,9 +16,12 @@ from backend.app.services.interview_assignment import (
     get_user_assignment,
     normalize_assignment_status,
     require_matching_user,
+    resolve_interview_subject_user,
 )
 from backend.app.services.interview_questions import ensure_interview_questions, to_question_card_responses
 from backend.app.services.interview_report import build_report_response
+from backend.app.services.voice.voice_config import resolve_launch_voice_config, resolve_question_count
+from backend.app.services.interview_summary import resolve_interview_summary
 
 router = APIRouter()
 
@@ -37,8 +40,10 @@ def get_user_launched_interview(
     current_user: User = Depends(get_current_user),
 ):
     """Return intro metadata for the live interview page."""
-    require_matching_user(current_user.id, user_id)
-    assignment, launch = get_user_assignment(db, user_id, interview_id)
+    subject_user_id = resolve_interview_subject_user(
+        db, current_user, user_id, interview_id, read_only=True,
+    )
+    assignment, launch = get_user_assignment(db, subject_user_id, interview_id)
 
     status_value = normalize_assignment_status(assignment.status)
     report = _extract_report(assignment.submission_data) if status_value == "completed" else None
@@ -51,14 +56,24 @@ def get_user_launched_interview(
         question_rows = ensure_interview_questions(
             db,
             interview,
-            user_id=current_user.id,
-            email=current_user.email,
+            user_id=subject_user_id,
+            email=assignment.user_email or current_user.email,
         )
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Question generation failed: {exc}",
         ) from exc
+
+    question_count = resolve_question_count(interview, launch)
+    voice = resolve_launch_voice_config(db, launch)
+
+    display_summary = resolve_interview_summary(
+        title=launch.title,
+        description=launch.description,
+        difficulty=launch.difficulty,
+        summary=launch.summary or interview.summary,
+    )
 
     return UserLaunchedInterviewResponse(
         status=status_value,
@@ -68,8 +83,12 @@ def get_user_launched_interview(
             title=launch.title,
             difficulty=launch.difficulty,
             description=launch.description,
+            summary=display_summary,
             created_at=launch.interview_created_at or launch.launched_at,
-            questions=to_question_card_responses(question_rows),
+            question_count=question_count,
+            tts_speaker=voice.voice_id if voice.provider == "sarvam" else None,
+            tts_language_code=voice.language_code,
+            questions=to_question_card_responses(question_rows[:question_count]),
         ),
         report=report,
     )

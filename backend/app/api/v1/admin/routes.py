@@ -4,12 +4,15 @@ All routes require get_admin_user (is_admin=True).
 """
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from backend.app.core.dependencies import get_admin_user, get_db
+from backend.app.core.security import get_password_hash
+from backend.app.schemas.user import AdminCreateUserRequest, AdminUserSummary
+from backend.app.services.usage_service import UsageService
 from backend.app.models.user import User
 from backend.app.models.profile import Profile
 from backend.app.models.user_job import UserJob
@@ -201,6 +204,57 @@ def get_admin_users(
             "career_visits_count": visits_count,
         })
     return {"users": result, "total": total, "page": page, "limit": limit}
+
+
+@router.post("/users", response_model=AdminUserSummary, status_code=status.HTTP_201_CREATED)
+def create_admin_user(
+    body: AdminCreateUserRequest,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user),
+) -> AdminUserSummary:
+    """Create a new user account (admin only)."""
+    email_norm = body.email.strip().lower()
+    if not email_norm:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    existing = db.query(User).filter(func.lower(User.email) == email_norm).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    first_name = body.first_name.strip()
+    last_name = body.last_name.strip()
+    if not first_name or not last_name:
+        raise HTTPException(status_code=400, detail="First and last name are required")
+    if not body.password or len(body.password.strip()) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    user = User(
+        first_name=first_name,
+        last_name=last_name,
+        email=email_norm,
+        hashed_password=get_password_hash(body.password.strip()),
+        is_admin=bool(body.is_admin),
+        is_active=1,
+        gmail_sync_enabled=False,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    UsageService.replenish_tokens_on_login(db, user)
+    db.refresh(user)
+
+    return AdminUserSummary(
+        id=user.id,
+        email=user.email or "",
+        first_name=user.first_name or "",
+        last_name=user.last_name or "",
+        created_at=user.created_at.isoformat() if user.created_at else None,
+        last_activity_at=None,
+        jobs_count=0,
+        career_visits_count=0,
+        is_admin=bool(user.is_admin),
+    )
 
 
 @router.get("/users/{user_id}/usage")

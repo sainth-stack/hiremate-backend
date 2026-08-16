@@ -11,12 +11,15 @@ from backend.app.services.interview_assignment import (
     build_relative_interview_url,
     normalize_assignment_status,
 )
+from backend.app.services.interview_access import create_interview_access_token
 from backend.app.services.interview_email_service import (
     build_interview_link,
     send_interview_completion_emails,
     send_interview_invitation_email,
     send_new_interview_request_admin_email,
 )
+from backend.app.services.interview_summary import resolve_interview_summary
+from backend.app.services.voice.voice_config import default_launch_voice
 
 
 def mark_request_in_progress(db: Session, user_id: int, interview_id: int) -> None:
@@ -97,13 +100,25 @@ def launch_interview_for_user(
     launched_by_user_id: int | None,
     interview_created_at: datetime | None = None,
 ) -> tuple[LaunchedInterview, LaunchedInterviewUser]:
+    default_voice = default_launch_voice()
     launch = LaunchedInterview(
         interview_id=interview.id,
         title=title.strip(),
         difficulty=difficulty,
         description=description,
+        summary=resolve_interview_summary(
+            title=interview.title,
+            description=interview.description,
+            difficulty=interview.difficulty,
+            summary=interview.summary,
+        ),
         interview_created_at=interview_created_at or interview.created_at,
         launched_by_user_id=launched_by_user_id,
+        voice_provider=default_voice.provider,
+        voice_id=default_voice.voice_id,
+        voice_label=default_voice.voice_label,
+        tts_language_code=default_voice.language_code,
+        question_count=interview.question_count or 15,
     )
     db.add(launch)
     db.flush()
@@ -154,17 +169,28 @@ def launch_from_interview_request(
     db.refresh(assignment)
 
     display_name = f"{user.first_name} {user.last_name}".strip() or user.email
+    access_token = create_interview_access_token(
+        user_id=user.id,
+        interview_id=interview.id,
+        assignment_id=assignment.id,
+    )
     send_interview_invitation_email(
         to_email=user.email,
         user_id=user.id,
         interview_id=interview.id,
         title=title,
         difficulty=difficulty,
-        description=description,
+        summary=resolve_interview_summary(
+            title=interview.title,
+            description=interview.description,
+            difficulty=interview.difficulty,
+            summary=interview.summary,
+        ),
         user_name=display_name,
+        access_token=access_token,
     )
 
-    interview_url = build_interview_link(user.id, interview.id)
+    interview_url = build_interview_link(user.id, interview.id, access_token)
     return launch, assignment, interview_url
 
 
@@ -182,11 +208,14 @@ def build_my_admin_interview_from_assignment(
 ) -> dict:
     status = normalize_assignment_status(assignment.status)
     interview_id = launch.interview_id
-    interview_url = (
-        build_relative_interview_url(assignment.user_id, interview_id)
-        if interview_id
-        else None
-    )
+    interview_url = None
+    if interview_id:
+        access_token = create_interview_access_token(
+            user_id=assignment.user_id,
+            interview_id=interview_id,
+            assignment_id=assignment.id,
+        )
+        interview_url = build_relative_interview_url(assignment.user_id, interview_id, access_token)
     return {
         "id": assignment.id,
         "request_id": None,

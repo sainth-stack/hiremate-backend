@@ -66,6 +66,7 @@ def ensure_interview_questions(
         difficulty=interview.difficulty,
         user_id=user_id,
         email=email,
+        question_count=interview.question_count or 15,
     )
     rows = save_interview_questions(db, interview.id, generated)
     db.commit()

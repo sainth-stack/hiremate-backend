@@ -19,6 +19,13 @@ class UserLogin(BaseModel):
     password: str
 
 
+class InterviewSessionRequest(BaseModel):
+    """Exchange interview link token for a user session."""
+    user_id: int
+    interview_id: int
+    token: str
+
+
 class UserResponse(BaseModel):
     """Schema for user response"""
     id: Optional[int] = None
@@ -43,3 +50,25 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: UserResponse
     message: Optional[str] = None  # e.g. "User registered successfully" or "Login successful"
+
+
+class AdminCreateUserRequest(BaseModel):
+    """Admin-created user (no auto-login)."""
+    first_name: str
+    last_name: str
+    email: str
+    password: str
+    is_admin: bool = False
+
+
+class AdminUserSummary(BaseModel):
+    """User row returned from admin list/create."""
+    id: int
+    email: str
+    first_name: str
+    last_name: str
+    created_at: Optional[str] = None
+    last_activity_at: Optional[str] = None
+    jobs_count: int = 0
+    career_visits_count: int = 0
+    is_admin: bool = False

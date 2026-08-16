@@ -167,6 +167,21 @@ class Settings(BaseSettings):
     smtp_from_email: str = ""
     smtp_use_tls: bool = True
 
+    # Sarvam AI — interview STT only (TTS uses Cartesia Premium Indian voices)
+    sarvam_api_key: str = ""
+    sarvam_tts_model: str = "bulbul:v3"
+    sarvam_stt_model: str = "saaras:v3"
+    sarvam_default_language: str = "en-IN"
+    sarvam_default_speaker: str = "priya"
+    voice_tts_provider: str = "sarvam"
+    voice_stt_provider: str = "sarvam"
+
+    # Cartesia TTS
+    cartesia_api_key: str = ""
+    cartesia_model_id: str = "sonic-3"
+    cartesia_api_version: str = "2025-04-16"
+    featured_cartesia_voice_id: str = "07bc462a-c644-49f1-baf7-82d5599131be"
+
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE) if _ENV_FILE.exists() else ".env",
         env_file_encoding="utf-8",

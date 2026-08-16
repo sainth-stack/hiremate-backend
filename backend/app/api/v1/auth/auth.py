@@ -12,7 +12,7 @@ from backend.app.core.dependencies import get_current_user, get_db, security
 from backend.app.core.logging_config import get_logger
 from backend.app.core.security import create_access_token
 from backend.app.models.user import User
-from backend.app.schemas.user import UserRegister, UserLogin, TokenResponse, UserResponse
+from backend.app.schemas.user import UserRegister, UserLogin, TokenResponse, UserResponse, InterviewSessionRequest
 from backend.app.services.auth_service import AuthService
 from backend.app.services.usage_service import UsageService
 from backend.app.services import google_oauth
@@ -96,6 +96,60 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Registration error: {str(e)}",
         )
+
+
+@router.post("/interview-session", response_model=TokenResponse)
+def interview_session(body: InterviewSessionRequest, db: Session = Depends(get_db)):
+    """
+    Exchange a signed interview link token for a user JWT.
+    Lets candidates open /interview/{userId}?interview_id=&token= without manual login.
+    """
+    from backend.app.models.launched_interview import LaunchedInterview, LaunchedInterviewUser
+    from backend.app.services.interview_access import verify_interview_access_token
+
+    try:
+        payload = verify_interview_access_token(body.token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if int(payload["sub"]) != body.user_id or int(payload["interview_id"]) != body.interview_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Interview link does not match")
+
+    assignment = (
+        db.query(LaunchedInterviewUser)
+        .join(LaunchedInterview, LaunchedInterviewUser.launched_interview_id == LaunchedInterview.id)
+        .filter(
+            LaunchedInterviewUser.id == int(payload["assignment_id"]),
+            LaunchedInterviewUser.user_id == body.user_id,
+            LaunchedInterview.interview_id == body.interview_id,
+        )
+        .first()
+    )
+    if not assignment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview assignment not found")
+
+    user = db.query(User).filter(User.id == body.user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    access_token = create_access_token(
+        data={
+            "sub": str(user.id),
+            "email": user.email,
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "gmail_sync_enabled": getattr(user, "gmail_sync_enabled", False),
+            "is_admin": getattr(user, "is_admin", False),
+        },
+        expires_delta=timedelta(minutes=settings.access_token_expire_minutes),
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user=_build_user_response(db, user),
+        message="Interview session started",
+    )
 
 
 @router.post("/login", response_model=TokenResponse)

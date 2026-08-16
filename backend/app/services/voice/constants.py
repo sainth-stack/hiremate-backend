@@ -1,0 +1,57 @@
+"""Sarvam AI voice configuration constants."""
+
+SARVAM_TTS_SPEAKERS = [
+    {"id": "shubh", "label": "Shubh", "gender": "male", "language": "en-IN"},
+    {"id": "aditya", "label": "Aditya", "gender": "male", "language": "en-IN"},
+    {"id": "rahul", "label": "Rahul", "gender": "male", "language": "en-IN"},
+    {"id": "rohan", "label": "Rohan", "gender": "male", "language": "en-IN"},
+    {"id": "amit", "label": "Amit", "gender": "male", "language": "en-IN"},
+    {"id": "dev", "label": "Dev", "gender": "male", "language": "en-IN"},
+    {"id": "varun", "label": "Varun", "gender": "male", "language": "en-IN"},
+    {"id": "manan", "label": "Manan", "gender": "male", "language": "en-IN"},
+    {"id": "sumit", "label": "Sumit", "gender": "male", "language": "en-IN"},
+    {"id": "kabir", "label": "Kabir", "gender": "male", "language": "en-IN"},
+    {"id": "aayan", "label": "Aayan", "gender": "male", "language": "en-IN"},
+    {"id": "ashutosh", "label": "Ashutosh", "gender": "male", "language": "en-IN"},
+    {"id": "advait", "label": "Advait", "gender": "male", "language": "en-IN"},
+    {"id": "anand", "label": "Anand", "gender": "male", "language": "en-IN"},
+    {"id": "tarun", "label": "Tarun", "gender": "male", "language": "en-IN"},
+    {"id": "sunny", "label": "Sunny", "gender": "male", "language": "en-IN"},
+    {"id": "mani", "label": "Mani", "gender": "male", "language": "en-IN"},
+    {"id": "gokul", "label": "Gokul", "gender": "male", "language": "en-IN"},
+    {"id": "vijay", "label": "Vijay", "gender": "male", "language": "en-IN"},
+    {"id": "mohit", "label": "Mohit", "gender": "male", "language": "en-IN"},
+    {"id": "rehan", "label": "Rehan", "gender": "male", "language": "en-IN"},
+    {"id": "soham", "label": "Soham", "gender": "male", "language": "en-IN"},
+    {"id": "priya", "label": "Priya", "gender": "female", "language": "en-IN"},
+    {"id": "ritu", "label": "Ritu", "gender": "female", "language": "en-IN"},
+    {"id": "neha", "label": "Neha", "gender": "female", "language": "en-IN"},
+    {"id": "pooja", "label": "Pooja", "gender": "female", "language": "en-IN"},
+    {"id": "simran", "label": "Simran", "gender": "female", "language": "en-IN"},
+    {"id": "kavya", "label": "Kavya", "gender": "female", "language": "en-IN"},
+    {"id": "ishita", "label": "Ishita", "gender": "female", "language": "en-IN"},
+    {"id": "shreya", "label": "Shreya", "gender": "female", "language": "en-IN"},
+    {"id": "roopa", "label": "Roopa", "gender": "female", "language": "en-IN"},
+    {"id": "tanya", "label": "Tanya", "gender": "female", "language": "en-IN"},
+    {"id": "shruti", "label": "Shruti", "gender": "female", "language": "en-IN"},
+    {"id": "suhani", "label": "Suhani", "gender": "female", "language": "en-IN"},
+    {"id": "kavitha", "label": "Kavitha", "gender": "female", "language": "en-IN"},
+    {"id": "rupali", "label": "Rupali", "gender": "female", "language": "en-IN"},
+]
+
+SARVAM_LANGUAGE_CODES = [
+    {"code": "en-IN", "label": "English (India)"},
+    {"code": "hi-IN", "label": "Hindi"},
+    {"code": "bn-IN", "label": "Bengali"},
+    {"code": "gu-IN", "label": "Gujarati"},
+    {"code": "kn-IN", "label": "Kannada"},
+    {"code": "ml-IN", "label": "Malayalam"},
+    {"code": "mr-IN", "label": "Marathi"},
+    {"code": "od-IN", "label": "Odia"},
+    {"code": "pa-IN", "label": "Punjabi"},
+    {"code": "ta-IN", "label": "Tamil"},
+    {"code": "te-IN", "label": "Telugu"},
+]
+
+VALID_SPEAKER_IDS = {speaker["id"] for speaker in SARVAM_TTS_SPEAKERS}
+VALID_LANGUAGE_CODES = {lang["code"] for lang in SARVAM_LANGUAGE_CODES}

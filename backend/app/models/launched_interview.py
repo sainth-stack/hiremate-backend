@@ -15,9 +15,16 @@ class LaunchedInterview(Base):
     title = Column(String(255), nullable=False)
     difficulty = Column(String(50), nullable=False)
     description = Column(Text, nullable=False)
+    summary = Column(Text, nullable=True)
     interview_created_at = Column(DateTime, nullable=True)
     launched_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    launch_name = Column(String(255), nullable=True)
     launched_at = Column(DateTime, default=datetime.utcnow)
+    voice_provider = Column(String(32), nullable=True)
+    voice_id = Column(String(128), nullable=True)
+    voice_label = Column(String(255), nullable=True)
+    tts_language_code = Column(String(16), nullable=True)
+    question_count = Column(Integer, nullable=True)
 
     assignments = relationship(
         "LaunchedInterviewUser",
