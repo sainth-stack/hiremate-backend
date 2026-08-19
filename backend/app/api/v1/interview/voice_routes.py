@@ -1,18 +1,20 @@
 """Interview voice endpoints — Sarvam STT, Cartesia Premium TTS, session checkpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.core.dependencies import get_current_user, get_db
+from backend.app.core.logging_config import get_logger
 from backend.app.models.interview import Interview
 from backend.app.models.user import User
 from backend.app.schemas.voice import (
     CustomVoiceCloneResponse,
     InterviewAnswerCheckpointResponse,
     InterviewAudioPlaybackResponse,
+    InterviewMediaPlaybackResponse,
     InterviewPauseRequest,
     InterviewPauseResponse,
     InterviewSessionProgressResponse,
@@ -29,8 +31,21 @@ from backend.app.services.interview_assignment import (
     resolve_interview_subject_user,
 )
 from backend.app.services.interview_request_service import mark_request_in_progress
-from backend.app.services.voice.audio_lookup import find_answer_audio
-from backend.app.services.voice.audio_storage import get_presigned_audio_url, guess_audio_content_type, upload_interview_answer_audio
+from backend.app.services.voice.audio_lookup import (
+    find_answer_media,
+    media_filename,
+    resolve_stream_key,
+)
+from backend.app.services.voice.media_storage import (
+    UnplayableMediaError,
+    cache_playback_mp3,
+    get_presigned_media_url,
+    guess_audio_content_type,
+    is_playable_media,
+    load_stream_bytes,
+    upload_interview_answer_audio,
+    upload_interview_answer_video,
+)
 from backend.app.services.voice.cartesia_service import (
     CLONE_ALLOWED_EXTENSIONS,
     cartesia_language_for_voice,
@@ -51,6 +66,7 @@ from backend.app.services.voice.session_store import (
     get_session_progress,
     record_interview_pause,
     save_answer_checkpoint,
+    update_answer_playback_cache,
 )
 from backend.app.services.voice.voice_config import (
     LaunchVoiceConfig,
@@ -60,8 +76,57 @@ from backend.app.services.voice.voice_config import (
 )
 
 router = APIRouter()
+logger = get_logger("api.interview.voice")
 
 MAX_CLONE_CLIP_BYTES = 10 * 1024 * 1024
+MAX_VIDEO_BYTES = 150 * 1024 * 1024
+
+
+def _media_urls(request: Request, *, user_id: int, interview_id: int, order: int, kind: str) -> dict[str, str]:
+    base = str(request.base_url).rstrip("/")
+    api_base = f"{base}/api/interview/voice/media/stream"
+    common = f"user_id={user_id}&interview_id={interview_id}&order={order}&kind={kind}"
+    return {
+        "stream_url": f"{api_base}?{common}",
+        "download_url": f"{api_base}?{common}&download=true",
+    }
+
+
+def _enrich_checkpoint_media(entry: dict, request: Request | None, user_id: int, interview_id: int) -> dict:
+    data = dict(entry)
+    order = int(data.get("order") or 0)
+    data["has_audio"] = bool(data.get("audio_key"))
+    data["has_video"] = bool(data.get("video_key"))
+    playback_key = data.get("audio_playback_key") or data.get("audio_key")
+    if playback_key:
+        try:
+            content_type = "audio/mpeg" if data.get("audio_playback_key") else guess_audio_content_type(data.get("audio_key"))
+            data["audio_presigned_url"] = get_presigned_media_url(playback_key, content_type=content_type)
+        except Exception:
+            data["audio_presigned_url"] = None
+    if request and order:
+        if data.get("has_audio"):
+            data.update(_media_urls(request, user_id=user_id, interview_id=interview_id, order=order, kind="audio"))
+        if data.get("has_video"):
+            video_urls = _media_urls(request, user_id=user_id, interview_id=interview_id, order=order, kind="video")
+            data["video_stream_url"] = video_urls["stream_url"]
+            data["video_download_url"] = video_urls["download_url"]
+    return data
+
+
+def _checkpoint_response(
+    entry: dict,
+    request: Request,
+    user_id: int,
+    interview_id: int,
+    *,
+    presigned_url: str | None = None,
+) -> InterviewAnswerCheckpointResponse:
+    data = _enrich_checkpoint_media(entry, request, user_id, interview_id)
+    if presigned_url and not data.get("audio_presigned_url"):
+        data["audio_presigned_url"] = presigned_url
+    allowed = set(InterviewAnswerCheckpointResponse.model_fields.keys())
+    return InterviewAnswerCheckpointResponse(**{key: data[key] for key in allowed if key in data})
 
 
 def _require_admin(current_user: User) -> None:
@@ -219,6 +284,7 @@ def get_interview_voice_config(
 
 @router.get("/session/progress", response_model=InterviewSessionProgressResponse)
 def get_interview_session_progress(
+    request: Request,
     user_id: int = Query(...),
     interview_id: int = Query(...),
     db: Session = Depends(get_db),
@@ -233,14 +299,7 @@ def get_interview_session_progress(
     progress = get_session_progress(assignment)
     checkpoints = []
     for item in progress.get("checkpoints") or []:
-        entry = dict(item)
-        entry["has_audio"] = bool(entry.get("audio_key"))
-        if entry.get("audio_key"):
-            try:
-                entry["audio_presigned_url"] = get_presigned_audio_url(entry["audio_key"])
-            except Exception:
-                entry["audio_presigned_url"] = None
-        checkpoints.append(InterviewAnswerCheckpointResponse(**entry))
+        checkpoints.append(_checkpoint_response(dict(item), request, subject_user_id, interview_id))
     return InterviewSessionProgressResponse(
         user_id=subject_user_id,
         interview_id=interview_id,
@@ -346,15 +405,18 @@ def synthesize_interview_question(
 
 @router.post("/voice/answer", response_model=InterviewAnswerCheckpointResponse)
 async def submit_interview_voice_answer(
+    request: Request,
     user_id: int = Form(...),
     interview_id: int = Form(...),
     question_id: int | None = Form(None),
     question_order: int = Form(...),
     question_text: str = Form(...),
     duration_ms: int | None = Form(None),
+    video_duration_ms: int | None = Form(None),
     current_question_index: int | None = Form(None),
     client_transcript: str | None = Form(None),
     audio: UploadFile = File(...),
+    video: UploadFile | None = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -379,10 +441,22 @@ async def submit_interview_voice_answer(
     content_type = audio.content_type or "audio/webm"
     filename = audio.filename or f"answer_q{question_order}.webm"
     fallback_transcript = (client_transcript or "").strip()
-    min_client_transcript_chars = 8
+    min_client_transcript_chars = 3
+    audio_valid = is_playable_media(audio_bytes, kind="audio")
+
+    if not audio_valid and len(fallback_transcript) < min_client_transcript_chars:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid audio recording — please record again and submit.",
+        )
 
     stt_result: dict
-    if len(fallback_transcript) >= min_client_transcript_chars:
+    if not audio_valid:
+        stt_result = {
+            "transcript": fallback_transcript,
+            "language_code": voice.language_code,
+        }
+    elif len(fallback_transcript) >= min_client_transcript_chars:
         stt_result = {
             "transcript": fallback_transcript,
             "language_code": voice.language_code,
@@ -403,32 +477,73 @@ async def submit_interview_voice_answer(
                     "language_code": voice.language_code,
                 }
             else:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Speech transcription failed — please try again or speak longer.",
-                ) from exc
+                logger.warning("STT failed with no client transcript: %s", exc)
+                stt_result = {
+                    "transcript": "",
+                    "language_code": voice.language_code,
+                }
+
+    transcript = (stt_result.get("transcript") or "").strip()
+    stt_result["transcript"] = transcript
+    stt_result["answer"] = transcript
 
     audio_key = None
     audio_url = None
+    audio_playback_key = None
+    audio_playback_url = None
     presigned_url = None
-    try:
-        storage = upload_interview_answer_audio(
-            audio_bytes=audio_bytes,
-            user_id=subject_user_id,
-            interview_id=interview_id,
-            assignment_id=assignment.id,
-            question_order=question_order,
-            mime_type=content_type,
-        )
-        audio_key = storage["key"]
-        audio_url = storage["url"]
-        presigned_url = storage.get("presigned_url")
-    except Exception as exc:
-        if not fallback_transcript:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Audio storage failed: {exc}",
-            ) from exc
+    if audio_valid:
+        try:
+            storage = upload_interview_answer_audio(
+                audio_bytes=audio_bytes,
+                user_id=subject_user_id,
+                interview_id=interview_id,
+                assignment_id=assignment.id,
+                question_order=question_order,
+                mime_type=content_type,
+            )
+            audio_key = storage["key"]
+            audio_url = storage["url"]
+            audio_playback_key = storage.get("playback_key")
+            audio_playback_url = storage.get("playback_url")
+            presigned_url = storage.get("presigned_url")
+        except Exception as exc:
+            if not fallback_transcript and not transcript:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Audio storage failed: {exc}",
+                ) from exc
+            logger.warning("Audio storage failed, saving transcript-only checkpoint: %s", exc)
+
+    video_key = None
+    video_url = None
+    video_playback_key = None
+    video_playback_url = None
+    if video is not None:
+        video_bytes = await video.read()
+        if video_bytes:
+            if len(video_bytes) > MAX_VIDEO_BYTES:
+                raise HTTPException(status_code=400, detail="Video file too large (max 150MB)")
+            video_type = video.content_type or "video/webm"
+            try:
+                video_storage = upload_interview_answer_video(
+                    video_bytes=video_bytes,
+                    user_id=subject_user_id,
+                    interview_id=interview_id,
+                    assignment_id=assignment.id,
+                    question_order=question_order,
+                    mime_type=video_type,
+                )
+                video_key = video_storage["key"]
+                video_url = video_storage["url"]
+                video_playback_key = video_storage.get("playback_key")
+                video_playback_url = video_storage.get("playback_url")
+            except Exception as exc:
+                if not fallback_transcript and not audio_key:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Video storage failed: {exc}",
+                    ) from exc
 
     checkpoint = save_answer_checkpoint(
         db,
@@ -436,43 +551,243 @@ async def submit_interview_voice_answer(
         question_id=question_id,
         question_order=question_order,
         question_text=question_text.strip(),
-        transcript=stt_result["transcript"],
+        transcript=transcript,
         audio_key=audio_key,
         audio_url=audio_url,
+        audio_playback_key=audio_playback_key,
+        audio_playback_url=audio_playback_url,
+        video_key=video_key,
+        video_url=video_url,
+        video_playback_key=video_playback_key,
+        video_playback_url=video_playback_url,
         duration_ms=duration_ms,
+        video_duration_ms=video_duration_ms,
         stt_language_code=stt_result.get("language_code") or voice.language_code,
         current_question_index=current_question_index,
     )
 
-    return InterviewAnswerCheckpointResponse(
-        **checkpoint,
-        has_audio=bool(audio_key),
-        audio_presigned_url=presigned_url,
+    return _checkpoint_response(
+        checkpoint,
+        request,
+        subject_user_id,
+        interview_id,
+        presigned_url=presigned_url,
     )
 
 
 @router.get("/voice/audio", response_model=InterviewAudioPlaybackResponse)
 def get_interview_answer_audio(
+    request: Request,
     user_id: int = Query(...),
     interview_id: int = Query(...),
     order: int = Query(..., ge=1),
+    download: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return a presigned URL to play a stored answer recording."""
+    """Return playback/download URLs for a stored answer recording."""
     subject_user_id = resolve_interview_subject_user(
         db, current_user, user_id, interview_id, read_only=True,
     )
     assignment, _launch = get_user_assignment(db, subject_user_id, interview_id)
     submission = assignment.submission_data if isinstance(assignment.submission_data, dict) else {}
-    audio_item = find_answer_audio(submission, order=order)
-    if not audio_item or not audio_item.get("audio_key"):
+    media_item = find_answer_media(submission, order=order)
+    if not media_item or not media_item.get("audio_key"):
         raise HTTPException(status_code=404, detail="Answer recording not found")
 
-    audio_key = str(audio_item["audio_key"])
+    stream_key, content_type = resolve_stream_key(media_item, kind="audio")
+    if not stream_key:
+        raise HTTPException(status_code=404, detail="Answer recording not found")
+
+    filename = media_filename(order, "audio", content_type)
+    urls = _media_urls(request, user_id=subject_user_id, interview_id=interview_id, order=order, kind="audio")
     return InterviewAudioPlaybackResponse(
         order=order,
-        audio_key=audio_key,
-        presigned_url=get_presigned_audio_url(audio_key),
-        content_type=guess_audio_content_type(audio_key),
+        audio_key=str(media_item["audio_key"]),
+        playback_key=media_item.get("audio_playback_key"),
+        presigned_url=get_presigned_media_url(
+            stream_key,
+            content_type=content_type,
+            download=download,
+            filename=filename if download else None,
+        ),
+        stream_url=urls["stream_url"],
+        download_url=urls["download_url"],
+        content_type=content_type,
     )
+
+
+@router.get("/voice/media", response_model=InterviewMediaPlaybackResponse)
+def get_interview_answer_media(
+    request: Request,
+    user_id: int = Query(...),
+    interview_id: int = Query(...),
+    order: int = Query(..., ge=1),
+    kind: str = Query("audio", pattern="^(audio|video)$"),
+    download: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    subject_user_id = resolve_interview_subject_user(
+        db, current_user, user_id, interview_id, read_only=True,
+    )
+    assignment, _launch = get_user_assignment(db, subject_user_id, interview_id)
+    submission = assignment.submission_data if isinstance(assignment.submission_data, dict) else {}
+    media_item = find_answer_media(submission, order=order)
+    if not media_item:
+        raise HTTPException(status_code=404, detail="Answer media not found")
+
+    if kind == "video" and not media_item.get("video_key"):
+        raise HTTPException(status_code=404, detail="Answer video not found")
+    if kind == "audio" and not media_item.get("audio_key"):
+        raise HTTPException(status_code=404, detail="Answer audio not found")
+
+    stream_key, content_type = resolve_stream_key(media_item, kind=kind)
+    if not stream_key:
+        raise HTTPException(status_code=404, detail="Answer media not found")
+
+    source_key = media_item.get(f"{kind}_key")
+    playback_key = media_item.get(f"{kind}_playback_key")
+    filename = media_filename(order, kind, content_type)
+    urls = _media_urls(request, user_id=subject_user_id, interview_id=interview_id, order=order, kind=kind)
+    return InterviewMediaPlaybackResponse(
+        order=order,
+        kind=kind,
+        media_key=str(source_key),
+        playback_key=playback_key,
+        presigned_url=get_presigned_media_url(
+            stream_key,
+            content_type=content_type,
+            download=download,
+            filename=filename if download else None,
+        ),
+        stream_url=urls["stream_url"],
+        download_url=urls["download_url"],
+        content_type=content_type,
+    )
+
+
+def _checkpoint_transcript(media_item: dict) -> str:
+    for key in ("transcript", "answer"):
+        value = (media_item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _load_answer_media_payload(
+    *,
+    db: Session,
+    assignment,
+    subject_user_id: int,
+    interview_id: int,
+    order: int,
+    kind: str,
+    media_item: dict,
+    stream_key: str,
+    content_type: str,
+) -> tuple[bytes, str]:
+    fallback_key = media_item.get("audio_key") if kind == "audio" else media_item.get("video_key")
+
+    def _try_load(key: str) -> tuple[bytes, str]:
+        return load_stream_bytes(key, kind=kind, content_type=content_type)
+
+    try:
+        return _try_load(stream_key)
+    except FileNotFoundError:
+        if fallback_key and str(fallback_key) != str(stream_key):
+            return _try_load(str(fallback_key))
+        raise
+    except UnplayableMediaError:
+        if kind != "audio":
+            raise
+        if fallback_key and str(fallback_key) != str(stream_key):
+            try:
+                return _try_load(str(fallback_key))
+            except (FileNotFoundError, UnplayableMediaError):
+                pass
+
+        transcript = _checkpoint_transcript(media_item)
+        if len(transcript) < 3:
+            raise
+
+        voice = resolve_assignment_voice_config(db, subject_user_id, interview_id)
+        playback_text = transcript[:4000]
+        mp3_bytes = synthesize_launch_speech(text=playback_text, voice=voice, db=db)
+        if not mp3_bytes:
+            raise UnplayableMediaError("Could not rebuild legacy answer audio")
+
+        cached = cache_playback_mp3(
+            mp3_bytes=mp3_bytes,
+            user_id=subject_user_id,
+            interview_id=interview_id,
+            assignment_id=assignment.id,
+            question_order=order,
+            suffix="audio_playback_legacy",
+        )
+        update_answer_playback_cache(
+            db,
+            assignment,
+            question_order=order,
+            audio_playback_key=cached["playback_key"],
+            audio_playback_url=cached["playback_url"],
+        )
+        logger.info(
+            "Legacy answer audio rebuilt from transcript user=%s interview=%s order=%s key=%s",
+            subject_user_id,
+            interview_id,
+            order,
+            cached["playback_key"],
+        )
+        return mp3_bytes, "audio/mpeg"
+
+
+@router.get("/voice/media/stream")
+def stream_interview_answer_media(
+    user_id: int = Query(...),
+    interview_id: int = Query(...),
+    order: int = Query(..., ge=1),
+    kind: str = Query("audio", pattern="^(audio|video)$"),
+    download: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Authenticated stream proxy for answer audio/video (avoids S3 CORS issues)."""
+    subject_user_id = resolve_interview_subject_user(
+        db, current_user, user_id, interview_id, read_only=True,
+    )
+    assignment, _launch = get_user_assignment(db, subject_user_id, interview_id)
+    submission = assignment.submission_data if isinstance(assignment.submission_data, dict) else {}
+    media_item = find_answer_media(submission, order=order)
+    if not media_item:
+        raise HTTPException(status_code=404, detail="Answer media not found")
+
+    stream_key, content_type = resolve_stream_key(media_item, kind=kind)
+    if not stream_key:
+        raise HTTPException(status_code=404, detail="Answer media not found")
+
+    try:
+        payload, served_type = _load_answer_media_payload(
+            db=db,
+            assignment=assignment,
+            subject_user_id=subject_user_id,
+            interview_id=interview_id,
+            order=order,
+            kind=kind,
+            media_item=media_item,
+            stream_key=str(stream_key),
+            content_type=content_type,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Media file not found") from exc
+    except UnplayableMediaError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(len(payload))}
+    if download:
+        filename = media_filename(order, kind, served_type)
+        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+
+    return Response(content=payload, media_type=served_type, headers=headers)

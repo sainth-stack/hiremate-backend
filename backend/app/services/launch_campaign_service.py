@@ -183,6 +183,9 @@ def get_launch_campaign_detail(db: Session, launch_id: int) -> LaunchCampaignDet
                             audio_key=audio_key,
                             audio_url=item.get("audio_url"),
                             has_audio=bool(audio_key),
+                            video_key=item.get("video_key"),
+                            video_url=item.get("video_url"),
+                            has_video=bool(item.get("video_key")),
                         )
                     )
         elif checkpoint_items:
@@ -195,6 +198,9 @@ def get_launch_campaign_detail(db: Session, launch_id: int) -> LaunchCampaignDet
                         audio_key=item.get("audio_key"),
                         audio_url=item.get("audio_url"),
                         has_audio=bool(item.get("audio_key")),
+                        video_key=item.get("video_key"),
+                        video_url=item.get("video_url"),
+                        has_video=bool(item.get("video_key")),
                     )
                 )
 

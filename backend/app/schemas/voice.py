@@ -89,18 +89,39 @@ class InterviewAnswerCheckpointResponse(BaseModel):
     answer: str
     audio_key: str | None = None
     audio_url: str | None = None
+    audio_playback_key: str | None = None
     audio_presigned_url: str | None = None
     has_audio: bool = False
+    video_key: str | None = None
+    video_url: str | None = None
+    video_playback_key: str | None = None
+    has_video: bool = False
     duration_ms: int | None = None
+    video_duration_ms: int | None = None
     stt_language_code: str | None = None
     saved_at: str | None = None
+
+
+class InterviewMediaPlaybackResponse(BaseModel):
+    order: int
+    kind: str
+    media_key: str
+    playback_key: str | None = None
+    presigned_url: str | None = None
+    stream_url: str
+    download_url: str
+    content_type: str
+    has_media: bool = True
 
 
 class InterviewAudioPlaybackResponse(BaseModel):
     order: int
     audio_key: str
+    playback_key: str | None = None
     presigned_url: str
-    content_type: str = "audio/webm"
+    stream_url: str | None = None
+    download_url: str | None = None
+    content_type: str = "audio/mpeg"
 
 
 class InterviewSessionProgressResponse(BaseModel):

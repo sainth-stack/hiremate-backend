@@ -343,6 +343,8 @@ class InterviewQuestionReviewResponse(BaseModel):
     dimensions: dict[str, int] | None = None
     audio_key: str | None = None
     has_audio: bool = False
+    has_video: bool = False
+    video_key: str | None = None
 
 
 class InterviewQuestionSummaryResponse(BaseModel):
@@ -534,6 +536,9 @@ class LaunchCampaignAnswerItem(BaseModel):
     audio_key: str | None = None
     audio_url: str | None = None
     has_audio: bool = False
+    video_key: str | None = None
+    video_url: str | None = None
+    has_video: bool = False
 
 
 class LaunchCampaignAssigneeDetail(LaunchCampaignAssigneeSummary):

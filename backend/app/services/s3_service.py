@@ -87,7 +87,51 @@ def upload_file_to_s3(
         raise RuntimeError(f"S3 upload failed - {code}: {msg}") from e
 
 
-def generate_presigned_url(key: str, expiration: int | None = None) -> str:
+def upload_bytes_to_s3(key: str, file_buffer: bytes, mime_type: str = "application/octet-stream") -> dict:
+    """Upload bytes to S3 at an explicit key."""
+    logger.info(
+        "S3 upload started bucket=%s key=%s size_bytes=%d",
+        settings.aws_bucket_name,
+        key,
+        len(file_buffer),
+    )
+    try:
+        s3 = _get_s3_client()
+        s3.put_object(
+            Bucket=settings.aws_bucket_name,
+            Key=key,
+            Body=file_buffer,
+            ContentType=mime_type,
+        )
+        url = f"https://{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
+        logger.info("S3 upload success key=%s", key)
+        return {"key": key, "url": url}
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        msg = e.response.get("Error", {}).get("Message", str(e))
+        logger.error("S3 upload failed key=%s error_code=%s error_message=%s", key, code, msg)
+        raise RuntimeError(f"S3 upload failed - {code}: {msg}") from e
+
+
+def get_s3_object(key: str) -> dict:
+    """Fetch object metadata and streaming body from S3."""
+    s3 = _get_s3_client()
+    try:
+        return s3.get_object(Bucket=settings.aws_bucket_name, Key=key)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in {"NoSuchKey", "404"}:
+            raise FileNotFoundError(key) from e
+        raise
+
+
+def generate_presigned_url(
+    key: str,
+    expiration: int | None = None,
+    *,
+    response_content_type: str | None = None,
+    response_content_disposition: str | None = None,
+) -> str:
     """
     Generate a presigned URL for temporary access to an S3 object.
     Default expiration from config (s3_presigned_url_expiration).
@@ -95,17 +139,26 @@ def generate_presigned_url(key: str, expiration: int | None = None) -> str:
     if not settings.aws_access_key_id or not settings.aws_secret_access_key:
         return ""
     exp = expiration if expiration is not None else settings.s3_presigned_url_expiration
+    params: dict = {"Bucket": settings.aws_bucket_name, "Key": key}
+    if response_content_type:
+        params["ResponseContentType"] = response_content_type
+    if response_content_disposition:
+        params["ResponseContentDisposition"] = response_content_disposition
     try:
         s3 = _get_s3_client()
         url = s3.generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.aws_bucket_name, "Key": key},
+            Params=params,
             ExpiresIn=exp,
         )
         return url or ""
     except ClientError as e:
         logger.warning("Presigned URL generation failed key=%s error=%s", key, e)
         return ""
+
+
+def generate_presigned_url_legacy(key: str, expiration: int | None = None) -> str:
+    return generate_presigned_url(key, expiration)
 
 
 def delete_file_from_s3(key: str) -> bool:

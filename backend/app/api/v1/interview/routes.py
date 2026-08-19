@@ -26,7 +26,7 @@ from backend.app.services.interview_questions import (
     ensure_interview_questions,
     to_question_card_responses,
 )
-from backend.app.services.voice.audio_lookup import find_answer_audio
+from backend.app.services.voice.audio_lookup import find_answer_media
 from backend.app.services.voice.voice_config import resolve_launch_voice_config, resolve_question_count
 from backend.app.services.interview_report import (
     build_report_response,
@@ -282,8 +282,9 @@ def get_question_analysis(
     if not review:
         raise HTTPException(status_code=404, detail=f"Question review not found for order {order}")
 
-    audio_item = find_answer_audio(assignment.submission_data, order=order)
+    audio_item = find_answer_media(assignment.submission_data, order=order)
     audio_key = audio_item.get("audio_key") if audio_item else None
+    video_key = audio_item.get("video_key") if audio_item else None
 
     payload = review.model_dump()
     payload.update(
@@ -292,6 +293,8 @@ def get_question_analysis(
             "interview_id": interview_id,
             "audio_key": audio_key,
             "has_audio": bool(audio_key),
+            "video_key": video_key,
+            "has_video": bool(video_key),
         }
     )
     return InterviewQuestionAnalysisResponse(**payload)

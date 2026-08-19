@@ -1,10 +1,12 @@
 """In-progress interview voice session persistence in assignment submission_data."""
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.app.models.launched_interview import LaunchedInterviewUser
 from backend.app.services.voice.session_config import InterviewSessionConfig
@@ -91,7 +93,14 @@ def save_answer_checkpoint(
     transcript: str,
     audio_key: str | None = None,
     audio_url: str | None = None,
+    audio_playback_key: str | None = None,
+    audio_playback_url: str | None = None,
+    video_key: str | None = None,
+    video_url: str | None = None,
+    video_playback_key: str | None = None,
+    video_playback_url: str | None = None,
     duration_ms: int | None = None,
+    video_duration_ms: int | None = None,
     stt_language_code: str | None = None,
     current_question_index: int | None = None,
 ) -> dict[str, Any]:
@@ -107,7 +116,14 @@ def save_answer_checkpoint(
         "answer": transcript,
         "audio_key": audio_key,
         "audio_url": audio_url,
+        "audio_playback_key": audio_playback_key,
+        "audio_playback_url": audio_playback_url,
+        "video_key": video_key,
+        "video_url": video_url,
+        "video_playback_key": video_playback_key,
+        "video_playback_url": video_playback_url,
         "duration_ms": duration_ms,
+        "video_duration_ms": video_duration_ms,
         "stt_language_code": stt_language_code,
         "saved_at": datetime.utcnow().isoformat(),
     }
@@ -122,6 +138,12 @@ def save_answer_checkpoint(
         "answer": transcript,
         "audio_key": audio_key,
         "audio_url": audio_url,
+        "audio_playback_key": audio_playback_key,
+        "audio_playback_url": audio_playback_url,
+        "video_key": video_key,
+        "video_url": video_url,
+        "video_playback_key": video_playback_key,
+        "video_playback_url": video_playback_url,
     }
     answers = [a for a in answers if a.get("question_id") != question_id]
     answers.append(answer_entry)
@@ -138,3 +160,53 @@ def save_answer_checkpoint(
     db.commit()
     db.refresh(assignment)
     return checkpoint
+
+
+def update_answer_playback_cache(
+    db: Session,
+    assignment: LaunchedInterviewUser,
+    *,
+    question_order: int,
+    audio_playback_key: str | None = None,
+    audio_playback_url: str | None = None,
+) -> None:
+    """Attach a generated playback MP3 key to an existing checkpoint/answer."""
+    if not audio_playback_key:
+        return
+
+    data = deepcopy(_base_submission(assignment))
+    changed = False
+
+    checkpoints: list[dict[str, Any]] = list(data.get("checkpoints") or [])
+    question_id = None
+    for item in checkpoints:
+        if int(item.get("order") or 0) == int(question_order):
+            item["audio_playback_key"] = audio_playback_key
+            if audio_playback_url:
+                item["audio_playback_url"] = audio_playback_url
+            question_id = item.get("question_id")
+            changed = True
+            break
+
+    answers: list[dict[str, Any]] = list(data.get("answers") or [])
+    for item in answers:
+        matched = False
+        if question_id is not None and item.get("question_id") == question_id:
+            matched = True
+        elif int(item.get("order") or 0) == int(question_order):
+            matched = True
+        if matched:
+            item["audio_playback_key"] = audio_playback_key
+            if audio_playback_url:
+                item["audio_playback_url"] = audio_playback_url
+            changed = True
+
+    if not changed:
+        return
+
+    data["checkpoints"] = checkpoints
+    data["answers"] = answers
+    assignment.submission_data = data
+    flag_modified(assignment, "submission_data")
+    db.commit()
+    db.refresh(assignment)
